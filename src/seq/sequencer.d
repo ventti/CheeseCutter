@@ -31,7 +31,7 @@ int stepValue = 1;
 int activeVoiceNum;
 private int stepCounter;
 int tableTop = 15, tableBot = -16;
-enum anchor = 16;
+int anchor = 16;
 Clip[] clip;
 
 private {
@@ -60,12 +60,15 @@ struct VoiceInitParams {
 }
 
 class PosData {
-	int pointerOffsetValue = anchor;
+	int pointerOffsetValue;
 	int trkOffset = 0;
 	int seqOffset;
 	int mark; 
 	int rowCounter;
 	Tracklist tracks;
+	this() {
+		pointerOffsetValue = anchor;
+	}
 
 	@property int pointerOffset() {
 		return pointerOffsetValue - anchor;
