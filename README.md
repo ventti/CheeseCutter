@@ -1,4 +1,4 @@
-CheeseCutter 2
+# CheeseCutter 2
 
 http://theyamo.kapsi.fi/ccutter
 
@@ -26,3 +26,12 @@ https://repology.org/metapackage/cheesecutter/versions
 
 NOTE: authors of CheeseCutter take no responsibility of binaries downloaded
 from any third party website, including the one above.
+
+
+# Build instructions
+
+## Win32
+
+### Dependencies
+
+See https://github.com/jacob-carlborg/docker-ldc-windows/blob/master/Dockerfile

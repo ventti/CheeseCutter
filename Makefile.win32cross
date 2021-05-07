@@ -1,0 +1,91 @@
+# make install DESTDIR=/home/yamo/devel/cc2/snap/parts/ccutter/install
+
+PREFIX?=/usr
+EXAMPLESDIR?=/usr/share/examples/ccutter
+#LIBS=-L-lstdc++
+# --linker=lld-link-10
+#LIBS=-L-ldl -L-lstdc++ --linker=lld-link-10
+LIBS=-L-ldl -L-lstdc++ --linker=lld-link-10
+#LIBS=--linker=lld-link-10
+COMFLAGS=-O2
+VERSION=$(shell cat Version)
+DFLAGS=$(COMFLAGS) -I./src -J./src/c64 -J./src/font -mtriple=i686-windows-msvc
+DCFLAGS=$(COMFLAGS) -mtriple=i686-windows-msvc -L=/force -L=/libpath:./libs_msvc
+#-L=/NODEFAULTLIB:OLDNAMES -L=/NODEFAULTLIB:LIBCMT
+CFLAGS=$(COMFLAGS) -O1
+CXXFLAGS=$(COMFLAGS) -I./src -zmuldefs
+COMPILE.d = $(DC) $(DFLAGS) -c
+DC=ldc2
+EXE=.exe
+TARGET=ccutter
+OBJ_EXT=.obj
+CC=i686-w64-mingw32-gcc
+CXX=i686-w64-mingw32-g++
+
+include Makefile.objects.mk
+
+.PHONY: install release dist clean dclean tar
+
+all: ct2util ccutter
+
+ccutter:$(C64OBJS) $(OBJS) $(CXX_OBJS)
+	$(DC) $(DCFLAGS) -of=$@ $(OBJS) $(CXX_OBJS) $(LIBS)
+
+
+#.cpp.obj : $(CXX_SRCS)
+#	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+.c.obj : $(C_SRCS)
+	$(CC) -c $< -o $@
+
+ct: $(C64OBJS) $(CTOBJS)
+
+ct2util: $(C64OBJS) $(UTILOBJS)
+	$(DC) $(DCFLAGS) -of=$@ $(UTILOBJS) $(LIBS)
+
+c64: $(C64OBJS)
+
+install: all
+	strip ccutter$(EXE)
+	strip ct2util$(EXE)
+	cp ccutter$(EXE) $(DESTDIR)$(PREFIX)/bin
+	cp ct2util$(EXE) $(DESTDIR)$(PREFIX)/bin
+	mkdir -p $(DESTDIR)/$(EXAMPLESDIR)/example_tunes
+	cp -r tunes/* $(DESTDIR)/$(EXAMPLESDIR)/example_tunes
+
+# release version with additional optimizations
+release: DFLAGS += -frelease -fno-bounds-check
+release: all
+	strip ccutter$(EXE)
+	strip ct2util$(EXE)
+
+# tarred release
+dist:	release
+	tar --transform 's,^\.,cheesecutter-$(VERSION),' -cvf cheesecutter-$(VERSION)-win32.tar.gz $(DIST_FILES)
+
+clean: 
+	rm -f *.obj *~ resid/*.obj resid-fp/*.obj ccutter ct2util \
+		$(C64OBJS) $(OBJS) $(CTOBJS) $(CXX_OBJS) $(UTILOBJS) $(C_OBJS)
+
+dclean: clean
+	rm -f cheesecutter-$(VERSION)-win32.tar.gz
+
+# tarred source from master
+tar:
+	git archive master --prefix=cheesecutter-$(VERSION)/ | bzip2 > cheesecutter-$(VERSION)-src.tar.bz2
+# --------------------------------------------------------------------------------
+
+src/c64/player.bin: src/c64/player_v4.acme
+	acme -f cbm --outfile $@ $<
+
+src/ct/base.obj: src/c64/player.bin
+src/ui/ui.obj: src/ui/help.obj
+
+%.obj: $(CXX_SRCS)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+%.obj: %.d
+	$(COMPILE.d) -of=$@ $<
+
+
+
