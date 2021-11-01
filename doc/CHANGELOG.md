@@ -1,12 +1,10 @@
 # News
 
-The Popular Editor
-
 **If you're a Facebook user, join the CheeseCutter SID music editor group to hear the latest gossip.**
 
 ## Version 2.9
 
-* Added undo/redo (<kbd>Ctrl-Z</kbd> / <kbd>Ctrl-R</kbd>) functions for most editing functions in the sequencer.
+* Added undo/redo (<kbd>Ctrl</kbd>-<kbd>Z</kbd> / <kbd>Ctrl</kbd>-<kbd>R</kbd>) functions for most editing functions in the sequencer.
 * Fixed a serious bug in the player which caused song speed to go wrong (Y-register was not properly initialized).
 * Position information for each subtune is retained. So as you change to another subtune, the editor jumps back to where you were last time in that subtune.
 * Redesigned tracklist copy/paste functionality
@@ -18,12 +16,7 @@ The Popular Editor
 
 For convenience, old <kbd>Alt</kbd>-<kbd>Z</kbd> & <kbd>Alt</kbd>-<kbd>B</kbd> still work.
     
-* Added "sync" support into the player.
-      
-  F0 command increases counter at a sort-of fixed
-  memory location. removes the possibility to use
-  two chord programs for song speeds.
-      
+* Added "sync" support into the player. `F0` command increases counter at a sort-of fixed memory location. removes the possibility to use two chord programs for song speeds.
 * Fixed a bug when deleting rows in chord table.
 * Fixed crash in fileselector when last file in list had been moved/deleted and cursor was pointing to that file.
 * Keyjam: gate is kept on for as long as the key is pressed. gate will be set off once key is released.
@@ -109,19 +102,19 @@ The development will be put to rest for a while.
 
 Editor
 
-* Player specific help integrated into the tables - should make memorizing the meanings of bytes easier. Just press F12 on any table and a help box pops up. **Alt-H** switches this off.
+* Player specific help integrated into the tables - should make memorizing the meanings of bytes easier. Just press F12 on any table and a help box pops up. <kbd>Alt</kbd>-<kbd>H</kbd> switches this off.
 Since the documentation is in the player binary itself, and you happen to use some older player in your tune, the help won't work.
 * Aspect correction works right (ie. keeping the 4:3 ratio) on wider screens. You will need to launch the program with parameter *-ya* to enable it.
 * Transpose is now always preserved on wrap point on packed tune.
 * Packer sets the speed flags correctly when exporting to SID.
 * Extra checks for note+trans overflows in the sequencer.
-* Note data in sequencer are now by default displayed relative to the current transpose value (you can still get the old behavior with **Ctrl-T**).
+* Note data in sequencer are now by default displayed relative to the current transpose value (you can still get the old behavior with <kbd>Ctrl-T</kbd>).
 * Keyjam thingy debugged (<kbd>Ctrl</kbd>-<kbd>Space</kbd>).
 * Wrap position marker (purple bar) is actually visible behind the start position marker (blue bar). It looks a bit busy now though.
 * Extra keybindings:
    * <kbd>Ctrl</kbd>-<kbd>Alt</kbd>-<kbd>c</kbd> = Clear all sequences.
    * <kbd>Ctrl</kbd>-<kbd>Alt</kbd>-<kbd>o</kbd> = Optimize song data.
-* Track data swapping in the track table (<kbd>F5</kbd> or <kbd>F7</kbd> mode) - press <kbd>Ctrl</kbd>-<kbd>Alt</kbd>-<kbd>1</kbd> to swap the current voice's tracks from cursor down with voice 1's tracks. **Ctrl-Alt-2** swaps with voice 2's, etc. Note that wrap pointers are not updated and it's generally quite easy to mess up your song with this so use some caution.
+* Track data swapping in the track table (<kbd>F5</kbd> or <kbd>F7</kbd> mode) - press <kbd>Ctrl</kbd>-<kbd>Alt</kbd>-<kbd>1</kbd> to swap the current voice's tracks from cursor down with voice 1's tracks. <kbd>Ctrl</kbd>-<kbd>Alt</kbd>-<kbd>2</kbd> swaps with voice 2's, etc. Note that wrap pointers are not updated and it's generally quite easy to mess up your song with this so use some caution.
 * Multispeed driver bugfixed and doesn't fuck up the play after the song is restarted (playback counter was previously left uninitialized). Uses one extra ZP byte though.
 * ct2util 'import': infs-array overflow error fixed
 * 20ms delay before playback is started + cpucall is now never doing PauseAudio - should fix the long standing race condition thingy when calling 6502 emu from another thread.
@@ -143,7 +136,7 @@ Player
 * Some size optimizations.
 
 ## Version 2.4.0 (23-9-2012)
-Editor
+### Editor
 
 * YUV12 video overlay mode (parameter `-y`). Basically allows to use the editor in 
 full screen independently of the actual screen resolution used. The YUV scaling can make the font seem a bit distorted. Also it will take more CPU time to draw the screen. The screen aspect ratio is not taken into account (unless you specify parameter -ya) so the program may look funny (funnier that usual&#x2026;) in certain resolutions.
@@ -158,7 +151,7 @@ bits and possibly not in 16 bits either. Might be necessary to use 8 bit surface
 * Fixes for track deleting. When there are no more tracks to delete, an "empty" track (A000) is inserted.
 * 1024x768 mode removed for now.
 
-Player:
+### Player
 
 * Per-voice freq offsets reintroduced.
 * Subtune which uses swingtempo is now initialized properly.
@@ -182,7 +175,7 @@ Player:
 
 ## Version 2.3.0 (18-3-2012) - First beta!
 
-Editor
+### Editor
 
 * Major reorganization of the codebase.
 * Now using Derelict SDL bindings. The program should finally run natively on MacOS X. The SDL libraries are linked dynamically and might cause problems where used not to be any.
@@ -193,7 +186,7 @@ Editor
 * <kbd>Shift</kbd>-<kbd>F5</kbd> toggles the "hybrid" view where the following/preceding tracks are also displayed.
 * Clear-command (<kbd>Alt</kbd>-<kbd>Keypad 0</kbd>) clears subtunes as well.
 
-Packer
+### Packer
 * **ct2pack** replaced with **ct2util** which includes a few extra commands for song manipulation, besides packing.
 * Song relocating implemented. When exporting to a SID-file, multispeed tunes cannot be relocated, or rather, the code
 for playing the extra frames can't be relocated. There shouldn't be any need to relocate songs inside SID-files anyway.
@@ -201,18 +194,15 @@ for playing the extra frames can't be relocated. There shouldn't be any need to 
 * Importing (same as <kbd>Shift</kbd>-<kbd>Enter</kbd> in fileselector)
 
 ## Version 2.2.6 (2-3-2012)
-* Added a simple mouse support: Tables and voices can be activated and the cursor moved to the desired spot with a mouse click. 
-Mouse wheel acts similarly to pressing cursor up or down on the activated window.
-Some elements on the screen are clickable as well: 
-* Title
-* Playback multiplier (left button decreases the value, right increases)
-* SID Model & Filter preset (left button toggles the model, right button changes the preset)
+* Added a simple mouse support: Tables and voices can be activated and the cursor moved to the desired spot with a mouse click. Mouse wheel acts similarly to pressing cursor up or down on the activated window. Some elements on the screen are clickable as well: 
+  * Title
+  * Playback multiplier (left button decreases the value, right increases)
+  * SID Model & Filter preset (left button toggles the model, right button changes the preset)
 * Inactive voices are properly shut down when entering notes.
 * Caps lock also enables/disables keyjam.
 * Entered notes are always played on the voice the cursor is currently on.
 * Playback position is displayed in trackmap (<kbd>F7</kbd>).
-* Song purging (<kbd>Alt</kbd>-<kbd>Keypad Del</kbd>) actually works: Unused sequences and instruments are removed & wave- and chord tables are cleaned.
-Also, sequences are checked against duplicates (ie. their length and data is identical) and removed if necessary.
+* Song purging (<kbd>Alt</kbd>-<kbd>Keypad Del</kbd>) actually works: Unused sequences and instruments are removed & wave- and chord tables are cleaned. Also, sequences are checked against duplicates (ie. their length and data is identical) and removed if necessary.
 * Doesn't crash when trying to load a non-editor file.
 * Lots of internal rewrites. New bugs may have been introduced.
 * Sequencer: <kbd>Ctrl</kbd>-<kbd>G</kbd> "grabs" the instrument value in the current row.
@@ -221,10 +211,11 @@ Also, sequences are checked against duplicates (ie. their length and data is ide
 
 ## Version 2.2.5 (19-2-2012)
 
-* Player: Portamento logic changed: it's not affected by set instrument command anymore. 
-This causes portamento to 'regular' (not tied) notes not to work :/ 
+### Player 
+* Portamento logic changed: it's not affected by set instrument command anymore. This causes portamento to 'regular' (not tied) notes not to work :/ 
 
-* Sequencer: When entering notes, the note on currently activated instrument gets played (on 1st voice only though).
+### Sequencer
+* When entering notes, the note on currently activated instrument gets played (on 1st voice only though).
 
 ## Version 2.2.4 (15-2-2012)
 
@@ -245,8 +236,7 @@ This causes portamento to 'regular' (not tied) notes not to work :/
 
 ## Version 2.2.1 (7-2-2012)
 
-* Followplay bugfixes: doesn't get out of sync when tracking songs with swingtempos.
-Should not screw up anymore when fastforwarding over a song speed change command.
+* Followplay bugfixes: doesn't get out of sync when tracking songs with swingtempos. Should not screw up anymore when fastforwarding over a song speed change command.
 * Wrapmark also displayed in <kbd>F7</kbd>.
 
 ## Version 2.2.0 (6-2-2012)
@@ -264,7 +254,8 @@ Pressing <kbd>F12</kbd> twice displays the global help screen.
 
 * Swing speeds are read from the chord table.
 * Resid-fp is now used as default (`-nofp` uses old resid instead).
-* Sequencer: <kbd>F5</kbd> (track view) also displays the tracklist. The display is centered.
+### Sequencer
+* <kbd>F5</kbd> (track view) also displays the tracklist. The display is centered.
 * v0.5 docs removed.
 * First alpha version of the commandline song packer.
 * All info strings editable with <kbd>Alt</kbd>-<kbd>T</kbd>.

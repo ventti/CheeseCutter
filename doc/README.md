@@ -1,5 +1,7 @@
 # Guide
 
+![CheeseCutter](pics/cclogo-transparent.png)
+
 *The Popular Editor*
 
 # Table of Contents
@@ -22,29 +24,24 @@
 
 ## General tips
 
-* Keep sequence 00 empty as it's currently reserved to be used as a dummy sequence. Start your tune from seq 01 and upwards. You can use it too if you insist but it's bound to cause some headache.
+* Keep sequence `00` empty as it's currently reserved to be used as a dummy sequence. Start your tune from seq `01` and upwards. You can use it too if you insist but it's bound to cause some headache.
 * Use subtunes for developing different parts of the tune and combine them to a finished piece in a single tune in the end.
-* Make sure you set the playback mark (the blue bar, set with **Backspace**) on a location where the tracks are aligned - starting at the same row.
-Otherwise the editor will misalign the tracks when starting playback with F1. If you get yourself into this state, the sequencer can always be reset with **Ctrl-L** which should restore correct alignment.
-F3 should work without problems since you can start playback with it from any position, so it's advisable to use it. F1 and mark setting behavior is due to improve in some future version.
+* Make sure you set the playback mark (the blue bar, set with <kbd>Backspace</kbd>) on a location where the tracks are aligned - starting at the same row.
+Otherwise the editor will misalign the tracks when starting playback with <kbd>F1</kbd>. If you get yourself into this state, the sequencer can always be reset with <kbd>Ctrl</kbd>-<kbd>L</kbd> which should restore correct alignment.
+<kbd>F3</kbd> should work without problems since you can start playback with it from any position, so it's advisable to use it. <kbd>F1</kbd> and mark setting behavior is due to improve in some future version.
 
-I realize the occasional need for resetting could be considered a design flaw. Most JCH-styled editors actually have the same problem, and it's relatively easy to correct by the user so 
-I'm not planning to do much about it soon.
+I realize the occasional need for resetting could be considered a design flaw. Most JCH-styled editors actually have the same problem, and it's relatively easy to correct by the user so I'm not planning to do much about it soon.
 
-The above applies also to when setting a wrap point (the purple bar, **Ctrl-Backspace**). You should only wrap back to position where tracks are aligned.
+The above applies also to when setting a wrap point (the purple bar, <kbd>Ctrl</kbd>-<kbd>Backspace</kbd>). You should only wrap back to position where tracks are aligned.
 
-* Somewhat related to above - when you start a tune, keep the lengths of your voices aligned, if possible, even if it means you'll be repeating a lot
-of data (for instance making several 64 row sequences of a bassline with only minor changes).
-This way you'll have much easier time editing the tune. When your composition is finished, you can start splitting sequences up 
-and eliminate the repetition.
-
+* Somewhat related to above - when you start a tune, keep the lengths of your voices aligned, if possible, even if it means you'll be repeating a lot of data (for instance making several 64 row sequences of a bassline with only minor changes). This way you'll have much easier time editing the tune. When your composition is finished, you can start splitting sequences up and eliminate the repetition.
 * Packer considers a subtune "unused" if all voices have a single trackvalue of A000 in the tracklist. This is important to know because you might else get unwanted testtunes included with your exported sid.
 
 ## FAQ
 
-*How do I convert my tune to .sid?*
+### How do I convert my tune to .sid?
 
-Use the command line tool (ct2util) which came with the zip/tarball. 
+Use the command line tool (`ct2util`) which came with the zip/tarball. 
 
 Example: 
 
@@ -54,16 +51,15 @@ ct2util sid mytune.ct mytune.sid
 
 With the JCH compatible version (0.5.x) you're stuck to using the JCH editor's NP-Packer. You can find it in <a href="http://csdb.dk/release/?id=20112">CSDb</a>.
 
-* I can't use the fullscreen / the picture is too small.
+### I can't use the fullscreen / the picture is too small.
 
-Try the YUV video mode (launch ccutter with parameter *-y* or *-ya*).
+Try the YUV video mode (launch ccutter with parameter `-y` or `-ya`).
 
-* The editor drains the battery on my laptop.
+*The editor drains the battery on my laptop.*
 
-Use the old reSID emulation, and if necessary, drop the sampling rate (commandline parameter *-nofp* for old reSID, and *-r [value]* for sample rate).
+Use the old reSID emulation, and if necessary, drop the sampling rate (commandline parameter `-nofp` for old reSID, and `-r [value]` for sample rate).
 
-* 
-What are the advantages over GoatTracker?
+### What are the advantages over GoatTracker?
 
 It's mostly a matter of taste. Some (like myself) may find the JCH-like environment more comfortable than GoatTracker's. The player is more rastertime-heavy but I chose features/comfort over speed. There is a tiny 
 player in development which is aiming to reduce the rastertime and memory use with the price of some comfort. 
@@ -78,22 +74,22 @@ First column is the Transpose value of the sequence and the sequence number.
 Second column is the length of the sequence. Third column indicates the overall position in the song, basically 
 summing up the sequence lengths.
 
-![trackmap](trackmap.png)
+![trackmap](pics/trackmap.png)
 
-* Transpose value is now a signed number with value A0 corresponding zero, A1 transposing by +1, 9F transposing by -1 etc.
-* Transpose value 80 is a skip value meaning the player will use whatever transpose was previously given in the tracklist.
-* The warp point (the purple bar visible in tracklist) can be set with **Ctrl-Backspace** from the editor. It's the point where the song playback returns to when its end is reached.
-* The playback start point (the blue bar) can be set with **Backspace**. Affects F1-key.
+* Transpose value is now a signed number with value `A0` corresponding zero, `A1` transposing by +1, `9F` transposing by -1 etc.
+* Transpose value `80` is a skip value meaning the player will use whatever transpose was previously given in the tracklist.
+* The warp point (the purple bar visible in tracklist) can be set with <kbd>Ctrl</kbd>-<kbd>Backspace</kbd> from the editor. It's the point where the song playback returns to when its end is reached.
+* The playback start point (the blue bar) can be set with <kbd>Backspace</kbd>. Affects <kbd>F1</kbd>-key.
 
 ### Sequence format
 
 Sequences generally look like this:
 
-![seq](seq.png)
+![seq](pics/seq.png)
 
 A single row in a sequence looks like this:
 
-![seqrow](seqrow.png)
+![seqrow](pics/seqrow.png)
 
 The first column above is obviously the note, second is an instrument value and third is an optional command value.
 
@@ -107,7 +103,7 @@ These are what you can enter into sequences.
 * `80-9F` Activates a "chord" from the Chord Table.
 
 The chord values are read in tandem with the Wave Table (meaning that the wave delay value also affects the chord) and added to the base note. You can apply a chord
-over any kind of wave table program except that absolute note values (80-DF) are not affected.
+over any kind of wave table program except that absolute note values (`80-DF`) are not affected.
 
 The Chord Table is indexed, meaning that the value entered into the Command column does not directly point to the Chord Table but to an index which holds the beginning point of each chord program.
 Values `40-7F` are considered negative transpose values, with `7F` equaling to -1, `7E` equaling to -2 etc.
@@ -121,7 +117,7 @@ Values `40-7F` are considered negative transpose values, with `7F` equaling to -
 
 ### Command table
 
-![cmd](cmd.png)
+![cmd](pics/cmd.png)
 
 Byte A is the command number (see below). Bytes B & C are the parameter values.
 
@@ -140,31 +136,31 @@ on notes following that. ~~(You can use it only on tied notes. When a regular no
 
 ### Instrument table
 
-![ins](ins.png)
+![ins](pics/ins.png)
 
 *  Byte A / B: ADSR
 *  Byte C: Hardrestart type & Wave program delay value
 Works mostly as in NP21.G5.
-* Low nibble (x0-xF): Wave program delay value.
-* 0x: Note restart type 1: Gate off three frames before next note. Waveform cleared one frame before next note.
-* 4x: Soft restart. Gate off two frames before next note.
-* 8x: Regular hard restart.
+* Low nibble (`x0-xF`): Wave program delay value.
+* `0x`: Note restart type 1: Gate off three frames before next note. Waveform cleared one frame before next note.
+* `4x`: Soft restart. Gate off two frames before next note.
+* `8x`: Regular hard restart.
 Gate off & write hard restart value to ADSR two frames before next note.
 The current instrument's byte D is written to waveform register.
 * Ax: Laxity restart. Works like 8x except the AD part of the volume envelope is not touched.
-Restart types 0x and 8x are the ones to use for most of the time.
+Restart types `0x` and `8x` are the ones to use for most of the time.
 4x (soft restart) usually works best (least buggy) with big (>= 8) release values.
 * Byte D: Hardrestart waveform
-Used when Byte C (Hardrestart type) = 8x or Ax. The value is written into SID waveform register 1 frame before next note.
-Usually values 0 & 8 are the most useful. The gate bit is automatically set by the player, so it does not make a difference if you type e.g. 00 or 01.
-* Byte E: Filter table program. 00 = no filter; the voice keeps playing any filter program set by another instrument or sequence command.
-* Byte F: Pulse table program. 00 = no pulse; the voice keeps playing any pulse program set by another instrument or sequence command.
+Used when Byte C (Hardrestart type) = `8x` or `Ax`. The value is written into SID waveform register 1 frame before next note.
+Usually values 0 & 8 are the most useful. The gate bit is automatically set by the player, so it does not make a difference if you type e.g. `00` or `01`.
+* Byte E: Filter table program. `00` = no filter; the voice keeps playing any filter program set by another instrument or sequence command.
+* Byte F: Pulse table program. `00` = no pulse; the voice keeps playing any pulse program set by another instrument or sequence command.
 * Byte G: Unused.
 * Byte H: Wave table pointer.
 
 ### Wave table
 
-![wave](wave.png)
+![wave](pics/wave.png)
 
 Works mostly like it did in JCH's editor.
 
@@ -181,7 +177,7 @@ Works mostly like it did in JCH's editor.
 
 ### Pulse table
 
-![pulse](pulse.png)
+![pulse](pics/pulse.png)
 
 * Duration (byte A). Works like byte C in JCH's players.
 * `00-7F` Duration with positive add value.
@@ -190,11 +186,11 @@ Works mostly like it did in JCH's editor.
 * Init value (byte C). Works like byte A in JCH's players. Defines the initial value for the sweep. `FF` uses the previously set value.
 * Jump value (byte D). Works somewhat like byte D in JCH's players, except that value 00 always jumps to the following row and value `7F` stops the pulse program execution.
 
-What the "stop" jump value `7F` really does is it just jumps to the row 0 in the pulse table which usually holds the sequence "00 00 FF 7F", which never changes anything and continously wraps back to itself.
+What the "stop" jump value `7F` really does is it just jumps to the row 0 in the pulse table which usually holds the sequence `00 00 FF 7F`, which never changes anything and continously wraps back to itself.
 
 ### Filter table
 
-![filter](filter.png)
+![filter](pics/filter.png)
 
 Generally the bytes have same meaning as in pulse table.
 
@@ -252,7 +248,7 @@ Generally the bytes have same meaning as in pulse table.
 
 ### Chord table
 
-![chord](chord.png)
+![chord](pics/chord.png)
 
 * `00-3F` Positive transpose values - e.g. the familiar major chord would be 0-4-7.
 * `40-7F` Negative transpose values - 7F = -1, 7E = -2 etc.
@@ -356,6 +352,7 @@ Waveforms $3, $6 and $7 are audible only on new SID (8580)
 
 ### Links
 
+* [CheatCutter rev.1](https://chordian.net/files/cheesecutter/CheatCutter_Rev001.zip) - a cheat sheet for CheeseCutter (2.8) by Chordian.
 * [SID Datasheet](http://www.waitingforfriday.com/index.php/Commodore_SID_6581_Datasheet)
 * [SID Registers](http://www.waitingforfriday.com/images/thumb/0/03/SID_Registers.PNG/712px-SID_Registers.PNG)
 * [SID Info (aay64)](http://unusedino.de/ec64/technical/aay/c64/sidmain.htm)
