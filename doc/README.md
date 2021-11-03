@@ -4,6 +4,12 @@
 
 *The Popular Editor*
 
+# Introduction
+
+This document describes the user interface and functionalities of the CheeseCutter editor.
+
+For editor keyboard shortcut reference, see [editor.md](editor.md) or online help in the editor with <kbd>F12</kbd>.
+
 # Table of Contents
 
 * General tips
