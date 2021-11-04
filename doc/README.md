@@ -1,14 +1,16 @@
-# Guide
-
-![CheeseCutter](pics/cclogo-transparent.png)
+![CheeseCutter](pics/cclogo-transparent-inv.png)
 
 *The Popular Editor*
+
+[README](README.md) | [EDITOR](editor.md) | [ABOUT](about.md) | [CHANGELOG](CHANGELOG.md)
 
 # Introduction
 
 This document describes the user interface and functionalities of the CheeseCutter editor.
 
 For editor keyboard shortcut reference, see [editor.md](editor.md) or online help in the editor with <kbd>F12</kbd>.
+
+Read more [about](about.md) the editor.
 
 # Table of Contents
 

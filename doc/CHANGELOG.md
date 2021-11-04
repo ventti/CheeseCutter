@@ -1,3 +1,9 @@
+![CheeseCutter](pics/cclogo-transparent-inv.png)
+
+*The Popular Editor*
+
+[README](README.md) | [EDITOR](editor.md) | [ABOUT](about.md) | [CHANGELOG](CHANGELOG.md)
+
 # News
 
 **If you're a Facebook user, join the CheeseCutter SID music editor group to hear the latest gossip.**

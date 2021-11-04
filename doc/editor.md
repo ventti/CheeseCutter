@@ -1,3 +1,9 @@
+![CheeseCutter](pics/cclogo-transparent-inv.png)
+
+*The Popular Editor*
+
+[README](README.md) | [EDITOR](editor.md) | [ABOUT](about.md) | [CHANGELOG](CHANGELOG.md)
+
 # Main help
 
 ```
