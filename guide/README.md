@@ -315,12 +315,12 @@ Generally the bytes have same meaning as in pulse table.
 <tr><td>$F</td><td>X</td><td>X</td><td>X</td><td>X</td></tr>
 </table>
 
-GATE: Trigger ADSR -curve</p>
-SYNC: Synchronize Channel N with N-1 (1 with 3, 2 with 1, 3 with 2). Sync target frequency should be less than Sync source
-RING MOD: Ring modulate Channel N with N-1 (mixer-effect: fRING = |f1+f2| & |f1-f2|). N-1 shall be Triangle wave
-TEST: Enabling Test bit sets channel output to DC
-Waveforms $9 - $F lock the oscillator (can be reset by enabling test bit)
-Waveforms $3, $6 and $7 are audible only on new SID (8580)
+* GATE: Trigger ADSR -curve
+* SYNC: Synchronize Channel N with N-1 (1 with 3, 2 with 1, 3 with 2). Sync target frequency should be less than Sync source
+* RING MOD: Ring modulate Channel N with N-1 (mixer-effect: fRING = |f1+f2| & |f1-f2|). N-1 shall be Triangle wave
+* TEST: Enabling Test bit sets channel output to DC
+* Waveforms $9 - $F lock the oscillator (can be reset by enabling test bit)
+* Waveforms $3, $6 and $7 are audible only on new SID (8580)
 
 <table><th colspan=4>Transpose table</th><tr>
 <td>Hex up</td><td>Hex down</td><td>Note</td><td>Example up/down</td></tr>
