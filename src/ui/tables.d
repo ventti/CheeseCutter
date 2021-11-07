@@ -269,7 +269,7 @@ private:
 class InsValueTable : HexTable {
 	private {
 		static ubyte[8] instrBuffer;
-		static char[32] instrName;
+		static char[32] instrName = 0x20;
 		int mark = -1;
 		int width;
 		FileSelectorDialog loadDialog;
