@@ -19,6 +19,7 @@ import std.conv;
 import std.file;
 import audio.timer;
 import std.experimental.logger;
+import seq.sequencer;
 
 version(linux) {
 	const DIR_SEPARATOR = '/';
