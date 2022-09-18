@@ -254,6 +254,130 @@ Generally the bytes have same meaning as in pulse table.
 * Do not init - keep the previous cutoff value (as defined in byte C).
 * Jump to the following row when this one is completed (byte D).
 
+#### Addendum
+
+Abaddon's original documentation heavily relies on user knowledge of JCH player.
+
+Excerpt from JCH's NewPlayer v20.G4 documentation. 
+
+See 20_G4_IN.TXT in ED_TEXTS.ZIP in [this archive](https://csdb.dk//storage/tlhryYRpgGybHqRP.php/18935/v-c64ed.zip).
+
+```
+The Pulsating table.
+--------------------
+
+Both this table and the filter table have been completely redesigned in this
+player. Get ready to learn a completely new system, the same system as used
+in LAXITY's player. This kind of step-programming is both much easier to use,
+and more difficult at the same time! Simply because you have almost no
+special bits to look out for, but on the other hand you must take care of all
+boundary settings yourself. The byte functions themselves are quite easy to
+explain:
+
+         00  00  00  00
+         --  --  --  --
+         A   B   C   D
+
+Byte A sets the start puls. This is exactly the same as byte 4 in the old
+system, the first nibble is the low-puls and the last is hi. SO as you know,
+$08 is a very loud puls while $10 is very weak. A special byte command
+however is value $FF which won't set a new puls, but tell the music-routine
+NOT to set a new puls but continue using the puls it is currently working
+with. This is useful when calling new sets in the step programming.
+
+Byte B sets the speed of the pulsating, ranging from $00 to $FF.
+
+Byte C defines the life time of the set, $00-$7F frames. When the time has
+expired the music routine will call the next set, as defined in byte D. This
+is the only byte using a bit - BIT 7 to determine puls speed direction -
+unlike the old system, where you had all sorts of bits to look out for,
+especially in byte 3. Back to business, The 7th bit sets the direction of the
+puls-speed, 0=up, 1=down. Meaning, that you must add the duration with $80 to
+puls downwards! Speeds available are therefore $00-$FF (in byte B) with byte
+C's bit 7 determining the direction of the speed, adding or subtracting.
+
+Byte D sets a pointer to the next set whenever the frame counter in byte C
+has expired. The pointers used are simply the very same as in the puls table,
+the pointer like 0C: XX XX XX XX, this is f.ex set number $0C.
+
+As you can see it isn't as hard to understand this new system as the older
+one was. The difficult part however is actually getting USED to running a
+clever puls in this system, which ain't as straight-forward as it seems. In
+the old system you had boundary nibbles in the same set, but as you don't
+have this here you must "jump" between two sets adding and subtracting the
+speeds in order to simulate a swinging puls.
+
+Let's assume you want to start at puls $0C and move towards the $0F, then
+somewhere along the path you want to start a puls swing.
+
+         00: 0C 40 08 04
+         04: FF 40 84 08
+         08: FF 40 04 04
+
+In set 00 it starts at puls 0C, and then adds with $40 for 8 frames, then
+goes to set number 04. Here it continues with whatever puls it might have,
+now subtracting with 40 (because $80 is added to byte C!) for 4 frames. After
+running the 4 frames it goes to set 08, continuing again with the last puls,
+now adding instead for 4 frames, then GOES BACK to SET 04! As you can see in
+this example, the puls routine will keep on alternating between set 04 and 08
+as long as the instrument lasts. Subtracting and adding with 40 all the time
+then gives the impression of a swinging controlled puls with boundary
+control. This method of controlling the puls program gives much more
+flexibility than the old system. Just altering one of the frame counter's
+slightly in either set 04 or 08 would make the puls sound swinging, yet
+giving the impression of "moving inspite of the swinging", so to speak.
+
+
+The filter-sweep table.
+-----------------------
+
+The step-programming bytes are almost exactly alike in the filter table. Byte
+A sets the start filter, 00-FE (FF uses the current filter freq), byte C the
+frames and byte D the pointer to the next set. However, the speed counter in
+Byte B is slightly different.
+
+Instead of having a bit 7 to determine the direction of the filter adding
+(the "speed") I use the power of wrapping bytes. In other words, to save
+raster time this byte is actually only capable of adding! So how can you
+subtract with this byte? Simply by reversing it!! This may seem confusing to
+the musician not fully into hexadecimal numbers and m/c programming, but as
+you know, the byte values used in all tables can go from $00 to $FF. If a
+machine code routine is made in an assembler which adds with 1 all the time
+to a byte, then it will automatically wrap back to the $00 as soon as it
+reaches the $FF... This is very common and natural to most people, but let's
+say you were adding with $FF instead of 1! Then the byte value $00 would be
+added with $FF, giving $FF (quite logical!), the second time it will be added
+it says $FE, simply because of the way a byte "wraps"! So as you can see, you
+can "simulate" a subtracting of 1 by adding with $FF! This is what you can
+use with succes in the speed byte of the filter-sweep table.
+
+If you type $10 in byte B, you will be adding with $10 as wanted, but if you
+type $F0 you will be subtracting with $10! This might take some time to get
+used to if you not a programmer, but you'll soon get the hang of it!
+
+
+The first 4 bytes in the filter-sweep table.
+--------------------------------------------
+
+As usual the first 4 bytes in the filter table has been reserved, meaning
+that you must start all filter programs from pointer position 04. The first 4
+bytes has been used almost fully in NP v20 this time.
+
+         02  03  00  00
+         --  --  --  --
+         A   B   C   D
+
+Byte A & B are the half speed selectors, I will return to them later.
+
+Byte C is unused in v20.G3 and up. In older versions, it was used as the
+raster decrease byte. However, since the decreasing can't be "heard" in the
+v20 series I changed it into being set automatically somewhere else, when
+packing!
+
+Byte D is the filter-sweep to voice controller, working exactly as in NP v15
+and NP v18.
+```
+
 ### Chord table
 
 ![chord](pics/chord.png)
