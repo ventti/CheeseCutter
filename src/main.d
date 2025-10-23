@@ -37,13 +37,17 @@ version(Win32) {
 	const DIR_SEPARATOR = '\\';
 }
 
-void initVideo(bool useFullscreen, bool useyuv, bool tallMode) {
+void initVideo(bool useFullscreen, bool useyuv, int seqHeight = 32) {
 	int mx, my;
 
 	if( SDL_Init(SDL_INIT_VIDEO) < 0) {
 		throw new DisplayError("Couldn't initialize framebuffer.");
 	}
-	mx = 800; my = tallMode ? 1040 : 600;
+	mx = 800;
+	// Calculate height based on sequencer height plus overhead
+	// Sequencer needs seqHeight rows, plus ~10 rows for header/status
+	int totalRows = seqHeight + 10;
+	my = totalRows * FONT_Y;
 
 	int width = mx / FONT_X;
 	int height = my / FONT_Y;
@@ -82,8 +86,8 @@ void mainloop() {
 				version(OSX) {
 					if (key == SDLK_q && evt.key.keysym.mod & KMOD_META)
 						quit=true;
-				}	
-				
+				}
+
 				mainui.keypress(keyinfo);
 				if(mainui.exitRequested)
 					quit = true;
@@ -160,6 +164,7 @@ void printheader() {
 	stderr.writefln("  -n               Enable NTSC mode");
 	stderr.writefln("  -r [value]       Set playback frequency (def=48000)");
 	stderr.writefln("  -y               Use YUV video overlay");
+	stderr.writefln("  --height [rows]  Set sequencer height in rows (def=32, min=32, max=64)");
 	stderr.writef("\n");
 }
 
@@ -169,7 +174,7 @@ int main(char[][] args) {
 	bool yuvOverlay;
 	string filename;
 	bool fnDefined = false;
-	bool tallMode = false;
+	int sequencerHeight = 0; // 0 means use default
 
 	DerelictSDL.load();
 
@@ -190,7 +195,7 @@ int main(char[][] args) {
 			song.save("_backup.ct");
 		}
 	}
-	
+
 	try {
 		i = 1;
 		while(i < args.length) {
@@ -235,16 +240,18 @@ int main(char[][] args) {
 			case "-nofp":
 				audio.player.usefp = 0;
 				break;
-			case "-y", "-ya", "-yuv":	
-				yuvOverlay = true;
-				break;
-			case "-t", "--tall":
-				seq.sequencer.tableTop = 29;
-				seq.sequencer.tableBot = -31;
-				seq.sequencer.anchor = 32;
-				tallMode = true;
-				break;
-			default:
+		case "-y", "-ya", "-yuv":
+			yuvOverlay = true;
+			break;
+		case "--height":
+			sequencerHeight = to!int(args[i+1]);
+			if(sequencerHeight < 32)
+				throw new UserException("Sequencer height must be at least 32 rows");
+			if(sequencerHeight > 64)
+				throw new UserException("Sequencer height cannot exceed 64 rows");
+			i++;
+			break;
+		default:
 				version (OSX) {
 					if (args[i].length > 3 && args[i][0..4] == "-psn"){
 						break;
@@ -257,9 +264,9 @@ int main(char[][] args) {
 				filename = cast(string)args[i].dup;
 				if(std.file.exists(filename) == 0 || std.file.isDir(filename)) {
 					throw new UserException("File not found!");
-				}		
+				}
 				fnDefined = true;
-		
+
 				break;
 			}
 			i++;
@@ -271,17 +278,22 @@ int main(char[][] args) {
 	}
 
 	audio.player.init();
-	initVideo(fs, yuvOverlay, tallMode);
+	// Use command-line height if specified, otherwise default to 32
+	int effectiveHeight = sequencerHeight > 0 ? sequencerHeight : 32;
+	if(sequencerHeight > 0) {
+		seq.sequencer.initialHeight = sequencerHeight;
+	}
+	initVideo(fs, yuvOverlay, effectiveHeight);
 	initSession();
 	mainui = new UI();
 	loadFile(filename);
 	video.updateFrame();
-		
+
 	SDL_PauseAudio(0);
 	log("Started");
 	mainloop();
 	audio.audio.audio_close();
-	return 0;   
+	return 0;
 }
 
 void openFile(char* filename){
@@ -293,7 +305,7 @@ void openFile(char* filename){
 void loadFile(string filename){
 	if(filename && mainui) {
 		string dir, fn;
-		int sep = cast(int) filename.lastIndexOf(DIR_SEPARATOR); 
+		int sep = cast(int) filename.lastIndexOf(DIR_SEPARATOR);
 		fn = filename[sep + 1..$];
 		if(sep >= 0)
 			dir = filename[0 .. sep];

@@ -32,6 +32,10 @@ int activeVoiceNum;
 private int stepCounter;
 int tableTop = 15, tableBot = -16;
 int anchor = 16;
+int heightAdjustment = 0; // rows to add to default height
+const int minHeight = 32; // minimum total height
+const int maxHeight = 64; // maximum total height
+int initialHeight = 0; // set by command line, 0 means use area.height
 Clip[] clip;
 
 private {
@@ -39,10 +43,10 @@ private {
 }
 
 struct RowData {
-	Track trk; 
+	Track trk;
 	alias trk track;
 	// offset in tracklist, checked against endmark
-	int trkOffset; 
+	int trkOffset;
 	// offset in tracklist, not checked
 	int trkOffset2;
 	int seqOffset;
@@ -63,7 +67,7 @@ class PosData {
 	int pointerOffsetValue;
 	int trkOffset = 0;
 	int seqOffset;
-	int mark; 
+	int mark;
 	int rowCounter;
 	Tracklist tracks;
 	this() {
@@ -73,15 +77,15 @@ class PosData {
 	@property int pointerOffset() {
 		return pointerOffsetValue - anchor;
 	}
-	
+
 	@property int pointerOffset(int i) {
 		return pointerOffsetValue = i + anchor;
 	}
-	
+
 	@property int rowOnCursor() {
 		return seqOffset + pointerOffset;
 	}
-	
+
 	int getRowCounter() {
 		int counter;
 		for(int i = 0; i <= trkOffset; i++) {
@@ -90,7 +94,7 @@ class PosData {
 		}
 		return counter + seqOffset;
 	}
-	
+
 }
 
 class PosDataTable {
@@ -104,26 +108,26 @@ class PosDataTable {
 		pos.length = 3;
 		foreach(ref p; pos) p = new PosData;
 	}
-	
-	@property int pointerOffset(int o) { 
+
+	@property int pointerOffset(int o) {
 		foreach(ref p; pos) { p.pointerOffset = o; }
 		return 0;
 	}
-	
+
 	@property int pointerOffset() {
 		return pos[0].pointerOffset;
 	}
-	
-	@property int normalPointerOffset() { 
+
+	@property int normalPointerOffset() {
 		int r = tableTop + pos[0].pointerOffset;
 		return r;
 	}
-			
-	@property int rowCounter() { 
-		return pos[0].rowCounter; 
+
+	@property int rowCounter() {
+		return pos[0].rowCounter;
 	}
-	
-	@property int rowCounter(int o) { 
+
+	@property int rowCounter(int o) {
 		foreach(ref p; pos) { p.rowCounter = o; }
 		return 0;
 	}
@@ -133,7 +137,7 @@ class PosDataTable {
 		pt.copyFrom(this);
 		return pt;
 	}
-	
+
 	void copyFrom(PosDataTable pt) {
 		for(int i = 0 ; i < 3; i++) {
 			PosData p = pos[i];
@@ -157,7 +161,7 @@ abstract class Voice : Window {
 	Input input;
 	alias input activeInput;
 	VoiceTable parent;
-	
+
 	this(ref VoiceInitParams v) {
 		super(v.a);
 		tracks = v.t; pos = v.p;
@@ -166,19 +170,19 @@ abstract class Voice : Window {
 
 public:
 
-	bool atBeg() { 
+	bool atBeg() {
 		return pos.trkOffset <= 0
 			&& (pos.seqOffset + pos.pointerOffset) <= 0;
 	}
 
 	bool atEnd() {
-		RowData s = getRowData(pos.trkOffset, 
+		RowData s = getRowData(pos.trkOffset,
 									   pos.seqOffset + pos.pointerOffset);
 		return (s.trk.trans >= 0xf0);
 	}
-	
+
 	bool pastEnd() { return pastEnd(0); }
-	
+
 	bool pastEnd(int y) {
 		RowData s = getRowData(pos.trkOffset,
 							   pos.seqOffset + y);
@@ -222,7 +226,7 @@ public:
 			--trkofs2;
 			s.trk = tracks[trkofs];
 			seq = song.seqs[s.trk.number];
-		} 
+		}
 		assert(seqofs >= 0);
 
 		while(seqofs >= numRowsInSeq()) {
@@ -247,7 +251,7 @@ public:
 		s.seq = seq;
 		return s;
 	}
-	
+
 	RowData getRowData(int tofs) {
 		return getRowData(tofs, 0);
 	}
@@ -271,7 +275,7 @@ public:
 						rowCounter = getRowCounter();
 					}
 					else trkOffset = 0;
-				} 
+				}
 				s = getRowData(trkOffset);
 				seqOffset += s.clippedRows;
 				steps += s.clippedRows;
@@ -284,8 +288,8 @@ public:
 						trkOffset = 0;
 						rowCounter = seqOffset;
 					}
-					else { 
-						trkOffset = tracks.trackLength - 1; 
+					else {
+						trkOffset = tracks.trackLength - 1;
 						rowCounter = oldRowcounter;
 					}
 				}
@@ -306,13 +310,13 @@ public:
 
 
 protected:
-	
+
 	override void update();
-	
+
 	void refreshPointer() {
 		refreshPointer(pos.pointerOffset);
 	}
-	
+
 	void refreshPointer(int y);
 
 	void jump(int jumpto) {
@@ -322,12 +326,12 @@ protected:
 		pos.trkOffset = jumpto;
 		pos.seqOffset = 0;
 		pos.rowCounter = getRowcounter(jumpto);
-	}    
+	}
 
 	void setMark() {
 		setMark(1);
 	}
-	
+
 	// when m == 1, sets mark to current trkOffsets
 	// when m == 0, zeroes it out
 	void setMark(int m) {
@@ -351,7 +355,7 @@ abstract class VoiceTable : Window {
 	Voice active;
 	alias active activeVoice;
 	PosDataTable posTable;
-	
+
 	this(Rectangle a, PosDataTable pi) {
 		super(a);
 		posTable = pi;
@@ -370,7 +374,7 @@ abstract class VoiceTable : Window {
 
 	override void refresh() {
 		foreach(v; voices) {
-			v.refresh(); 
+			v.refresh();
 		}
 	}
 
@@ -408,7 +412,7 @@ abstract class VoiceTable : Window {
 				centralize();
 				break;
 			case SDLK_m:
-				if(song.highlight < 16) 
+				if(song.highlight < 16)
 					song.highlight++;
 				break;
 			case SDLK_n:
@@ -448,7 +452,7 @@ abstract class VoiceTable : Window {
 		switch(key.raw)
 		{
 		case SDLK_DOWN:
-			if(key.mods & KMOD_SHIFT) 
+			if(key.mods & KMOD_SHIFT)
 				goto case SDLK_PAGEDOWN;
 			else if(key.mods & KMOD_CTRL) {
 				scroll(1);
@@ -484,7 +488,7 @@ abstract class VoiceTable : Window {
 	}
 
 	void stepVoice() { stepVoice(1); }
-	
+
 	void stepVoice(int i) {
 		// safety check - if we're past endmark on all voices,
 		// exit the method -- can happen if all tracklists
@@ -521,13 +525,13 @@ abstract class VoiceTable : Window {
 		// making sure cursor is not past endmark
 		step(0);
 	}
-	
+
 	override void update() {
-		input = activeVoice.activeInput; 
-		foreach(v; voices) { 
+		input = activeVoice.activeInput;
+		foreach(v; voices) {
 			v.refreshPointer(posTable.pointerOffset);
-			v.update(); 
-			
+			v.update();
+
 		}
 		// statusline
 		screen.cprint(area.x + 1, area.y, 1, 0, format("#%02X",song.subtune));
@@ -549,7 +553,7 @@ abstract class VoiceTable : Window {
 		}
 
 	}
-	
+
 	void setPositionMark() {
 		int rows = -1;
 		foreach(v; voices) {
@@ -608,7 +612,7 @@ abstract class VoiceTable : Window {
 			}
 
 			int e = activeVoice.tracks.trackLength - 1;
-			
+
 			for(int i = 0; i < e; i++) {
 				activeVoice.refreshPointer(posTable.pointerOffset);
 				RowData s = activeVoice.getRowData(i);
@@ -653,7 +657,7 @@ abstract class VoiceTable : Window {
 	void toScreenTop() {
 		step(-posTable.normalPointerOffset);
 	}
-	
+
 	void toScreenBot() {
 		int scrend = tableTop - posTable.pointerOffset - 1;
 		step(scrend);
@@ -681,14 +685,14 @@ abstract class VoiceTable : Window {
 			st = 0;
 			wrapOk = false;
 		}
-	
-		posTable.pointerOffset = 
+
+		posTable.pointerOffset =
 			posTable.pointerOffset + st;
 
 		bool atEnd = activeVoice.atEnd();
 
 		if(atEnd && stepCounter > 1) {
-			posTable.pointerOffset = 
+			posTable.pointerOffset =
 				posTable.pointerOffset - st;
 			st = 0;
 			wrapOk = false;
@@ -714,7 +718,7 @@ abstract class VoiceTable : Window {
 
 		if(d <= 0) return;
 		assert(extra >= 0);
-		posTable.pointerOffset = 
+		posTable.pointerOffset =
 			posTable.pointerOffset - extra;
 
 		doStep(true,extra);
@@ -727,7 +731,7 @@ abstract class VoiceTable : Window {
 		}
 	}
 
-	// for seq copy/insert/etc 
+	// for seq copy/insert/etc
 	RowData getRowData() {
 		return activeVoice.activeRow;
 	}
@@ -755,10 +759,21 @@ final class Sequencer : Window, Undoable {
 	}
 	VoiceTable activeView;
 	//private Clip[] clip;
-	
+
 	this(Rectangle a) {
 		int h = screen.height - 10;
 		super(a,ui.help.HELPSEQUENCER);
+
+		// Apply initial height: use command line if set, otherwise use minimum
+		if(initialHeight > 0) {
+			area.height = initialHeight;
+			a.height = initialHeight;
+		} else {
+			// Default to minimum height if not specified
+			area.height = minHeight;
+			a.height = minHeight;
+		}
+
 		trackmapTable = new TrackmapTable(a, seqPos);
 		sequenceTable = new SequenceTable(a, seqPos);
 		trackTable = new TrackTable(a, seqPos);
@@ -766,32 +781,33 @@ final class Sequencer : Window, Undoable {
 		activeView = sequenceTable;
 		activeView.activate();
 		activateVoice(0);
-		
+
 		queryAppend = new QueryDialog("Insert this sequence to cursor pos: $",
-								  &insertCallback, 0x80);
-								  
+							  &insertCallback, 0x80);
+
 		queryCopy = new QueryDialog("Copy this sequence to cursor seq: $",
-								&copyCallback, 0x80);
-		
+							&copyCallback, 0x80);
+
 		// top & bottom
 		tableBot = -area.height / 2;
 		tableTop = area.height / 2;
+		anchor = area.height / 2;
 		sequenceTable.centerTo(0);
 
 		postables.length = 32;
 		foreach(ref p; postables) {
 			p = new PosDataTable;
 		}
-		
+
 	}
 
 	void activateVoice(int n) {
 		activeView.jumpToVoice(n);
 		input = activeView.input;
 	}
-	
+
 	void reset() { reset(true); }
-	
+
 	void reset(bool tostart) {
 		activeView.deactivate();
 		if(tostart) {
@@ -812,6 +828,51 @@ final class Sequencer : Window, Undoable {
 		foreach(v; activeView.voices) {
 			v.setPositionMark(0);
 		}
+	}
+
+	void adjustHeight(int delta) {
+		int newHeight = area.height + delta;
+		// enforce minimum and maximum height
+		if(newHeight < minHeight) {
+			newHeight = minHeight;
+			delta = newHeight - area.height;
+		}
+		if(newHeight > maxHeight) {
+			newHeight = maxHeight;
+			delta = newHeight - area.height;
+		}
+		if(delta == 0) return;
+
+		heightAdjustment += delta;
+
+		// Update area height
+		area.height = newHeight;
+
+		// Recalculate table bounds based on new height
+		tableBot = -area.height / 2;
+		tableTop = area.height / 2;
+		anchor = area.height / 2;
+
+		// Update all voice tables with new area dimensions
+		foreach(vt; voiceTables) {
+			vt.area.height = area.height;
+			foreach(v; vt.voices) {
+				v.area.height = area.height;
+			}
+		}
+
+		// Re-center and refresh display
+		activeView.centerTo(activeView.posTable.pointerOffset);
+		activeView.refresh();
+		UI.statusline.display(format("Sequencer height: %d rows", area.height));
+	}
+
+	void increaseHeight() {
+		adjustHeight(4); // increase by 4 rows at a time
+	}
+
+	void decreaseHeight() {
+		adjustHeight(-4); // decrease by 4 rows at a time
 	}
 
 	Voice[] getVoices() {
@@ -841,16 +902,22 @@ final class Sequencer : Window, Undoable {
 				return activeView.keypress(key);
 			}
 		}
-		else if(key.mods & KMOD_CTRL) {
-			switch(key.raw) {
-			case SDLK_F12:
-				mainui.activateDialog(
-					new DebugDialog(activeView.activeVoice.activeRow.seq));
-				break;
-			default:
-				return activeView.keypress(key);
-			 }
-		}
+	else if(key.mods & KMOD_CTRL) {
+		switch(key.raw) {
+		case SDLK_F12:
+			mainui.activateDialog(
+				new DebugDialog(activeView.activeVoice.activeRow.seq));
+			break;
+		case SDLK_EQUALS, SDLK_KP_PLUS:
+			increaseHeight();
+			break;
+		case SDLK_MINUS, SDLK_KP_MINUS:
+			decreaseHeight();
+			break;
+		default:
+			return activeView.keypress(key);
+		 }
+	}
 		else switch(key.raw)
 			 {
 			 case SDLK_F5:
@@ -883,7 +950,7 @@ final class Sequencer : Window, Undoable {
 				 if(activeView == trackmapTable) {
 					 activeView.toSeqStart();
 					 activeView = trackTable;
-				 } 
+				 }
 				 else {
 					 activeView.toSeqStart();
 					 activeView.centerTo(0); // scroll to upmost pos
@@ -927,7 +994,7 @@ protected:
 
 	void changeSubtune(int direction) {
 		postables[song.subtune].copyFrom(activeView.posTable);
-		
+
 		refresh();
 		mainui.stop();
 		activeView.jump(0,false);
@@ -942,7 +1009,7 @@ protected:
 		refresh();
 		activeView.step(0);
 	}
-	
+
 	override void update() {
 		activeView.update();
 		input = activeView.input;
@@ -1009,7 +1076,7 @@ private:
 		if(param >= MAX_SEQ_NUM) return;
 		RowData s = activeView.getRowData();
 		Sequence fr = song.seqs[param];
-		Sequence to = s.seq; 
+		Sequence to = s.seq;
 		to.copyFrom(fr);
 		activeView.step(0);
 	}
