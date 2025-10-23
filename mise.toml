@@ -1,0 +1,74 @@
+# mise.toml - CheeseCutter project dependencies
+# Install mise: https://mise.jdx.dev/getting-started.html
+# Usage: mise install
+
+# Note: mise doesn't have a pre-built ldc plugin yet, so all dependencies
+# are installed via Homebrew. Run ./bootstrap.sh for automated setup.
+
+# Note: The following tools need to be installed via system package manager:
+# - ldc (D compiler - LLVM-based)
+#   macOS: brew install ldc
+# - ACME assembler (for building C64 player binary)
+#   macOS: brew install acme
+# - SDL framework
+#   macOS: brew install sdl12-compat (or download SDL.framework manually)
+# - Standard build tools (make, gcc, g++)
+#   macOS: xcode-select --install
+
+[env]
+# Set library path for macOS builds (adjust if needed based on your architecture)
+# Apple Silicon (M1/M2/M3): /opt/homebrew/lib
+# Intel Mac: /usr/local/lib
+LIBSPATH = "/opt/homebrew/lib"
+
+[tasks.build]
+description = "Build CheeseCutter for current platform"
+run = """
+#!/usr/bin/env bash
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  make -f Makefile.mac LIBSPATH=${LIBSPATH:-/opt/homebrew/lib}
+else
+  make
+fi
+"""
+
+[tasks.build-utils]
+description = "Build ct2util utility"
+run = """
+#!/usr/bin/env bash
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  make -f Makefile.mac ct2util LIBSPATH=${LIBSPATH:-/opt/homebrew/lib}
+else
+  make ct2util
+fi
+"""
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = """
+#!/usr/bin/env bash
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  make -f Makefile.mac clean
+else
+  make clean
+fi
+"""
+
+[tasks.setup-macos]
+description = "Install macOS system dependencies via Homebrew"
+run = """
+#!/usr/bin/env bash
+if ! command -v brew &> /dev/null; then
+  echo "Homebrew not found. Please install it from https://brew.sh"
+  exit 1
+fi
+
+echo "Installing system dependencies..."
+brew install acme sdl12-compat
+echo "Done! Run 'mise install' to install D compiler, then 'mise run build' to build."
+"""
+
+[tasks.setup]
+alias = "setup-macos"
+description = "Setup project dependencies (macOS)"
+

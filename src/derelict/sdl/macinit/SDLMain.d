@@ -99,16 +99,18 @@ private
     SDLMain sdlMain;
 }
 
-static this ()
+// Disabled for sdl12-compat - this code is only needed for the old SDL 1.2 framework
+// The sdl12-compat library handles macOS integration internally via SDL2
+/*static this ()
 {
     version (SDL_USE_CPS)
       load(&DerelictSDLMac.bindFunc);
 
     registerSubclasses();
     CustomApplicationMain();
-}
+}*/
 
-static ~this()
+/*static ~this()
 {
     if(pool !is null)
         pool.release();
@@ -117,7 +119,7 @@ static ~this()
         sdlMain.release;
 
     DerelictSDLMac.unload();
-}
+}*/
 
 private void registerSubclasses ()
 {

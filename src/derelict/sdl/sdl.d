@@ -54,7 +54,7 @@ public:
         super(
             "sdl.dll",
             "libSDL.so, libSDL.so.0, libSDL-1.2.so, libSDL-1.2.so.0",
-            "@executable_path/../Frameworks/SDL.framework/SDL, /Library/Frameworks/SDL.framework/SDL, /System/Library/Frameworks/SDL.framework/SDL"
+            "/opt/homebrew/lib/libSDL-1.2.0.dylib, /opt/homebrew/lib/libSDL.dylib, /usr/local/lib/libSDL-1.2.0.dylib, /usr/local/lib/libSDL.dylib, libSDL-1.2.0.dylib, libSDL.dylib, @executable_path/../Frameworks/SDL.framework/SDL, /Library/Frameworks/SDL.framework/SDL, /System/Library/Frameworks/SDL.framework/SDL"
         );
     }
 
