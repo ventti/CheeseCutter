@@ -1,4 +1,5 @@
-*.bin
 *.o
 *.exe
 ccutter
+ct2util
+src/c64/player.bin

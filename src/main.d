@@ -18,6 +18,8 @@ import std.string;
 import std.conv;
 import std.file;
 import audio.timer;
+import std.experimental.logger;
+import seq.sequencer;
 
 version(linux) {
 	const DIR_SEPARATOR = '/';
@@ -35,18 +37,19 @@ version(Win32) {
 	const DIR_SEPARATOR = '\\';
 }
 
-void initVideo(bool useFullscreen, bool useyuv) {
+void initVideo(bool useFullscreen, bool useyuv, bool tallMode) {
 	int mx, my;
 
 	if( SDL_Init(SDL_INIT_VIDEO) < 0) {
 		throw new DisplayError("Couldn't initialize framebuffer.");
 	}
-	mx = 800; my = 600;
+	mx = 800; my = tallMode ? 1040 : 600;
+
 	int width = mx / FONT_X;
 	int height = my / FONT_Y;
 	screen = new Screen(width, height);
-	video = useyuv ? new VideoYUV(800, 600, screen, useFullscreen ? 1 : 0) :
-		new VideoStandard(800, 600, screen, useFullscreen ? 1 : 0);
+	video = useyuv ? new VideoYUV(mx, my, screen, useFullscreen ? 1 : 0) :
+		new VideoStandard(mx, my, screen, useFullscreen ? 1 : 0);
 
 	SDL_EnableKeyRepeat(200, 10);
 	SDL_EnableUNICODE(1);
@@ -166,6 +169,7 @@ int main(char[][] args) {
 	bool yuvOverlay;
 	string filename;
 	bool fnDefined = false;
+	bool tallMode = false;
 
 	DerelictSDL.load();
 
@@ -234,6 +238,12 @@ int main(char[][] args) {
 			case "-y", "-ya", "-yuv":	
 				yuvOverlay = true;
 				break;
+			case "-t", "--tall":
+				seq.sequencer.tableTop = 29;
+				seq.sequencer.tableBot = -31;
+				seq.sequencer.anchor = 32;
+				tallMode = true;
+				break;
 			default:
 				version (OSX) {
 					if (args[i].length > 3 && args[i][0..4] == "-psn"){
@@ -261,13 +271,14 @@ int main(char[][] args) {
 	}
 
 	audio.player.init();
-	initVideo(fs, yuvOverlay);
+	initVideo(fs, yuvOverlay, tallMode);
 	initSession();
 	mainui = new UI();
 	loadFile(filename);
 	video.updateFrame();
 		
 	SDL_PauseAudio(0);
+	log("Started");
 	mainloop();
 	audio.audio.audio_close();
 	return 0;   
