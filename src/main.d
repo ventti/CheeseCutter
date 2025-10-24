@@ -180,8 +180,8 @@ int main(char[][] args) {
   // DerelictSDL2.load();
 	
 	scope(exit) {
-		delete mainui;
-		delete video;
+		destroy(mainui);
+		destroy(video);
 		SDL_Quit();
 	}
 	
