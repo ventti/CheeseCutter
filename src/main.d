@@ -59,7 +59,7 @@ void initVideo(bool useFullscreen, bool useyuv, int seqHeight = 32) {
 	// SDL_WM_SetCaption("CheeseCutter".toStringz(),"CheeseCutter".toStringz());
 }
 
-void mainloop() {
+void mainloop(bool verbose) {
 	int mods, key, unicode;
 	bool quit = false;
 	SDL_Event evt;
@@ -78,8 +78,12 @@ void mainloop() {
 				}
 				mods = evt.key.keysym.mod;
 				key = evt.key.keysym.sym;
-				unicode = evt.key.keysym.unicode;
+				// In SDL2, unicode field is not populated - use sym instead for ASCII range
+				unicode = (key >= 0 && key <= 127) ? key : evt.key.keysym.unicode;
 				mods &= 0xffffff - KMOD_NUM;
+				if (verbose) {
+					stderr.writefln("DEBUG: Key event - sym=%d mods=%04x unicode=%d", key, mods, unicode);
+				}
 				auto keyinfo = Keyinfo(key, mods, unicode);
 				com.kbd.translate(keyinfo);
                 // FIXME
@@ -176,7 +180,7 @@ int main(char[][] args) {
 	string filename;
 	bool fnDefined = false;
 	int sequencerHeight = 0; // 0 means use default
-
+	bool verbose = false;
   // DerelictSDL2.load();
 	
 	scope(exit) {
@@ -247,6 +251,9 @@ int main(char[][] args) {
 				throw new UserException("Sequencer height cannot exceed 64 rows");
 			i++;
 			break;
+		case "--verbose":
+			verbose = true;
+			break;
 		default:
 				version (OSX) {
 					if (args[i].length > 3 && args[i][0..4] == "-psn"){
@@ -287,7 +294,7 @@ int main(char[][] args) {
 
 	SDL_PauseAudio(0);
 	log("Started");
-	mainloop();
+	mainloop(verbose);
 	audio.audio.audio_close();
 	return 0;
 }

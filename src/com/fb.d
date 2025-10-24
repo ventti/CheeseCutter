@@ -118,30 +118,22 @@ class VideoStandard : Video {
 		width = requestedWidth;
 		height = requestedHeight;
 		useFullscreen = fs;
-    /*
-		int sdlflags = SDL_SWSURFACE;
-		sdlflags |= fs ? SDL_WINDOW_FULLSCREEN : 0;
-		surface = SDL_SetVideoMode(width, height, 0, sdlflags); 
-		if(surface is null) {
+    
+		// Create window with proper dimensions and fullscreen flag
+		SDL_WindowFlags flags = cast(SDL_WindowFlags)0;
+		if(fs) {
+			flags = SDL_WINDOW_FULLSCREEN_DESKTOP;
+		}
+		
+		SDL_CreateWindowAndRenderer(width, height, flags, &window, &renderer);
+		if(window is null || renderer is null) {
 			throw new DisplayError("Unable to initialize graphics mode.");
 		}
-		SDL_SetPalette(surface, SDL_PHYSPAL|SDL_LOGPAL, 
-					   cast(SDL_Color *)PALETTE, 0, 16);
-    */
-    
-      // Create an application window with the following settings:
-    /*
-    window = SDL_CreateWindow(
-        "An SDL2 window",                  // window title
-        SDL_WINDOWPOS_UNDEFINED,           // initial x position
-        SDL_WINDOWPOS_UNDEFINED,           // initial y position
-        800,                               // width, in pixels
-        600,                               // height, in pixels
-        cast(SDL_WindowFlags)0
-    );
-    */
-    SDL_CreateWindowAndRenderer(800, 600, cast(SDL_WindowFlags)0, &window, &renderer);
-		//vis = new Oscilloscope(surface, 500, 14);
+		
+		SDL_SetWindowTitle(window, "CheeseCutter");
+		SDL_StartTextInput();
+		SDL_RaiseWindow(window);
+		
 		screen.refresh();
 	}
 
@@ -168,8 +160,8 @@ class VideoStandard : Video {
         SDL_Rect rect;
         rect.x = 0;
         rect.y = 0;
-        rect.x = 800;
-        rect.y = 600;
+        rect.w = width;
+        rect.h = height;
         //SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         //SDL_RenderDrawRect(renderer, &rect);
 		//SDL_LockSurface(surface);
