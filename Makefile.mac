@@ -1,21 +1,20 @@
 #LIBS=/opt/ldc/build/lib/libphobos-ldc.a /opt/ldc/build/lib/libdruntime-ldc.a -lstdc++
 #LIBS=/opt/ldc2/lib/libphobos-ldc.a /opt/ldc2/lib/libdruntime-ldc.a -lstdc++
 # libspath from env, default given here
-LIBSPATH?=/usr/local/lib
-LIBS=${LIBSPATH}/libphobos2-ldc.a ${LIBSPATH}/libdruntime-ldc.a -lstdc++ -L${LIBSPATH} -lSDL
+LIBSPATH?=/opt/homebrew/lib
+LIBS=${LIBSPATH}/libphobos2-ldc.a ${LIBSPATH}/libdruntime-ldc.a -lstdc++ -L${LIBSPATH} -lsdl2
 FRAMEWORKS=-framework Foundation
-COMFLAGS= -mmacosx-version-min=10.7
+COMFLAGS= -mmacosx-version-min=11.0
 VERSION=$(shell cat Version)
 DLINK=$(COMFLAGS)
-DFLAGS=-I./src -J./src/c64 -J./src/font
+DFLAGS=-d-version=DerelictSDL2_Static -I./src -J./src/c64 -J./src/font
 CFLAGS=$(COMFLAGS)
 CXXFLAGS=$(CFLAGS) -I./src -O2
 LDFLAGS=-rpath,@executable_path/../Frameworks
-COMPILE.d = $(DC) $(DFLAGS) -d -O2 -c -of=$@
+COMPILE.d = $(DC) $(DFLAGS) -d -O2 -c -of=$@ 
 DC=ldc2
 EXE=
 TARGET=ccutter
-OBJ_EXT=.o
 
 include Makefile.objects.mk
 
@@ -45,8 +44,8 @@ release: all
 	mkdir -p CheeseCutter.app/Contents/Frameworks
 	mkdir -p CheeseCutter.app/Contents/MacOS
 	cp -r arch/MacOS/Contents CheeseCutter.app
-	# Copy SDL dynamic library from Homebrew
-	cp -L ${LIBSPATH}/libSDL-1.2*.dylib CheeseCutter.app/Contents/Frameworks/ || true
+	# Copy SDL2 dynamic library from Homebrew
+	cp -L ${LIBSPATH}/libSDL2*.dylib CheeseCutter.app/Contents/Frameworks/ || true
 	cp $(TARGET) CheeseCutter.app/Contents/MacOS
 	cp ct2util CheeseCutter.app/Contents/MacOS
 

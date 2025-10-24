@@ -99,8 +99,8 @@ if ! command -v mise &> /dev/null; then
 fi
 
 # Step 3: Install system dependencies via Homebrew
-log_info "Installing system dependencies (ldc, acme, SDL 1.2)..."
-brew install ldc acme sdl 2>/dev/null || {
+log_info "Installing system dependencies (ldc, acme, SDL2)..."
+brew install ldc acme sdl2 2>/dev/null || {
     log_warning "Some packages may already be installed, continuing..."
 }
 log_success "System dependencies installed"
@@ -146,10 +146,10 @@ else
 fi
 
 # Check SDL
-if brew list sdl &> /dev/null; then
-    log_success "SDL 1.2: installed via Homebrew"
+if brew list sdl2 &> /dev/null; then
+    log_success "SDL2: installed via Homebrew"
 else
-    log_warning "SDL 1.2 may not be properly installed"
+    log_warning "SDL2 may not be properly installed"
 fi
 
 # Step 7: Set up environment variables
