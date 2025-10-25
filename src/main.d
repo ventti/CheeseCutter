@@ -37,19 +37,27 @@ version(Win32) {
 	const DIR_SEPARATOR = '\\';
 }
 
-void initVideo(bool useFullscreen, bool useyuv, int seqHeight = 32) {
-	int mx, my;
+// Default window width in pixels and corresponding default column count
+enum DEFAULT_WINDOW_WIDTH_PX = 800;
+enum DEFAULT_COLUMNS = DEFAULT_WINDOW_WIDTH_PX / FONT_X;
+
+void initVideo(bool useFullscreen, bool useyuv, int seqHeight = 32, int windowWidthPx = 0) {
+    int mx, my;
 
 	if( SDL_Init(SDL_INIT_VIDEO) < 0) {
 		throw new DisplayError("Couldn't initialize framebuffer.");
 	}
-	mx = 800;
+    // Determine window (pixel) width. Default is current implementation (800px),
+    // optionally overridden by --width (capped elsewhere to max 2x default).
+    mx = windowWidthPx > 0 ? windowWidthPx : DEFAULT_WINDOW_WIDTH_PX;
 	// Calculate height based on sequencer height plus overhead
 	// Sequencer needs seqHeight rows, plus ~10 rows for header/status
 	int totalRows = seqHeight + 10;
 	my = totalRows * FONT_Y;
 
-	int width = mx / FONT_X;
+    // Keep logical UI width at the default character width so existing UI stays on the left.
+    // Extra window width becomes free space on the right for optional future elements.
+    int width = DEFAULT_WINDOW_WIDTH_PX / FONT_X;
 	int height = my / FONT_Y;
 	screen = new Screen(width, height);
 	video = new VideoStandard(mx, my, screen, useFullscreen ? 1 : 0);
@@ -186,7 +194,8 @@ void printheader() {
 	stderr.writefln("  -n               Enable NTSC mode");
 	stderr.writefln("  -r [value]       Set playback frequency (def=48000)");
 	stderr.writefln("  -y               Use YUV video overlay");
-	stderr.writefln("  --height [rows]  Set sequencer height in rows (def=32, min=32, max=64)");
+    stderr.writefln("  --height [rows]  Set sequencer height in rows (def=32, min=32, max=64)");
+    stderr.writefln("  --width [cols]   Set window width in columns (def=%d, max=%d)", DEFAULT_COLUMNS, DEFAULT_COLUMNS * 2);
 	stderr.writef("\n");
 }
 
@@ -198,6 +207,7 @@ int main(char[][] args) {
 	bool fnDefined = false;
 	int sequencerHeight = 0; // 0 means use default
 	bool verbose = false;
+    int requestedWindowWidth = 0; // pixels; 0 means use default
   // DerelictSDL2.load();
 	
 	scope(exit) {
@@ -268,6 +278,19 @@ int main(char[][] args) {
 				throw new UserException("Sequencer height cannot exceed 64 rows");
 			i++;
 			break;
+        case "--width":
+            {
+                int wcols = to!int(args[i+1]);
+                int minCols = DEFAULT_COLUMNS;
+                int maxCols = DEFAULT_COLUMNS * 2;
+                if(wcols < minCols)
+                    throw new UserException(format("Window width must be at least %d columns", minCols));
+                if(wcols > maxCols)
+                    throw new UserException(format("Window width cannot exceed %d columns", maxCols));
+                requestedWindowWidth = wcols * FONT_X; // convert columns to pixels
+                i++;
+            }
+            break;
 		case "--verbose":
 			verbose = true;
 			break;
@@ -303,7 +326,7 @@ int main(char[][] args) {
 	if(sequencerHeight > 0) {
 		seq.sequencer.initialHeight = sequencerHeight;
 	}
-	initVideo(fs, yuvOverlay, effectiveHeight);
+    initVideo(fs, yuvOverlay, effectiveHeight, requestedWindowWidth);
 	initSession();
 	mainui = new UI();
 	loadFile(filename);

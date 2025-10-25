@@ -154,7 +154,7 @@ class VideoStandard : Video {
 		Uint8 ubg, ufg;
 		int outx, outy;
     
-		if (!isDirty) return;
+			if (!isDirty) return;
 		isDirty = false;
 
         SDL_Rect rect;
@@ -166,6 +166,20 @@ class VideoStandard : Video {
         //SDL_RenderDrawRect(renderer, &rect);
 		//SDL_LockSurface(surface);
         SDL_RenderClear(renderer);  
+
+			// Draw a unified header background across the full window width (top bar)
+			{
+				int headerBg = screen.getbg(screen.width - 1, 0);
+				SDL_SetRenderDrawColor(renderer, PALETTE[headerBg].r,
+							   PALETTE[headerBg].g,
+							   PALETTE[headerBg].b, 255);
+				SDL_Rect topbar;
+				topbar.x = 0;
+				topbar.y = 0;
+				topbar.w = width;
+				topbar.h = 14; // one text row height
+				SDL_RenderFillRect(renderer, &topbar);
+			}
 		for(y = 0;y < screen.height; y++) {
 			for(x = 0; x < screen.width; x++) {
 				//if(*bptr != *cptr) {
@@ -239,8 +253,8 @@ class VideoStandard : Video {
 			}
 			//sptr += width*13;
 		}
-		//SDL_UnlockSurface(surface);
-		//SDL_Flip(surface);
+			//SDL_UnlockSurface(surface);
+			//SDL_Flip(surface);
     SDL_RenderPresent(renderer);
 	}
 
