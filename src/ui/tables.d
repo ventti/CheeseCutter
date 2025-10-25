@@ -24,7 +24,7 @@ abstract class Table : Window {
 		ubyte[] data;
 		int column, row, cursorOffset, viewOffset;
 	}
-	
+
 	this(Rectangle a, ubyte[] tbl, int c, int r) {
 		super(a);
 		columns = c;
@@ -39,7 +39,7 @@ abstract class Table : Window {
 	}
 
 protected:
-	
+
 	void adjustView();
 }
 
@@ -52,7 +52,7 @@ private class HexTable : Table, Undoable {
 	void valueChangedCallback() {
 		saveState(false);
 	}
-	
+
 	override void activate() {
 		initializeInput();
 	}
@@ -144,13 +144,13 @@ private class HexTable : Table, Undoable {
 
 	override int keypress(Keyinfo key) {
         /+
-		if(key.mods & KMOD_CTRL || key.mods & KMOD_ALT || 
+		if(key.mods & KMOD_CTRL || key.mods & KMOD_ALT ||
 		   key.mods & KMOD_META) return OK;
            +/
-		if(key.mods & KMOD_CTRL || key.mods & KMOD_ALT || 
+		if(key.mods & KMOD_CTRL || key.mods & KMOD_ALT ||
 		   key.mods & KMOD_GUI) return OK;
 
-		switch(key.raw) 
+		switch(key.raw)
 		{
 		case SDLK_LEFT:
 			if(input.step(-1) == WRAP) {
@@ -193,7 +193,7 @@ private class HexTable : Table, Undoable {
 		case SDLK_h:
 			showByteDescription();
 			break;
-			
+
 		default:
 			if(input.keypress(key) == WRAP) {
 				stepColumnWrap(1);
@@ -233,10 +233,10 @@ protected:
 		}
 		initializeInput();
 	}
-	
+
 	void showByteDescription() {
 	}
-	
+
 	void showByteDescription(PetString pet) {
 		if(song.ver < 9 || !state.displayHelp) return;
 		string[] s = com.util.petscii2D(pet).splitLines();
@@ -287,7 +287,7 @@ class InsValueTable : HexTable {
 	}
 
 	override void refresh() {
-		data = song.instrumentTable; 
+		data = song.instrumentTable;
 	}
 
 	override int keypress(Keyinfo key) {
@@ -338,7 +338,7 @@ class InsValueTable : HexTable {
 					UI.statusline.display(format("Could not change to directory %40s",loadDialog.directory));
 					break;
 				}
-				
+
 				mainui.activateDialog(new StringDialog("Enter filename: ",
 													   dg,
 													   fn ~ ".cti",
@@ -353,10 +353,10 @@ class InsValueTable : HexTable {
 					if(param != 0) return;
 					(new Purge(song)).deleteInstrument(state.activeInstrument);
 				};
-				
+
 				mainui.activateDialog(new ConfirmationDialog("Delete current instrument (y/n)? ",
 															 dg));
-				
+
 				break;
 			case SDLK_x:
 				break;
@@ -387,7 +387,7 @@ class InsValueTable : HexTable {
 			UI.statusline.display("Error in parsing instrument data!");
 		}
 	}
-	
+
 	string insName(int row) {
 		assert(row >= 0 && row < 48);
 		return format(song.insLabels[row % 48][0..32]);
@@ -417,16 +417,27 @@ class InsValueTable : HexTable {
 			int p = (i + viewOffset);
 			if(p > 47) p -= 48;
 			assert(p >= 0 && p < 48);
-			
+
+			// Check if entire row is zeros
+			bool allZeros = true;
+			for(j=0; j<8; j++) {
+				if(data[p + j * 48] != 0) {
+					allZeros = false;
+					break;
+				}
+			}
+
 			int c = (state.activeInstrument >= 0 && row == p) ? 15 : 12;
 			screen.cprint(area.x,area.y + i + 1, c, 0, format("%02X:", p));
 			for(j=0; j<8; j++) {
 				ofs = p + j * 48;
 				int hl = p == mark ? 13 : 5;
-				screen.cprint(area.x+3+j*3,area.y + i + 1,hl,0, format("%02X ", data[ofs]));
+				// Display "--" for zero values only if entire row is zeros
+				string displayVal = (allZeros && data[ofs] == 0) ? "--" : format("%02X", data[ofs]);
+				screen.cprint(area.x+3+j*3,area.y + i + 1,hl,0, displayVal ~ " ");
 			}
 			string label = insName(p)[0..width];
-			if(paddedStringLength(label, 32) == 0) 
+			if(paddedStringLength(label, 32) == 0)
 				screen.cprint(area.x + 27, area.y + 1 + i, 11, 0,
 						  format("No description" ~ std.array.replicate(" ", width-14)));
 			else
@@ -460,7 +471,7 @@ class InsTable : Window {
 		InsValueTable insinput;
 	}
 	Window active;
-	
+
 	this(Rectangle a) {
 		super(a);
 		insdesc = new DialogString(a, com.fb.mode ? 32 : 16);
@@ -469,12 +480,12 @@ class InsTable : Window {
 		activateInsValueTable();
 	}
 
-	override const ContextHelp contextHelp() { 
+	override const ContextHelp contextHelp() {
 		if(song.ver > 8)
-			return genPlayerContextHelp("Instrument table", 
+			return genPlayerContextHelp("Instrument table",
 										song.instrumentByteDescriptions);
 		return ui.help.HELPMAIN;
-	}		
+	}
 
 	override void refresh() {
 		super.refresh();
@@ -502,7 +513,7 @@ class InsTable : Window {
 		active.update();
 		state.allowInstabNavigation = true;
 	}
-	
+
 	void activateDescInput() {
 		update();
 		active = insdesc;
@@ -558,7 +569,7 @@ class InsTable : Window {
 
 class CmdTable : HexTable {
 	alias row position;
-	
+
 	this(Rectangle a) {
 		super(a, song.superTable, 1, 64);
 		input = new InputSpecial(song.superTable);
@@ -572,11 +583,16 @@ class CmdTable : HexTable {
 			screen.fprint(area.x,area.y, "`01Cmd (Alt-S)");
 		for(i = 0; i < visibleRows; i++) {
 			int ofs = (viewOffset + i) & 0x3f;
-			screen.fprint(area.x,area.y + i + 1, 
-						  format("`0c%02X:`0d%01X-`05%02X %02X", ofs,
-								 song.superTable[ofs] & 15,
-								 song.superTable[ofs+64],
-								 song.superTable[ofs+128]));
+			ubyte cmd = song.superTable[ofs] & 15;
+			ubyte val1 = song.superTable[ofs+64];
+			ubyte val2 = song.superTable[ofs+128];
+			// Check if entire row is zeros (cmd is part of the row check)
+			bool allZeros = (cmd == 0 && val1 == 0 && val2 == 0);
+			// Display "--" for zero values only if entire row is zeros
+			string v1 = (allZeros && val1 == 0) ? "--" : format("%02X", val1);
+			string v2 = (allZeros && val2 == 0) ? "--" : format("%02X", val2);
+			screen.fprint(area.x,area.y + i + 1,
+						  format("`0c%02X:`0d%01X-`05%s %s", ofs, cmd, v1, v2));
 		}
 	}
 
@@ -616,7 +632,7 @@ class CmdTable : HexTable {
 		song.superTable[position+128] = cast(ubyte)input.toIntRange(3, 5);
 		if(r == WRAP) {
 			stepRow(1);
-		} 
+		}
 		return OK;
 	}
 
@@ -638,12 +654,12 @@ class CmdTable : HexTable {
 		}
 	}
 
-	override ContextHelp contextHelp() { 
+	override ContextHelp contextHelp() {
 		if(song.ver > 9)
-			return genPlayerContextHelp("Command table", 
+			return genPlayerContextHelp("Command table",
 										song.cmdDescriptions);
 		return ui.help.HELPMAIN;
-	}		
+	}
 
 	override void showByteDescription() {
 		if(song.ver > 9) {
@@ -683,23 +699,37 @@ class ChordTable : HexTable {
 			int row = (i + viewOffset) & 0x7f;
 			string col = "`05";
 			if(data[row] >= 0x80) col = "`0d";
+
+			// Check if all subsequent rows are zeros
+			bool allSubsequentZeros = true;
+			if(data[row] == 0) {
+				for(int checkRow = row + 1; checkRow < 128; checkRow++) {
+					if(data[checkRow] != 0) {
+						allSubsequentZeros = false;
+						break;
+					}
+				}
+			}
+
+			// Display "--" only if this value is zero and all subsequent rows are zeros
+			string val = (data[row] == 0 && allSubsequentZeros) ? "--" : format("%02X", data[row]);
 			screen.fprint(area.x, area.y + i + 1,
-						  format("`0c%02X:%s%02X", row, col, data[row]));
+						  format("`0c%02X:%s%s", row, col, val));
 		}
 
 		for(i = 0; i < visibleRows; i++) {
 			screen.fprint(area.x + 5, area.y + i + 1, "  ");
-		}		
+		}
 
 		int[] chordno = getHighestChordIndex();
-		
+
 		{
 			int ct;
 			for(i = 0; i < viewOffset; i++) {
 				if(data[i] >= 0x80) ct++;
 			}
 			bool doPrint = true;
-			int row = viewOffset & 127; 
+			int row = viewOffset & 127;
 			for(i = 0; i < visibleRows; i++,row++) {
 				if(row > 127) {
 					row -= 128;
@@ -744,7 +774,7 @@ class ChordTable : HexTable {
 	}
 
 	override void deleteRow() {
-		saveState(false);		
+		saveState(false);
 		ubyte[] tmp = data[row + 1 .. $].dup;
 		foreach(i, c; tmp) {
 			if(c > (0x80 + row) && --c >= 0x80)
@@ -809,7 +839,7 @@ class WaveTable : HexTable {
 			case SDLK_g:
 				seekCurWave();
 				return OK;
-			default: 
+			default:
 				break;
 			}
 		}
@@ -851,8 +881,27 @@ class WaveTable : HexTable {
 			t1 = data[row];
 			t2 = data[row+256];
 			int col = (t1 == 0x7e || t1 == 0x7f) ?  0x0d : 0x05;
-			screen.fprint(area.x,area.y + i + 1, format("`0c%02X:`%02x%02X %02X", 
-														row, col, t1, t2));
+
+			// Check if entire row is zeros
+			bool allZeros = (t1 == 0 && t2 == 0);
+
+			// Check if all subsequent rows are also zeros
+			bool allSubsequentZeros = true;
+			if(allZeros) {
+				for(int checkRow = row + 1; checkRow < 256; checkRow++) {
+					if(data[checkRow] != 0 || data[checkRow+256] != 0) {
+						allSubsequentZeros = false;
+						break;
+					}
+				}
+			}
+
+			// Display "--" only if this row and all subsequent rows are zeros
+			bool showDashes = allZeros && allSubsequentZeros;
+			string val1 = (showDashes && t1 == 0) ? "--" : format("%02X", t1);
+			string val2 = (showDashes && t2 == 0) ? "--" : format("%02X", t2);
+			screen.fprint(area.x,area.y + i + 1, format("`0c%02X:`%02x%s %s",
+													row, col, val1, val2));
 
 		}
 	}
@@ -875,16 +924,16 @@ class WaveTable : HexTable {
 		}
 	}
 
-	override ContextHelp contextHelp() { 
+	override ContextHelp contextHelp() {
 		if(song.ver > 9)
-			return genPlayerContextHelp("Wave table", 
+			return genPlayerContextHelp("Wave table",
 										song.waveDescriptions);
 		return ui.help.HELPMAIN;
-		
-	}		
+
+	}
 }
 
-class SweepTable : HexTable { 
+class SweepTable : HexTable {
 	this(Rectangle a, ubyte[] d) {
 		super(a, d, 4, 64);
 	}
@@ -904,7 +953,7 @@ class SweepTable : HexTable {
 		default: return super.keypress(key);
 		}
 	}
-	
+
 	override void update() {
 		for(int i = 0; i < visibleRows; i++) {
 			int curRow = (i + viewOffset) & 63;
@@ -913,10 +962,32 @@ class SweepTable : HexTable {
 			if(data[p+3] > 0) col = "`0d";
 			if(data[p+3] > 0x3f && data[p+3] != 0x7f) col = "`0a";
 			if(highlightRow(curRow)) { col2 = col = "`0d"; }
-			screen.fprint(area.x,area.y + i + 1, 
-						  format("`0c%02X:%s%02X %02X %02X %s%02X", 
-								 curRow, col2,
-								 data[p], data[p+1], data[p+2], col, data[p+3]));
+
+			// Check if entire row is zeros
+			bool allZeros = (data[p] == 0 && data[p+1] == 0 && data[p+2] == 0 && data[p+3] == 0);
+
+			// Check if all subsequent rows are also zeros
+			bool allSubsequentZeros = true;
+			if(allZeros) {
+				for(int checkRow = curRow + 1; checkRow < 64; checkRow++) {
+					int checkP = checkRow * 4;
+					if(data[checkP] != 0 || data[checkP+1] != 0 || data[checkP+2] != 0 || data[checkP+3] != 0) {
+						allSubsequentZeros = false;
+						break;
+					}
+				}
+			}
+
+			// Display "--" only if this row and all subsequent rows are zeros
+			bool showDashes = allZeros && allSubsequentZeros;
+			string val0 = (showDashes && data[p] == 0) ? "--" : format("%02X", data[p]);
+			string val1 = (showDashes && data[p+1] == 0) ? "--" : format("%02X", data[p+1]);
+			string val2 = (showDashes && data[p+2] == 0) ? "--" : format("%02X", data[p+2]);
+			string val3 = (showDashes && data[p+3] == 0) ? "--" : format("%02X", data[p+3]);
+			screen.fprint(area.x,area.y + i + 1,
+					  format("`0c%02X:%s%s %s %s %s%s",
+							 curRow, col2,
+							 val0, val1, val2, col, val3));
 		}
 	}
 
@@ -925,7 +996,7 @@ class SweepTable : HexTable {
 		int ofs = row * 4 + column;
 		i.setOutput(data[ofs..ofs+1]);
 		super.initializeInput();
-		
+
 	}
 
 	override void seekTableEnd() {
@@ -948,7 +1019,7 @@ class SweepTable : HexTable {
 
 		if(startFrom == currentRow)
 			return true;
-		
+
 		bool[0x40] visited;
 		for(int row = startFrom; row < 0x40;) {
 			if(visited[row]) break;
@@ -959,7 +1030,7 @@ class SweepTable : HexTable {
 				break;
 			if(jumpValue == 0x7f)
 				break; // if loops or ends, break
-			else if(jumpValue == 0) 
+			else if(jumpValue == 0)
 				row++;
 			else row = jumpValue;
 		}
@@ -991,9 +1062,9 @@ class PulseTable : SweepTable {
 		}
 	}
 
-	override ContextHelp contextHelp() { 
+	override ContextHelp contextHelp() {
 		if(song.ver > 8)
-			return genPlayerContextHelp("Pulse table", 
+			return genPlayerContextHelp("Pulse table",
 										song.pulseDescriptions);
 		return ui.help.HELPMAIN;
 	}
@@ -1027,17 +1098,17 @@ class FilterTable : SweepTable {
 	override void update() {
 		if(state.shortTitles)
 			screen.fprint(area.x, area.y, "`b1F`01ilter");
-		else 
+		else
 			screen.fprint(area.x, area.y, "`01Filter (Alt-F)");
 		super.update();
 	}
 
-	override ContextHelp contextHelp() { 
+	override ContextHelp contextHelp() {
 		if(song.ver > 8)
-			return genPlayerContextHelp("Filter table", 
+			return genPlayerContextHelp("Filter table",
 										song.filterDescriptions);
 		return ui.help.HELPMAIN;
-	}		
+	}
 
 	override void showByteDescription() {
 		if(song.ver > 8) {
@@ -1058,6 +1129,6 @@ class FilterTable : SweepTable {
 	override bool highlightRow(int row) {
 		return highlightActiveFor(song.instrumentTable[state.activeInstrument + 4 * 48], row);
 	}
-	
+
 }
 
