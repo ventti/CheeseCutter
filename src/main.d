@@ -128,6 +128,23 @@ void mainloop(bool verbose) {
 				}
 				mainui.update();
 				break;
+			case SDL_MOUSEWHEEL:
+				{
+					// SDL2 wheel event: positive y typically means scroll up.
+					int stepsY = evt.wheel.y;
+					if (evt.wheel.direction == SDL_MouseWheelDirection.SDL_MOUSEWHEEL_FLIPPED) {
+						stepsY = -stepsY;
+					}
+					if (stepsY != 0) {
+						int count = stepsY > 0 ? stepsY : -stepsY;
+						int keycode = stepsY > 0 ? SDLK_UP : SDLK_DOWN;
+						foreach (s; 0 .. count) {
+							mainui.keypress(Keyinfo(keycode, 0, 0));
+						}
+						mainui.update();
+					}
+				}
+				break;
 			case SDL_MOUSEMOTION:
 				break;
         //			case SDL_ACTIVEEVENT:
