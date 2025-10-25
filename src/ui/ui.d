@@ -36,15 +36,15 @@ struct Rectangle {
 	int height, width;
 	alias height h;
 	alias width w;
-	
+
 	string toString() {
 		return format("%d %d %d %d",x, y, h, w);
 	}
-	
+
 	bool overlaps(int cx, int cy) {
 		return cx >= x && cx < x + width && cy >= y && cy < y + height;
 	}
-	
+
 	Rectangle relativeTo(int scrx, int scry) {
 		return Rectangle(scrx - x, scry - y);
 	}
@@ -54,7 +54,7 @@ abstract class Window {
 	Rectangle area;
 	Input input;
 	protected ContextHelp help;
-	
+
 	this(Rectangle a) {
 		this(a, ui.help.HELPMAIN);
 	}
@@ -76,9 +76,9 @@ protected:
 
 	@property void contextHelp(ContextHelp h) { help = h; }
 	@property ContextHelp contextHelp() { return help; }
-	
+
 	final void drawFrame() { drawFrame(area); }
-	
+
 	static void drawFrame(Rectangle a) {
 		int x,y;
 		for(y=a.y;y<a.y+a.height;y++) {
@@ -119,19 +119,19 @@ class WindowSwitcher : Window {
 	char[] hotkeys;
 	Window activeWindow;
 	int activeWindowNum;
-	
+
 	this(Rectangle s, Window[] w) {
 		super(s);
 		windows = w;
 		activeWindowNum = 0;
 		activateWindow();
 	}
-	
+
 	this(Rectangle s, Window[] w, string h) {
 		this(s, w);
 		hotkeys = cast(char[])h;
 	}
-	
+
 	this(Rectangle s, Window[] w, char[] h) {
 		this(s, w);
 		hotkeys = h;
@@ -145,11 +145,11 @@ class WindowSwitcher : Window {
 	void activateWindow() {
 		activateWindow(activeWindowNum);
 	}
-	
+
 	void activateWindow(ulong n){
 		activateWindow(cast(int)n);
 	}
-	
+
 	void activateWindow(int n) {
 		if(activeWindow !is null)
 			activeWindow.deactivate();
@@ -175,7 +175,7 @@ class WindowSwitcher : Window {
 	override void refresh() {
 		foreach(w; windows) w.refresh();
 	}
-	
+
 	override int keypress(Keyinfo key) {
 		if(key.mods & KMOD_ALT) {
 			foreach(i, hk; hotkeys) {
@@ -197,13 +197,13 @@ class WindowSwitcher : Window {
 			activeWindowNum = umod(activeWindowNum, 0, cast(int)windows.length - 1);
 			activateWindow();
 			return OK;
-		default: 
+		default:
 			return activeWindow.keypress(key);
 		}
 		assert(0);
 	}
 
-	override ContextHelp contextHelp() { 
+	override ContextHelp contextHelp() {
 		return activeWindow.contextHelp();
 	}
 
@@ -218,7 +218,7 @@ class Infobar : Window {
 		int idx;
 	}
 	InputString inputTitle, inputAuthor, inputReleased;
-	
+
 	this(Rectangle a) {
 		super(a);
 		x1 = area.x;
@@ -228,7 +228,7 @@ class Infobar : Window {
 	override void update() {
 		int headerColor = state.keyjamStatus ? 14 : 12;
 		if(escapecounter) headerColor = 7;
-	  
+
 		screen.clrtoeol(0, headerColor);
 
 		enum hdr = "CheeseCutter 2.9" ~ com.util.versionInfo;
@@ -238,7 +238,7 @@ class Infobar : Window {
 		screen.fprint(x1,area.y,format("`05Time: `0%x%02d:%02d / $%02x",
 									   c1,audio.timer.min, audio.timer.sec,
 									   audio.callback.linesPerFrame & 255));
-		
+
 		screen.fprint(x1 + 19,area.y,
 				   format("`05Oct: `0d%d  `05Spd: `0d%X  `05St: `0d%d ",
 						  state.octave, song.speed, seq.sequencer.stepValue));
@@ -248,7 +248,7 @@ class Infobar : Window {
 						  audio.player.usefp ? audio.player.curfp.id : audio.player.sidtype ? "8580" : "6581",
 						  audio.player.badline ? "&0fb" : " "));
 		screen.fprint(x1,area.y+1,format("`05Filename: `0d%s", state.filename.leftJustify(38)));
-		//screen.fprint(x2,area.y,format("`05  `b1T`01itle: `0d%-32s", std.string.toString(cast(char *)song.title))); 
+		//screen.fprint(x2,area.y,format("`05  `b1T`01itle: `0d%-32s", std.string.toString(cast(char *)song.title)));
 		screen.fprint(x2,area.y,
 					  format("`05%s `0d%-32s", (["  `b1T`01itle:", " `01Author:", "`01Release:" ])[idx],
 							 song.title));
@@ -262,7 +262,7 @@ class Infobar : Window {
 		input = ([ inputTitle, inputAuthor, inputReleased ])[idx];
 		input.setCoord(x2 + 9,area.y);
 	}
-	
+
 	override void activate() {
 		idx = 0;
 		refresh();
@@ -277,11 +277,11 @@ class Infobar : Window {
 		song.release[0..32] = (cast(InputString)inputReleased).toString(true)[0..32];
 		song.author[0..32] = (cast(InputString)inputAuthor).toString(true)[0..32];
 	}
-	
+
 	override int keypress(Keyinfo key) {
 		int r = input.keypress(key);
 		if(r == RETURN) {
-			idx++; 
+			idx++;
 			if(idx > 2) {
 				idx = 0;
 				return RETURN;
@@ -300,7 +300,7 @@ class Infobar : Window {
 class Statusline : Window {
 	int counter;
 	string message;
-	
+
 	this(Rectangle a) {
 		super(a);
 	}
@@ -311,7 +311,7 @@ class Statusline : Window {
 		screen.clrtoeol(2, 0);
 		update();
 	}
-	
+
 	override void deactivate() {
 		counter = 0;
 		update();
@@ -371,7 +371,6 @@ final private class Toplevel : WindowSwitcher {
 		tx += com.fb.border + 10;
 
 		Rectangle ca;
-
 		if(com.fb.mode == 0) {
 			ca = Rectangle(tx - 6, zone1y, zone1h, 6);
 		}
@@ -384,35 +383,35 @@ final private class Toplevel : WindowSwitcher {
 											   "wpfmd");
 
 		/+
-		super(Rectangle(), [cast(Window)sequencer, instable, 
-							wavetable, pulsetable, filtertable, 
+		super(Rectangle(), [cast(Window)sequencer, instable,
+							wavetable, pulsetable, filtertable,
 							cmdtable, chordtable], null);
 		+/
 
-		super(Rectangle(), [cast(Window)sequencer, instable, 
+		super(Rectangle(), [cast(Window)sequencer, instable,
 					   bottomTabSwitcher]);
 		{
 			int x1 = 4;
 			int x2 = x1 + (com.fb.mode > 0 ? 64 : 48);
 			int y1 = screen.height - 4;
-			
-			hotspots = [ 
-				Hotspot(Rectangle(x2 + 3, y1, 1, 30), (int b){ 
-						ui.activateDialog(UI.infobar); 
+
+			hotspots = [
+				Hotspot(Rectangle(x2 + 3, y1, 1, 30), (int b){
+						ui.activateDialog(UI.infobar);
 					}),
-				Hotspot(Rectangle(x2 + 18, y1 + 1, 1, 10), (int b){ 
-						b > 1 ? audio.player.toggleSIDModel() : audio.player.nextFP(); 
+				Hotspot(Rectangle(x2 + 18, y1 + 1, 1, 10), (int b){
+						b > 1 ? audio.player.toggleSIDModel() : audio.player.nextFP();
 					}),
 				Hotspot(Rectangle(x2 + 3, y1 + 1, 1, 14), (int b) {
-						b == 1 ? audio.player.incMultiplier() : audio.player.decMultiplier(); 
-					}) 
+						b == 1 ? audio.player.incMultiplier() : audio.player.decMultiplier();
+					})
 				];
 		}
 		refresh();
 	}
 
 	override void clickedAt(int x, int y, int b) {
-		foreach(idx, win; windows) { 
+		foreach(idx, win; windows) {
 			if(win.area.overlaps(x, y)) {
 				activateWindow(idx);
 				activeWindow.clickedAt(x, y, b);
@@ -434,11 +433,11 @@ final private class Toplevel : WindowSwitcher {
 	override int keypress(Keyinfo key) {
 		switch(key.unicode) {
 		case ']':
-			if(song.speed < 32) 
+			if(song.speed < 32)
 				song.speed = song.speed + 1;
 			return OK;
 		case '[':
-			if(song.speed > 0) 
+			if(song.speed > 0)
 				song.speed = song.speed - 1;
 			return OK;
 		case '{':
@@ -623,7 +622,7 @@ final private class Toplevel : WindowSwitcher {
 			}
 		}
 		return OK;
-	}	
+	}
 
 	override int keyrelease(Keyinfo key) {
 		if(state.keyjamStatus == true) {
@@ -641,7 +640,7 @@ final private class Toplevel : WindowSwitcher {
 		// needed because 'input' might be messed by a subdialog
 		activeWindow.activate();
 	}
-	
+
 	override void update() {
 		foreach(t; windows) {
 			t.update();
@@ -651,7 +650,7 @@ final private class Toplevel : WindowSwitcher {
 	bool fplayEnabled() { return followplay; }
 
 	void activateByCoord(int x, int y) {
-		foreach(idx, win; windows) { 
+		foreach(idx, win; windows) {
 			if(win.area.overlaps(x, y)) {
 				activateWindow(idx);
 			}
@@ -686,7 +685,7 @@ final private class Toplevel : WindowSwitcher {
 					  [d1.seqOffset,d2.seqOffset,d3.seqOffset]);
 		fplay.startFromCursor();
 	}
-	
+
 	void reset() {
 		sequencer.reset();
 		sequencer.resetMark();
@@ -736,9 +735,9 @@ final private class Toplevel : WindowSwitcher {
 				UI.statusline.display(e.toString);
 				optimizecounter = 0;
 				return;
-				
+
 			}
-			
+
 			refresh();
 			UI.statusline.display("Song data optimized.");
 			optimizecounter = 0;
@@ -778,7 +777,7 @@ final private class Toplevel : WindowSwitcher {
 		}
 	}
 }
- 
+
 final class UI {
 	private {
 		Window dialog = null;
@@ -798,9 +797,12 @@ final class UI {
 		toplevel = new Toplevel(this);
 
 		infobar = new Infobar(Rectangle(4, screen.height - 4, 1, screen.width - 8));
-	
+
 		int dialog_width = screen.width - 32;
 		int dialog_height = screen.height - 10;
+		// Cap dialog dimensions to reasonable sizes
+		if(dialog_width > 120) dialog_width = 120;
+		if(dialog_height > 50) dialog_height = 50;
 		int dialog_x = screen.width / 2 - dialog_width / 2;
 		int dialog_y = screen.height / 2 - dialog_height / 2;
 
@@ -811,6 +813,8 @@ final class UI {
 
 		int aboutdlg_width = screen.width - 18;
 		int aboutdlg_height = 12;
+		// Cap dialog width to reasonable size (prevent overflow in fprint)
+		if(aboutdlg_width > 100) aboutdlg_width = 100;
 		int aboutdlg_x = screen.width / 2 - aboutdlg_width / 2;
 		int aboutdlg_y = screen.height / 2 - aboutdlg_height / 2;
 
@@ -820,8 +824,8 @@ final class UI {
 
 		audio.player.setMultiplier(song.multiplier);
 
-		if(com.fb.mode > 0)
-			state.shortTitles = false;
+		//if(com.fb.mode > 0)
+		//	state.shortTitles = false;
 		toplevel.activate();
 		activateDialog(aboutdialog);
 		update();
@@ -863,7 +867,7 @@ final class UI {
 					screen.cprint(x, 2, 15, 0, "V2:");
 					screen.cprint(x, 3, 15, 0, "V3:");
 					screen.cprint(x+26, 1, 15, 0, "$D415 16 17 18");
-					
+
 					for(int i = 0; i < 7; i++) {
 						screen.cprint(x+3+i*3, 1, 5,0, format("%02X", audio.audio.sidreg[i]));
 						screen.cprint(x+3+i*3, 2, 5,0, format("%02X", audio.audio.sidreg[i+7]));
@@ -945,10 +949,10 @@ final class UI {
 			return OK;
 		}
 		else+/
-		
+
 		bool skip_imm_keypress = false; //workaround for F11 - crapchars in savedialog
 		if(key.mods & KMOD_ALT) {
-			switch(key.raw) 
+			switch(key.raw)
 			{
 			case SDLK_RETURN:
 				video.toggleFullscreen();
@@ -1033,7 +1037,7 @@ final class UI {
 				break;
 			}
 		}
-		else switch(key.raw) 
+		else switch(key.raw)
 			 {
 			 case SDLK_ESCAPE:
 				 if(dialog || activeWindow == infobar)
@@ -1077,7 +1081,7 @@ final class UI {
 				 }
 				 break;
 			 case SDLK_F4:
-				 if(toplevel.fplayEnabled()) 
+				 if(toplevel.fplayEnabled())
 					 seqPos.copyFrom(fplayPos);
 				 stop();
 				 if(toplevel.fplayEnabled())
@@ -1098,13 +1102,13 @@ final class UI {
 			 case SDLK_F11:
 				 activateDialog(savedialog);
 				 skip_imm_keypress = true;
-				 break;	
+				 break;
 			 case SDLK_F12:
 				 int helpdlg_width = screen.width - 10;
 				 int helpdlg_height = 36;
 				 int helpdlg_x = screen.width / 2 - helpdlg_width / 2;
 				 int helpdlg_y = screen.height / 2 - helpdlg_height / 2;
-				 HelpDialog helpdialog = 
+				 HelpDialog helpdialog =
 					 new HelpDialog(Rectangle(helpdlg_x, helpdlg_y,
 											  helpdlg_height,
 											  helpdlg_width), activeWindow.contextHelp);
@@ -1126,7 +1130,7 @@ final class UI {
 			toplevel.keypress(key);
 		}
 		return OK;
-	}	
+	}
 
 	int keyrelease(Keyinfo key) {
 		toplevel.keyrelease(key);
@@ -1174,7 +1178,7 @@ final class UI {
 
 	private void loadCallback(string s, bool doImport) {
 		stop();
-		
+
 		if(std.file.exists(s) == 0 || std.file.isDir(s)) {
 			statusline.display("File not found or not accessible: " ~ s);
 			return;
@@ -1192,33 +1196,33 @@ final class UI {
 			statusline.display("Error: " ~ e.toString);
 			return;
 		}
-		
+
 		refresh();
 		// all voices ON
 		audio.player.setVoicon(0,0,0);
-		
+
 		string fn = s.strip();
 		auto ind = 1 + fn.lastIndexOf(DIR_SEPARATOR);
 		fn = fn[ind .. $];
 		state.filename = fn;
 		infobar.refresh();
-		
+
 		// sync save filesel to load filesel in case dir was changed
 		foreach(d; [loaddialog, savedialog]) {
 			d.setFilename(fn);
 			d.setDirectory(getcwd());
 		}
 		savedialog.fsel.fpos = loaddialog.fsel.fpos;
-	
+
 		// set variables
 		audio.player.setSidModel(song.sidModel);
 		audio.player.setFP(song.fppres);
 		audio.player.setMultiplier(song.multiplier);
-		
+
 		enableKeyjamMode(false);
 
 		toplevel.reset();
-		
+
 		if(doImport) {
 			statusline.display("Song data imported.");
 		}
@@ -1234,7 +1238,7 @@ final class UI {
 		dialog = d;
 		d.activate();
 	}
-	
+
 	void closeDialog() {
 		if(dialog) dialog.deactivate();
 		dialog = null;

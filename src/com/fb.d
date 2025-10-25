@@ -8,18 +8,18 @@ import std.string : indexOf;
 import com.util;
 
 SDL_Color[] PALETTE = [
-	{ 0,0,0 },       
+	{ 0,0,0 },
 	{ 63 << 2,63 << 2,63 << 2 },
 	{ 26 << 2,13 << 2,10 << 2 },
 	{ 28 << 2,41 << 2,44 << 2 },
 	{ 27 << 2,15 << 2,33 << 2 },
 
 	{ 27 << 2,23 << 2,45 << 2 },
-	
+
 	{ 13 << 2,10 << 2,30 << 2 },
-	
-	
-	
+
+
+
 	{ 46 << 2,49 << 2,27 << 2 },
 	{ 27 << 2,19 << 2,9 << 2 },
 	{ 16 << 2,14 << 2,0 << 2 },
@@ -27,20 +27,21 @@ SDL_Color[] PALETTE = [
 	{ 17 << 2,17 << 2,17 << 2 },
 	{ 27 << 2,27 << 2,27 << 2 },
 //	{ 38 << 2,52 << 2,33 << 2 },
-	{ 37 << 2,37 << 2,37 << 2 } ,	
+	{ 37 << 2,37 << 2,37 << 2 } ,
 
 
-	{ 22 << 2,35 << 2,16 << 2 },	
+	{ 22 << 2,35 << 2,16 << 2 },
 	{ 37 << 2,37 << 2,37 << 2 } ];
 
 immutable FONT_X = 8, FONT_Y = 14;
 __gshared ubyte[] font;
-immutable int mode, border = 1;
+int mode; // 0 = compact (default), >0 = wide
+immutable int border = 1;
 private bool isDirty = false;
 
 immutable CHECKX = "assert(x >= 0 && x < width);";
 immutable CHECKY = "assert(y >= 0 && y < height);";
-immutable CHECKS = "assert(x + y >= 0 && x + y < width*height);";
+immutable CHECKS = "assert(x >= 0 && y >= 0 && x + y * width >= 0 && x + y * width < width*height);";
 
 static this() {
 	void[] arr;
@@ -66,7 +67,7 @@ abstract class Video {
 		//int displayHeight, displayWidth; // resolution of the monitor
 		SDL_Rect rect;
 	}
-	
+
 	this(int wx, int wy, Screen scr, int fs) {
 		//const SDL_VideoInfo* vidinfo = SDL_GetVideoInfo();
 		screen = scr;
@@ -74,7 +75,7 @@ abstract class Video {
 		//displayWidth = vidinfo.current_w;
 		requestedHeight = wy;
 		requestedWidth = wx;
-    
+
 	}
 
 	~this() {
@@ -92,7 +93,7 @@ abstract class Video {
 	}
 
 	void toggleFullscreen() {
-		useFullscreen ^= 1; 
+		useFullscreen ^= 1;
 		enableFullscreen(useFullscreen);
 	}
 
@@ -104,7 +105,7 @@ abstract class Video {
 		y *= cast(float)requestedHeight / height;
     +/
 	}
-		
+
 	abstract void updateFrame();
 }
 
@@ -118,22 +119,22 @@ class VideoStandard : Video {
 		width = requestedWidth;
 		height = requestedHeight;
 		useFullscreen = fs;
-    
+
 		// Create window with proper dimensions and fullscreen flag
 		SDL_WindowFlags flags = cast(SDL_WindowFlags)0;
 		if(fs) {
 			flags = SDL_WINDOW_FULLSCREEN_DESKTOP;
 		}
-		
+
 		SDL_CreateWindowAndRenderer(width, height, flags, &window, &renderer);
 		if(window is null || renderer is null) {
 			throw new DisplayError("Unable to initialize graphics mode.");
 		}
-		
+
 		SDL_SetWindowTitle(window, "CheeseCutter");
 		SDL_StartTextInput();
 		SDL_RaiseWindow(window);
-		
+
 		screen.refresh();
 	}
 
@@ -142,7 +143,7 @@ class VideoStandard : Video {
 
 	override void clearVisualizer() {
 	}
-	
+
 	override void updateFrame() {
 		int x, y;
 		int a,b,c;
@@ -153,7 +154,7 @@ class VideoStandard : Video {
 		Uint8* bp;
 		Uint8 ubg, ufg;
 		int outx, outy;
-    
+
 			if (!isDirty) return;
 		isDirty = false;
 
@@ -165,7 +166,7 @@ class VideoStandard : Video {
         //SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         //SDL_RenderDrawRect(renderer, &rect);
 		//SDL_LockSurface(surface);
-        SDL_RenderClear(renderer);  
+        SDL_RenderClear(renderer);
 
 			// Draw a unified header background across the full window width (top bar)
 			{
@@ -202,7 +203,7 @@ class VideoStandard : Video {
                                            PALETTE[ubg].g,
                                            PALETTE[ubg].b, 255);
                     SDL_RenderFillRect(renderer, &rect);
-          
+
                     SDL_SetRenderDrawColor(renderer, PALETTE[ufg].r,
                                            PALETTE[ufg].g,
                                            PALETTE[ufg].b, 255);
@@ -220,7 +221,7 @@ class VideoStandard : Video {
                         xx++;
 						if(b & 0x20) {
                             SDL_RenderDrawPoint(renderer, xx, yy);
-                        } 
+                        }
                         xx++;
 						if(b & 0x10) {
                             SDL_RenderDrawPoint(renderer, xx, yy);
@@ -245,7 +246,7 @@ class VideoStandard : Video {
 						sp += width - 8;
                         yy++;
 					}
-          
+
 				}
 				//sptr += 8;
 				bptr++;
@@ -266,7 +267,7 @@ class Screen {
 	immutable int width, height;
 	alias width w;
 	alias height h;
-	
+
 	this(int xchars, int ychars) {
 		width = xchars;
 		height = ychars;
@@ -274,7 +275,7 @@ class Screen {
 		olddata.length = xchars * ychars;
 		refresh();
 	}
-	
+
 	Uint16 getChar(int x, int y) {
 		mixin(CHECKS);
 		return data[x + y * width];
@@ -297,7 +298,7 @@ class Screen {
 	int getbg(int x, int y) {
 		return getChar(x, y) >> 12;
 	}
-	
+
 	void setbg(int x, int y, int bg) {
 		Uint16* s = &data[x + y * width];
 		*s &= 0xfff;
@@ -339,7 +340,7 @@ class Screen {
 				col = cast(Uint16)((fg << 8) | (s[i] & 0xf000));
 			if(skipfg)
 				col = cast(Uint16)((bg << 12) | (s[i] & 0x0f00));
-	
+
 			s[i] = cast(Uint16)(c | col);
 		}
 		isDirty = true;
@@ -401,7 +402,7 @@ private class Oscilloscope : Visualizer {
 		SDL_FillRect(surface, new SDL_Rect(xconst, yconst,
                                            width, height), 0);
 	}
-	
+
 	void draw(int frames) {
 		float smpofs;
 		float n = frames * 50.0f;
@@ -411,7 +412,7 @@ private class Oscilloscope : Visualizer {
 			coll = getColor(surface, 5);
 
 		clear();
-		
+
 		smpofs = 0.0f;
 		import audio.audio;
 		int oldposition = height / 2 + samples[cast(int)smpofs]  / 768;
@@ -459,7 +460,7 @@ void disableKeyRepeat() {
 Uint16 readkey() {
 	SDL_Event evt;
 	bool loop = true;
-	
+
 	while(loop) {
 		while(SDL_PollEvent(&evt)) {
 			if(evt.type == SDL_QUIT) {
@@ -477,7 +478,7 @@ Uint16 readkey() {
 }
 
 private int getColor(SDL_Surface* s, int c) {
-	return PALETTE[c].b << s.format.Bshift | 
+	return PALETTE[c].b << s.format.Bshift |
 		(PALETTE[c].g << s.format.Gshift) |
 		(PALETTE[c].r << s.format.Rshift);
 }
