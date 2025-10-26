@@ -879,6 +879,13 @@ final class Sequencer : Window, Undoable {
 		return activeView.voices;
 	}
 
+	// Render visualization colors after all other updates
+	void renderVisualization() {
+		if(cast(SequenceTable)activeView) {
+			(cast(SequenceTable)activeView).renderVisualization();
+		}
+	}
+
 	override int keypress(Keyinfo key) {
 		if(key.raw >= SDLK_KP_0 && key.raw <= SDLK_KP_9) {
 			stepValue = key.raw - SDLK_KP_0;

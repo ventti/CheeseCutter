@@ -14,11 +14,12 @@ import ui.input;
 import derelict.sdl2.sdl;
 import std.string;
 import audio.player;
+import audio.visualizer;
 
 class SeqVoice : Voice, Undoable {
 	InputSeq seqinput;
 
-	this(VoiceInitParams v) {		
+	this(VoiceInitParams v) {
 		super(v);
 		activeRow = getRowData(0, 0);
 		seqinput = new InputSeq();
@@ -31,7 +32,7 @@ class SeqVoice : Voice, Undoable {
 	override int keyrelease(Keyinfo key) {
 		return seqinput.keyrelease(key);
 	}
-	
+
 	override int keypress(Keyinfo key) {
 		if(key.mods & KMOD_SHIFT) {
 			switch(key.raw)
@@ -66,7 +67,7 @@ class SeqVoice : Voice, Undoable {
 				saveState();
 				if(activeRow.seqOffset < activeRow.seq.rows - 1)
 					activeRow.seq.shrink(0, 1, false);
-				break;	
+				break;
 			case SDLK_q:
 				saveState();
 				activeRow.seq.transpose(activeRow.seqOffset, 1);
@@ -83,7 +84,7 @@ class SeqVoice : Voice, Undoable {
 				saveState();
 				activeRow.seq.transpose(activeRow.seqOffset, -12);
 				break;
-				
+
 			default:
 				return seqinput.keypress(key);
 			}
@@ -103,11 +104,11 @@ class SeqVoice : Voice, Undoable {
 				 activeRow.seq.remove(activeRow.seqOffset);
 				 break;
 			 default:
-				 return seqinput.keypress(key);				
+				 return seqinput.keypress(key);
 			 }
 		return OK;
 	}
-	
+
 	override void refreshPointer(int y) {
 		assert(seqinput !is null);
 		assert(pos !is null);
@@ -132,11 +133,11 @@ class SeqVoice : Voice, Undoable {
 		seq = new Sequence(wseq.seq.data.raw[0 .. $], seqofs);
 		void printEmpty() {
 			import std.array;
-			
-			screen.cprint(area.x - 1, scry, 1, 0, 
+
+			screen.cprint(area.x - 1, scry, 1, 0,
 						  replicate(" ", 16));
 		}
-		
+
 		void printTrack() {
 			screen.cprint(area.x - 1, scry, 1, 0,
 						  " " ~ formatTrackValue(wseq.track.smashedValue));
@@ -155,7 +156,7 @@ class SeqVoice : Voice, Undoable {
 				}
 			}
 		}
-		
+
 		int rows = seq.rows;
 		while(scry >= area.y + 1) {
 			if(trkofs < 0) {
@@ -173,7 +174,7 @@ class SeqVoice : Voice, Undoable {
 				continue;
 			}
 			else {
-				for(int i = rows - 1; i >= 0; 
+				for(int i = rows - 1; i >= 0;
 					i--, scry--, hcount--, row--) {
 					printEmpty();
 					if(scry < area.y + 1) break;
@@ -227,7 +228,7 @@ protected:
 }
 
 class SequenceTable : VoiceTable {
-	this(Rectangle a, PosDataTable pi) { 
+	this(Rectangle a, PosDataTable pi) {
 		int x = 5 + com.fb.border + a.x;
 		for(int v=0;v<3;v++) {
 			Rectangle na = Rectangle(x, a.y, a.height, 13 + com.fb.border);
@@ -235,12 +236,12 @@ class SequenceTable : VoiceTable {
 			voices[v] = new SeqVoice(VoiceInitParams(song.tracks[v],
 													 na, pi[v], this));
 		}
-		super(a, pi); 
+		super(a, pi);
 	}
 
-	override void activate() { 
+	override void activate() {
 		super.activate();
-		// works as scroll(1) would but does not store variables 
+		// works as scroll(1) would but does not store variables
 		int steps = 0;
 		foreach(Voice v; voices) {
 			with(v.pos) {
@@ -250,27 +251,89 @@ class SequenceTable : VoiceTable {
 					rowCounter = -pointerOffset;
 				}
 			}
-			
+
 		}
 
 	}
 
 	override void update() {
+		// First, call parent to render all the voices
 		super.update();
-		if(!audio.player.isPlaying || audio.player.keyjamEnabled) return;
-		// trackbar
-		for(int i = 0 ; i < 3; i++) {
-			PosData fp = fplayPos[i];
-			PosData vp = posTable[i];
-			int tp = fp.rowCounter - vp.rowCounter + anchor;
-			if(tp >= 0 && tp < area.height) {
-				for(int x = voices[i].area.x;
-					x < voices[i].area.x + voices[i].area.width; x++) {
-					screen.setColor(x, 1 + area.y + tp, 1,0);
-				}
+
+		// Store persistent brightness for current playback positions
+		if(audio.player.isPlaying && !audio.player.keyjamEnabled) {
+			for(int i = 0; i < 3; i++) {
+				PosData fp = fplayPos[i];
+				audio.visualizer.updatePersistentBrightness(i, fp.rowCounter);
 			}
 		}
-		
+
+		// NOTE: Visualization colors are now applied in renderVisualization()
+		// which is called from UI layer after all updates complete
+
+	}
+
+	// Called from UI layer AFTER all window updates are complete
+	void renderVisualization() {
+		// Always render persistent ADSR visualization (not just in Regs mode)
+		// This allows colors to persist after playback stops
+
+		// Render playback visualization AFTER all other rendering is done
+		// This ensures our background colors don't get overwritten
+		for(int i = 0 ; i < 3; i++) {
+			PosData vp = posTable[i];
+
+			// Render all visible rows
+			for(int rowIdx = 0; rowIdx < area.height; rowIdx++) {
+				int rowCounter = vp.rowCounter + rowIdx - anchor;
+
+				// Get brightness for this voice at this row
+				float brightness = 0.0f;
+
+				// During playback: show current position with live brightness
+				if(audio.player.isPlaying && !audio.player.keyjamEnabled) {
+					PosData fp = fplayPos[i];
+					if(rowCounter == fp.rowCounter) {
+						brightness = audio.visualizer.getVoiceBrightness(i);
+					} else {
+						// Show persistent brightness for other rows
+						brightness = audio.visualizer.getPersistentBrightness(i, rowCounter);
+					}
+				} else {
+					// After playback: show persistent brightness
+					brightness = audio.visualizer.getPersistentBrightness(i, rowCounter);
+				}
+
+			if(brightness > 0.01f) {
+				// Map brightness to 16-step gradient (palette indices 16-31)
+				// brightness ranges from 0.0 to 1.0
+				// Map to gradient: 16 (brightest) to 31 (darkest/black)
+				int step = cast(int)(brightness * 15.0f);
+				if(step > 15) step = 15;
+				int bgcolor = 16 + (15 - step); // Invert so high brightness = low index (brighter color)
+
+				// During playback on current row: white foreground
+				// Otherwise: read existing foreground from screen and preserve it
+				bool isCurrentlyPlaying = audio.player.isPlaying && !audio.player.keyjamEnabled;
+				PosData fp = fplayPos[i];
+				bool isCurrentRow = isCurrentlyPlaying && (rowCounter == fp.rowCounter);
+
+				// Apply background color to the entire track column width
+				for(int x = voices[i].area.x;
+					x < voices[i].area.x + voices[i].area.width; x++) {
+					if(isCurrentRow) {
+						// Current playing position: white text on colored background
+						screen.setColor(x, 1 + area.y + rowIdx, 1, bgcolor);
+					} else {
+						// Persistent visualization: read existing fg color and just set bg
+						int existingChar = screen.getChar(x, 1 + area.y + rowIdx);
+						int existingFg = (existingChar >> 8) & 15;
+						screen.setColor(x, 1 + area.y + rowIdx, existingFg, bgcolor);
+					}
+				}
+			}
+			}
+		}
 	}
 
 	override void stepVoice(int i) {
@@ -282,7 +345,7 @@ class SequenceTable : VoiceTable {
 
 		SeqVoice v = cast(SeqVoice)voices[n];
 		(cast(InputSeq)v.seqinput).columnReset(-c);
-	}		
+	}
 
 	// for positioning the cursor using mouse. x is not used
 	override void clickedAt(int x, int y, int button) {
@@ -352,7 +415,7 @@ class SequenceTable : VoiceTable {
 			default:
 				break;
 			}
-			
+
 		}
 		else if(key.mods & KMOD_CTRL) {
 			switch(key.raw) {

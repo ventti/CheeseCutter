@@ -778,11 +778,12 @@ final private class Toplevel : WindowSwitcher {
 	}
 }
 
+enum VisMode { None, Regs, Oscilloscope }
+
 final class UI {
 	private {
 		Window dialog = null;
 		//bool printSIDDump = false;
-		enum VisMode { None, Regs, Oscilloscope }
 		int vismode;
 		AboutDialog aboutdialog;
 		FileSelectorDialog loaddialog, savedialog;
@@ -840,6 +841,10 @@ final class UI {
 		return activeWindow.input;
 	}
 
+	@property VisMode currentVisMode() {
+		return cast(VisMode)vismode;
+	}
+
 	void timerEvent(int n) {
 		Exception e = audio.callback.getException();
 		if(e !is null) {
@@ -879,6 +884,14 @@ final class UI {
 					}
 				}
 				update();  // TESTME: just do video.updateFrame()
+
+				// NOW apply visualization colors as the FINAL step
+				// This must happen AFTER update() to prevent colors from being overwritten
+				if(toplevel.followplay && toplevel.fplay) {
+					toplevel.fplay.renderVisualization();
+				} else if(toplevel.sequencer) {
+					toplevel.sequencer.renderVisualization();
+				}
 			}
 		}
 		if(vismode == VisMode.Oscilloscope &&

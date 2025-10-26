@@ -9,6 +9,7 @@ private import ct.base;
 import audio.timer;
 import audio.callback;
 import audio.audio;
+import audio.visualizer;
 import audio.resid.filter;
 import seq.sequencer;
 import ui.ui;
@@ -26,7 +27,7 @@ int getPlaystatus() nothrow {
 	return playstatus;
 }
 
-bool isPlaying() nothrow {  
+bool isPlaying() nothrow {
 	return playstatus == Status.Play || playstatus == Status.Keyjam;
 }
 
@@ -44,7 +45,7 @@ void init() {
 	/+
 	if(!audioinited) {
 		writefln("audio init: engine=%s, freq=%d, buf=%d, sid=%d, clock=%s, interpolation=%s%s",
-				 usefp ? "resid-fp" : "resid", 
+				 usefp ? "resid-fp" : "resid",
 				 audio.audio.audiospec.freq, audio.audio.bufferSize,
 				 sidtype ? 8580 : 6581,
 				 ntsc ? "ntsc" : "pal",
@@ -88,7 +89,7 @@ void playNote(Element emt) {
 	song.cpu.regs.a = emt.note.value;
 	song.cpu.regs.x = cast(ubyte)v;
 	song.cpu.regs.y = emt.instr.value;
-	if(song.ver > 8) 
+	if(song.ver > 8)
 		song.memspace[song.offsets[Offsets.SHTRANS] + v] = 0;
 	ushort call = 0x1009;
 	if(song.ver > 7) {
@@ -136,6 +137,10 @@ void start(int[] trk, int[] seq) {
 	audio.timer.start();
 	audio.callback.reset();
 	audio.audio.reset();
+
+	// Clear ADSR visualization history when starting new playback
+	audio.visualizer.clearPersistentBrightness();
+
 	playstatus = Status.Play;
 	SDL_PauseAudio(0);
 }
@@ -237,7 +242,7 @@ void dumpFrame() {
 
 void setMultiplier(int m) {
 	if(m < 1 || m > 16) return;
-	
+
 	song.multiplier = m;
 	audio.audio.setCallMultiplier(m);
 }

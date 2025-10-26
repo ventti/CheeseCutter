@@ -121,6 +121,13 @@ void mainloop(bool verbose) {
 				}
 				mods = evt.key.keysym.mod;
 				key = evt.key.keysym.sym;
+
+				// Global screenshot shortcut (Ctrl+F12)
+				if(key == SDLK_F12 && (mods & KMOD_CTRL)) {
+					video.saveScreenshot("");
+					break;
+				}
+
 				// In SDL2, unicode field is not populated - use sym instead for ASCII range
 				unicode = (key >= 0 && key <= 127) ? key : evt.key.keysym.unicode;
 				mods &= 0xffffff - KMOD_NUM;

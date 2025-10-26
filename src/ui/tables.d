@@ -16,6 +16,7 @@ import std.stdio : stderr;
 import std.file;
 import com.fb;
 import std.conv, std.array;
+import audio.visualizer;
 
 abstract class Table : Window {
 	mixin ValueChangedHandler;
@@ -413,6 +414,7 @@ class InsValueTable : HexTable {
 
 		if(myrow > 48) myrow -= 48;
 		screen.fprint(area.x,area.y, "`b1I`01nstruments");
+
 		for(i = 0; i < visibleRows; i++) {
 			int p = (i + viewOffset);
 			if(p > 47) p -= 48;
@@ -427,15 +429,26 @@ class InsValueTable : HexTable {
 				}
 			}
 
-			int c = (state.activeInstrument >= 0 && row == p) ? 15 : 12;
-			screen.cprint(area.x,area.y + i + 1, c, 0, format("%02X:", p));
-			for(j=0; j<8; j++) {
-				ofs = p + j * 48;
-				int hl = p == mark ? 13 : 5;
-				// Display "--" for zero values only if entire row is zeros
-				string displayVal = (allZeros && data[ofs] == 0) ? "--" : format("%02X", data[ofs]);
-				screen.cprint(area.x+3+j*3,area.y + i + 1,hl,0, displayVal ~ " ");
-			}
+		// Get brightness from visualizer for THIS instrument (0.0 to 1.0)
+		float brightness = audio.visualizer.getInstrumentBrightness(p);
+
+		// Color for the instrument NUMBER and data bytes
+		// Base color: bright if active instrument, dim otherwise
+		int instrNumColor = (state.activeInstrument >= 0 && row == p) ? 15 : 12;
+		int dataByteColor = 5; // Default data byte color
+
+		// Print instrument number
+		screen.cprint(area.x, area.y + i + 1, instrNumColor, 0, format("%02X:", p));
+
+		// Print instrument data bytes
+		for(j=0; j<8; j++) {
+			ofs = p + j * 48;
+			int hl = (p == mark) ? 13 : 5;
+			// Display "--" for zero values only if entire row is zeros
+			string displayVal = (allZeros && data[ofs] == 0) ? "--" : format("%02X", data[ofs]);
+			screen.cprint(area.x+3+j*3,area.y + i + 1,hl,0, displayVal ~ " ");
+		}
+
 			string label = insName(p)[0..width];
 			if(paddedStringLength(label, 32) == 0)
 				screen.cprint(area.x + 27, area.y + 1 + i, 11, 0,

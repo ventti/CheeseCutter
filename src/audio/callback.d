@@ -5,6 +5,7 @@ CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
 module audio.callback;
 import derelict.sdl2.sdl;
 import audio.player;
+import audio.visualizer;
 import com.session;
 import com.cpu;
 import ct.base;
@@ -13,7 +14,7 @@ static import audio.timer, audio.audio;
 /+ holds the state of cpu and memory for frame debug dumps. not implemented for now. +/
 class SongState {
     int totalFramecallCounter, subframeCounter;
-    private CPU cpu;                                                                                                                
+    private CPU cpu;
     private ubyte[65536] data;
     CPUException exception;
 	/+
@@ -55,7 +56,7 @@ void reset() {
 }
 
 void requestDump() {
-	dumpRequested = true;	
+	dumpRequested = true;
 }
 
 // called each frame from soundbuffer callback
@@ -91,6 +92,12 @@ extern(C) __gshared void audio_frame() nothrow {
 		// if(com.session.debugMode)
 		// 	dump[dumpctr][i] = song.sidbuf[i];
 	}
+
+	// Update visualizer with current SID register state and player memory
+	// Read shinst (shadow instrument) variable location from player
+	int shinstOffset = (song.offsets.length > Offsets.SHTRANS) ? song.offsets[Offsets.SHTRANS] : 0;
+	audio.visualizer.updateSidRegisters(cast(ubyte[])sidreg[0..0x19], song.memspace, shinstOffset);
+
 	// if(com.session.debugMode) {
 	// 	dumpctr++;
 	// 	if(dumpctr >= dump.length) {
@@ -108,7 +115,7 @@ private void frameDone() nothrow {
 	auto playerFrameCounter = song.data[song.offsets[2]];
 	static int[][] _avgsPerFrame = new int[][](20,5);
 
-	
+
 	if(cyclesPerFrame > maxCycles) {
 		maxCycles = cyclesPerFrame;
 		maxCycleFrame = song.data[song.offsets[2]];
@@ -135,11 +142,11 @@ private void frameDone() nothrow {
 	}
 	avg /= 5;
 	avgsPerFrame[playerFrameCounter] = avg / 10;
-	
+
 
 	import std.math : ceil;
 	maxLines = cast(int)ceil(maxCycles / 63.0);
-	
+
 	cyclesPerFrame = 0;
 	linesPerFrame = cast(int)(totalCycles / avgs.length / 63);
 
@@ -150,6 +157,9 @@ private void frameDone() nothrow {
 	else dumpFrameRequested = false;
 
 	audio.timer.tickFullFrame();
+
+	// Update visualizer envelope states each full frame
+	audio.visualizer.updateVisualizerFrame();
 }
 
 void cpuCall(ushort pc, bool lockAudio) nothrow{ cpuCall(pc, lockAudio, false); }
@@ -163,7 +173,7 @@ void cpuCall(ushort pc, bool lockAudio, bool forcedump) nothrow {
 		if(muted[0]) song.sidbuf[0..7] = 0;
 		if(muted[1]) song.sidbuf[7..14] = 0;
 		if(muted[2]) song.sidbuf[14..21] = 0;
-		cyclesPerFrame += i; 
+		cyclesPerFrame += i;
 	}
 	catch(Exception e) {
 		playbackStatus = e;
