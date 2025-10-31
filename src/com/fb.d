@@ -400,15 +400,19 @@ class Screen {
 
 	void fprint(int x, int y, string str) {
 		mixin(CHECKS);
-		assert(str.length < 256);
+		// Removed assertion - string length is arbitrary, buffer bounds are what matter
 		Uint32[] outb = data[x + y * width .. $];
+		if(outb.length == 0) return; // Nothing to write - at or past end of line
+		
 		int bg = 0, fg = 0;
 		int idx;
-		while(idx < str.length) {
+		while(idx < str.length && outb.length > 0) {  // Check buffer bounds
 			int getcol(char c) {
 				return cast(int)(c == '+' ? -1 : "0123456789abcdef".indexOf(c));
 			}
 			if(str[idx] == '`') {
+				// Safety check for color codes
+				if(idx + 2 >= str.length) break;
 				bg = getcol(str[idx + 1]);
 				fg = getcol(str[idx + 2]);
 				idx += 3;
@@ -427,6 +431,7 @@ class Screen {
 		outb = outb[1 .. $];
 		idx++;
 	}
+	isDirty = true;
 }
 }
 
