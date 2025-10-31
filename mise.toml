@@ -26,9 +26,9 @@ description = "Build CheeseCutter for current platform"
 run = """
 #!/usr/bin/env bash
 if [[ "$OSTYPE" == "darwin"* ]]; then
-  make -f Makefile.mac LIBSPATH=${LIBSPATH:-/opt/homebrew/lib}
+  make -j -f Makefile.mac LIBSPATH=${LIBSPATH:-/opt/homebrew/lib}
 else
-  make
+  make -j
 fi
 """
 
@@ -37,9 +37,54 @@ description = "Build ct2util utility"
 run = """
 #!/usr/bin/env bash
 if [[ "$OSTYPE" == "darwin"* ]]; then
-  make -f Makefile.mac ct2util LIBSPATH=${LIBSPATH:-/opt/homebrew/lib}
+  make -j -f Makefile.mac ct2util LIBSPATH=${LIBSPATH:-/opt/homebrew/lib}
 else
-  make ct2util
+  make -j ct2util 
+fi
+"""
+
+[tasks.run]
+description = "Build and Run CheeseCutter"
+run = """
+#!/usr/bin/env bash
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  make -j -f Makefile.mac LIBSPATH=${LIBSPATH:-/opt/homebrew/lib}
+else
+  make -j
+fi
+./ccutter $*
+"""
+
+[tasks.release]
+description = "Build release version of CheeseCutter"
+run = """
+#!/usr/bin/env bash
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  make -j -f Makefile.mac release LIBSPATH=${LIBSPATH:-/opt/homebrew/lib}
+else
+  make -j release
+fi
+"""
+
+[tasks.dist]
+description = "Build release version of CheeseCutter"
+run = """
+#!/usr/bin/env bash
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  make -j -f Makefile.mac dist LIBSPATH=${LIBSPATH:-/opt/homebrew/lib}
+else
+  make -j dist
+fi
+"""
+
+[tasks.dclean]
+description = "Clean build artifacts"
+run = """
+#!/usr/bin/env bash
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  make -f Makefile.mac dclean LIBSPATH=${LIBSPATH:-/opt/homebrew/lib}
+else
+  make dclean
 fi
 """
 
