@@ -1,0 +1,62 @@
+# Makefile for CheeseCutter Instrument Player (ctinsplay)
+#
+# This builds a standalone command-line tool to play .cti instrument files
+# using the ReSID SID emulation engine.
+
+CXX = g++
+SDL2_CFLAGS := $(shell sdl2-config --cflags 2>/dev/null || pkg-config --cflags sdl2 2>/dev/null)
+SDL2_LIBS := $(shell sdl2-config --libs 2>/dev/null || pkg-config --libs sdl2 2>/dev/null)
+CXXFLAGS = -std=c++11 -O2 -Wall -Wextra -Isrc $(SDL2_CFLAGS)
+LDFLAGS = $(SDL2_LIBS)
+
+# ReSID source files (using existing resid from CheeseCutter)
+RESID_SOURCES = \
+	src/resid/envelope.cpp \
+	src/resid/extfilt.cpp \
+	src/resid/filter.cpp \
+	src/resid/pot.cpp \
+	src/resid/sid.cpp \
+	src/resid/voice.cpp \
+	src/resid/wave.cpp \
+	src/resid/w6__st.cpp \
+	src/resid/w6_p_t.cpp \
+	src/resid/w6_ps_.cpp \
+	src/resid/w6_pst.cpp \
+	src/resid/w8__st.cpp \
+	src/resid/w8_p_t.cpp \
+	src/resid/w8_ps_.cpp \
+	src/resid/w8_pst.cpp
+
+RESID_OBJECTS = $(RESID_SOURCES:.cpp=.o)
+
+# Main application
+TARGET = ctinsplay
+SOURCE = ctinsplay.cpp
+
+.PHONY: all clean
+
+all: $(TARGET)
+
+$(TARGET): $(SOURCE) $(RESID_OBJECTS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+	@echo ""
+	@echo "Build complete! Usage:"
+	@echo "  ./$(TARGET) <instrument.cti> [options]"
+	@echo ""
+	@echo "Try: ./$(TARGET) --help"
+
+%.o: %.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+clean:
+	rm -f $(TARGET) $(RESID_OBJECTS)
+
+install: $(TARGET)
+	install -m 755 $(TARGET) /usr/local/bin/
+
+.PHONY: test
+test: $(TARGET)
+	@echo "Testing instrument player..."
+	@echo "To test, create a .cti instrument file using CheeseCutter, then run:"
+	@echo "  ./$(TARGET) yourfile.cti -n 36 -d 2000"
+
