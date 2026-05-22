@@ -5,6 +5,7 @@ OBJS= \
 	src/audio/player.o \
 	src/audio/timer.o \
 	src/audio/callback.o \
+	src/audio/visualizer.o \
 	src/ct/purge.o \
 	src/ct/base.o \
 	src/com/fb.o \
@@ -12,6 +13,7 @@ OBJS= \
 	src/com/kbd.o \
 	src/com/session.o \
 	src/com/util.o \
+	src/com/shortcuts.o \
 	src/main.o \
 	src/ui/tables.o \
 	src/ui/dialogs.o \

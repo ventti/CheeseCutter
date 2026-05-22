@@ -17,6 +17,7 @@ import ui.dialogs;
 import seq.fplay;
 import com.fb;
 import com.util;
+import com.shortcuts;
 import seq.sequencer;
 import audio.audio;
 import std.string;
@@ -663,7 +664,9 @@ final private class Toplevel : WindowSwitcher {
 		}
 	}
 
-
+	void activateInfobar() {
+		ui.activateDialog(UI.infobar);
+	}
 	void timerEvent() {
 		fplay.timerEvent();
 	}
@@ -792,7 +795,8 @@ final class UI {
 	static Infobar infobar;
 	static Toplevel toplevel;
 	bool exitRequested = false;
-
+	ShortcutManager sm = new ShortcutManager();
+	
 	this() {
 		statusline = new Statusline(Rectangle(0, 2, 1));
 		toplevel = new Toplevel(this);
@@ -829,7 +833,355 @@ final class UI {
 		//	state.shortTitles = false;
 		toplevel.activate();
 		activateDialog(aboutdialog);
+		
+		// Initialize and register keyboard shortcuts
+		registerShortcuts();
+		
 		update();
+	}
+	
+	/**
+	 * Register all keyboard shortcut actions and load default bindings
+	 */
+	private void registerShortcuts() {		
+		// Application Control
+		sm.registerAction("exit_app", {
+			if(dialog || activeWindow == infobar)
+				return;
+			if(++escapecounter > 1) {
+				activateDialog(new ConfirmationDialog("Really exit (y/n)? ", (int param) {
+					if(param != 0) return;
+					audio.player.stop();
+					exitRequested = true;
+				}));
+			}
+			tickcounter3 = 0;
+		});
+		
+		sm.registerAction("toggle_fullscreen", {
+			video.toggleFullscreen();
+		});
+		
+		sm.registerAction("help_dialog", {
+			int helpdlg_width = screen.width - 10;
+			int helpdlg_height = 36;
+			int helpdlg_x = screen.width / 2 - helpdlg_width / 2;
+			int helpdlg_y = screen.height / 2 - helpdlg_height / 2;
+			HelpDialog helpdialog =
+				new HelpDialog(Rectangle(helpdlg_x, helpdlg_y,
+										 helpdlg_height,
+										 helpdlg_width), activeWindow.contextHelp);
+			activateDialog(helpdialog);
+		});
+		
+		sm.registerAction("screenshot", {
+			// Handled in main.d before translation
+			// This action registered for consistency but won't be triggered here
+		});
+		
+		// File Operations
+		sm.registerAction("load_file", {
+			activateDialog(loaddialog);
+		});
+		
+		sm.registerAction("save_file", {
+			activateDialog(savedialog);
+		});
+		
+		sm.registerAction("quick_save", {
+			string s = savedialog.filename;
+			if(s == "")
+				statusline.display("Cannot Quicksave; give filename first by doing a regular save.");
+			else {
+				saveCallback(s);
+				statusline.display(format("Saved \"%s\".",s));
+			}
+		});
+		
+		// Undo/Redo
+		sm.registerAction("undo", {
+			com.session.executeUndo();
+		});
+		
+		sm.registerAction("redo", {
+			com.session.executeRedo();
+			refresh();
+		});
+		
+		// Playback Controls
+		sm.registerAction("play_from_mark", {
+			F1orF2(Keyinfo(0, 0, 0), false);
+		});
+		
+		sm.registerAction("play_from_mark_follow", {
+			F1orF2(Keyinfo(0, KMOD_SHIFT, 0), false);
+		});
+		
+		sm.registerAction("play_from_beginning", {
+			F1orF2(Keyinfo(0, 0, 0), true);
+		});
+		
+		sm.registerAction("play_from_beginning_follow", {
+			F1orF2(Keyinfo(0, KMOD_SHIFT, 0), true);
+		});
+		
+		sm.registerAction("play_from_cursor", {
+			toplevel.playFromCursor();
+		});
+		
+		sm.registerAction("stop_playback", {
+			if(toplevel.fplayEnabled())
+				seqPos.copyFrom(fplayPos);
+			stop();
+			if(toplevel.fplayEnabled())
+				toplevel.stopFp();
+		});
+		
+		sm.registerAction("toggle_follow_mode", {
+			if(!audio.player.isPlaying) return;
+			if(toplevel.fplayEnabled()) {
+				stop(false);
+				seqPos.copyFrom(fplayPos);
+				toplevel.stopFp();
+				statusline.display("Tracking off.");
+			}
+			else {
+				stop(false);
+				toplevel.startFp();
+				statusline.display("Tracking on.");
+			}
+		});
+		
+		sm.registerAction("fast_forward_5", {
+			audio.player.fastForward(5);
+		});
+		
+		sm.registerAction("fast_forward_25", {
+			audio.player.fastForward(25);
+		});
+		
+		// Playback Options
+		sm.registerAction("next_filter_preset", {
+			audio.player.nextFP();
+		});
+		
+		sm.registerAction("prev_filter_preset", {
+			audio.player.prevFP();
+		});
+		
+		sm.registerAction("toggle_interpolation", {
+			audio.player.interpolate ^= 1;
+			audio.player.init();
+		});
+		
+		sm.registerAction("toggle_sid_model", {
+			song.sidModel ^= 1;
+			audio.player.setSidModel(song.sidModel);
+		});
+		
+		sm.registerAction("cycle_visualization", {
+			vismode = umod(vismode + 1, 0, VisMode.max);
+			screen.clrtoeol(55, 1, 0);
+			screen.clrtoeol(55, 2, 0);
+			screen.clrtoeol(55, 3, 0);
+			video.clearVisualizer();
+		});
+		
+		sm.registerAction("dump_frame", {
+			audio.player.dumpFrame();
+		});
+		
+		// Voice Control
+		sm.registerAction("toggle_voice_1", {
+			audio.player.toggleVoice(0);
+		});
+		
+		sm.registerAction("toggle_voice_2", {
+			audio.player.toggleVoice(1);
+		});
+		
+		sm.registerAction("toggle_voice_3", {
+			audio.player.toggleVoice(2);
+		});
+		
+		// Window Navigation
+		sm.registerAction("next_window", {
+			// This is handled in Toplevel, will need special handling
+		});
+		
+		sm.registerAction("prev_window", {
+			// This is handled in Toplevel, will need special handling
+		});
+		
+		sm.registerAction("cycle_window", {
+			toplevel.activeWindowNum++;
+			if(toplevel.activeWindowNum >= toplevel.windows.length)
+				toplevel.activeWindowNum %= toplevel.windows.length;
+			toplevel.activateWindow();
+		});
+		
+		sm.registerAction("cycle_window_reverse", {
+			toplevel.activeWindowNum--;
+			if(toplevel.activeWindowNum < 0) toplevel.activeWindowNum = cast(int)(toplevel.windows.length - 1);
+			toplevel.activateWindow();
+		});
+		
+		// Direct Window Access
+		sm.registerAction("window_voice1", {
+			toplevel.activateWindow(0);
+			toplevel.sequencer.activateVoice(0);
+		});
+		
+		sm.registerAction("window_voice2", {
+			toplevel.activateWindow(0);
+			toplevel.sequencer.activateVoice(1);
+		});
+		
+		sm.registerAction("window_voice3", {
+			toplevel.activateWindow(0);
+			toplevel.sequencer.activateVoice(2);
+		});
+		
+		sm.registerAction("window_sequence", {
+			toplevel.activateWindow(0);
+		});
+		
+		sm.registerAction("window_instrument", {
+			toplevel.activateWindow(1);
+		});
+		
+		sm.registerAction("window_instrument_alt", {
+			toplevel.activateWindow(1);
+		});
+		
+		sm.registerAction("window_wave", {
+			toplevel.activateWindow(2);
+			auto key = Keyinfo(SDLK_w, 0, 0);
+			toplevel.activeWindow.keypress(key);
+		});
+		
+		sm.registerAction("window_wave_alt", {
+			toplevel.activateWindow(2);
+			auto key = Keyinfo(SDLK_w, 0, 0);
+			toplevel.activeWindow.keypress(key);
+		});
+		
+		sm.registerAction("window_pulse", {
+			toplevel.activateWindow(2);
+			auto key = Keyinfo(SDLK_p, 0, 0);
+			toplevel.activeWindow.keypress(key);
+		});
+		
+		sm.registerAction("window_pulse_alt", {
+			toplevel.activateWindow(2);
+			auto key = Keyinfo(SDLK_p, 0, 0);
+			toplevel.activeWindow.keypress(key);
+		});
+		
+		sm.registerAction("window_filter", {
+			toplevel.activateWindow(2);
+			auto key = Keyinfo(SDLK_f, 0, 0);
+			toplevel.activeWindow.keypress(key);
+		});
+		
+		sm.registerAction("window_filter_alt", {
+			toplevel.activateWindow(2);
+			auto key = Keyinfo(SDLK_f, 0, 0);
+			toplevel.activeWindow.keypress(key);
+		});
+		
+		sm.registerAction("window_command", {
+			toplevel.activateWindow(2);
+			auto key = Keyinfo(SDLK_m, 0, 0);
+			toplevel.activeWindow.keypress(key);
+		});
+		
+		sm.registerAction("window_command_alt", {
+			toplevel.activateWindow(2);
+			auto key = Keyinfo(SDLK_m, 0, 0);
+			toplevel.activeWindow.keypress(key);
+		});
+		
+		sm.registerAction("window_chord", {
+			toplevel.activateWindow(2);
+			auto key = Keyinfo(SDLK_d, 0, 0);
+			toplevel.activeWindow.keypress(key);
+		});
+		
+		sm.registerAction("window_chord_alt", {
+			toplevel.activateWindow(2);
+			auto key = Keyinfo(SDLK_d, 0, 0);
+			toplevel.activeWindow.keypress(key);
+		});
+		
+		sm.registerAction("window_song_info", {
+			toplevel.activateInfobar();
+		});
+		
+		// Song Settings
+		sm.registerAction("increase_speed", {
+			song.speed = clamp(song.speed + 1, 0, 31);
+		});
+		
+		sm.registerAction("increase_speed_kp", {
+			song.speed = clamp(song.speed + 1, 0, 31);
+		});
+		
+		sm.registerAction("decrease_speed", {
+			song.speed = clamp(song.speed - 1, 0, 31);
+		});
+		
+		sm.registerAction("decrease_speed_kp", {
+			song.speed = clamp(song.speed - 1, 0, 31);
+		});
+		
+		sm.registerAction("increase_multiplier_alt", {
+			audio.player.setMultiplier(song.multiplier + 1);
+		});
+		
+		sm.registerAction("decrease_multiplier_alt", {
+			audio.player.setMultiplier(song.multiplier - 1);
+		});
+		
+		// Keyjam Mode
+		sm.registerAction("toggle_keyjam", {
+			if(song.ver < 7) return;
+			state.keyjamStatus ^= 1;
+			enableKeyjamMode(state.keyjamStatus);
+			statusline.display("Keyjam " ~ (state.keyjamStatus ? "enabled." : "disabled.")
+							   ~ " Press Ctrl-Space to toggle.");
+		});
+		
+		// Song Management
+		sm.registerAction("clear_sequences", {
+			toplevel.clearSeqs();
+		});
+		
+		sm.registerAction("clear_sequences_ctrl", {
+			toplevel.clearSeqs();
+		});
+		
+		sm.registerAction("optimize_song", {
+			toplevel.optimizeSong();
+		});
+		
+		sm.registerAction("optimize_song_ctrl", {
+			toplevel.optimizeSong();
+		});
+		
+		// Help
+		sm.registerAction("toggle_help_text", {
+			state.displayHelp ^= 1;
+			UI.statusline.display("Help texts " ~ (state.displayHelp ? "enabled." : "disabled."));
+		});
+		
+		// Dialogs
+		sm.registerAction("about_dialog", {
+			activateDialog(aboutdialog);
+		});
+		
+		// Load default bindings
+		sm.loadDefaultBindings();
 	}
 
 	@property Window activeWindow() {
@@ -943,6 +1295,7 @@ final class UI {
 	}
 
 	int keypress(Keyinfo key) {
+
 		/+ old buggy coldstart code
 		if(key.mods & KMOD_ALT && key.mods & KMOD_CTRL && key.raw == SDLK_KP0) {
 			if(++restartcounter > 1) {
@@ -962,174 +1315,32 @@ final class UI {
 			return OK;
 		}
 		else+/
-
 		bool skip_imm_keypress = false; //workaround for F11 - crapchars in savedialog
-		if(key.mods & KMOD_ALT) {
-			switch(key.raw)
-			{
-			case SDLK_RETURN:
-				video.toggleFullscreen();
-				//update();
-				break;
-			case SDLK_KP_PLUS:
-				audio.player.setMultiplier(song.multiplier + 1);
-				break;
-			case SDLK_KP_MINUS:
-				audio.player.setMultiplier(song.multiplier - 1);
-				break;
-			case SDLK_F12:
-				audio.player.dumpFrame();
-				break;
-			default:
-				break;
-			}
-		}
-		else if(key.mods & KMOD_CTRL) {
-			switch(key.raw)
-			{
-			case SDLK_1:
-				audio.player.toggleVoice(0);
-				break;
-			case SDLK_2:
-				audio.player.toggleVoice(1);
-				break;
-			case SDLK_3:
-				audio.player.toggleVoice(2);
-				break;
-			case SDLK_F11:
-				string s = savedialog.filename;
-				if(s == "")
-					statusline.display("Cannot Quicksave; give filename first by doing a regular save.");
+		
+		// Check if shortcut manager handles this keypress
+		// But only if there's no active input field or dialog that needs to handle it first
+		if(!dialog) { // if(activeInput is null && !dialog) {
+			//auto sm = getShortcutManager();
+			if(sm.handleKeypress(key)) {
+
+				// Shortcut was handled
+				// Special case: F11 saves dialog needs skip_imm_keypress
+				if(key.raw == SDLK_F11 && key.mods == 0) {
+					skip_imm_keypress = true;
+				}
 				else {
-					saveCallback(s);
-					statusline.display(format("Saved \"%s\".",s));
+					return OK;
 				}
-				break;
-			case SDLK_F12:
-				break;
-			case SDLK_F2:
-				audio.player.interpolate ^= 1;
-				audio.player.init();
-				break;
-			case SDLK_F3:
-				song.sidModel ^= 1;
-				audio.player.setSidModel(song.sidModel);
-				break;
-				/+
-			case SDLK_F4, SDLK_b:
-				audio.player.badline ^= 1;
-				audio.player.init();
-				break;
-				+/
-			case SDLK_F8:
-				key.mods & KMOD_SHIFT ? audio.player.prevFP() : audio.player.nextFP();
-				break;
-			case SDLK_F9:
-				/+
-				if(printSIDDump) {
-					screen.clrtoeol(55, 1, 0);
-					screen.clrtoeol(55, 2, 0);
-					screen.clrtoeol(55, 3, 0);
-				}
-				printSIDDump = !printSIDDump;
-				+/
-				vismode = umod(vismode + 1, 0, VisMode.max);
-				screen.clrtoeol(55, 1, 0);
-				screen.clrtoeol(55, 2, 0);
-				screen.clrtoeol(55, 3, 0);
-				video.clearVisualizer();
-				break;
-			case SDLK_SPACE:
-				if(song.ver < 7) break;
-				state.keyjamStatus ^= 1;
-				enableKeyjamMode(state.keyjamStatus);
-				statusline.display("Keyjam " ~ (state.keyjamStatus ? "enabled." : "disabled.")
-								   ~ " Press Ctrl-Space to toggle.");
-				break;
-			default:
-				break;
 			}
 		}
-		else switch(key.raw)
-			 {
-			 case SDLK_ESCAPE:
-				 if(dialog || activeWindow == infobar)
-					 break;
-				 if(++escapecounter > 1) {
-					 activateDialog(new ConfirmationDialog("Really exit (y/n)? ", (int param) {
-								 if(param != 0) return;
-								 audio.player.stop();
-								 exitRequested = true;
-							 }));
-					 return OK;
-				 }
-				 tickcounter3 = 0;
-				 break;
-                 /+
-			 case SDLK_PRINT:
-			 	 audio.player.dumpFrame();
-			 	 break;
-                 +/
-			 case SDLK_F1:
-				 F1orF2(key, false);
-				 break;
-			 case SDLK_F2:
-				 F1orF2(key, true);
-				 break;
-			 case SDLK_F3:
-				 toplevel.playFromCursor();
-				 break;
-			 case SDLK_SCROLLLOCK:
-				 if(!audio.player.isPlaying) break;
-				 if(toplevel.fplayEnabled()) {
-					 stop(false);
-					 seqPos.copyFrom(fplayPos);
-					 toplevel.stopFp();
-					 statusline.display("Tracking off.");
-				 }
-				 else {
-					 stop(false);
-					 toplevel.startFp();
-					 statusline.display("Tracking on.");
-				 }
-				 break;
-			 case SDLK_F4:
-				 if(toplevel.fplayEnabled())
-					 seqPos.copyFrom(fplayPos);
-				 stop();
-				 if(toplevel.fplayEnabled())
-					 toplevel.stopFp();
-				 break;
-			 case SDLK_F8:
-				 if(key.mods & KMOD_SHIFT)
-					 audio.player.fastForward(25);
-				 else
-					 audio.player.fastForward(5);
-				 break;
-			 case SDLK_F9:
-				 activateDialog(aboutdialog);
-				 break;
-			 case SDLK_F10:
-				 activateDialog(loaddialog);
-				 break;
-			 case SDLK_F11:
-				 activateDialog(savedialog);
-				 skip_imm_keypress = true;
-				 break;
-			 case SDLK_F12:
-				 int helpdlg_width = screen.width - 10;
-				 int helpdlg_height = 36;
-				 int helpdlg_x = screen.width / 2 - helpdlg_width / 2;
-				 int helpdlg_y = screen.height / 2 - helpdlg_height / 2;
-				 HelpDialog helpdialog =
-					 new HelpDialog(Rectangle(helpdlg_x, helpdlg_y,
-											  helpdlg_height,
-											  helpdlg_width), activeWindow.contextHelp);
-				 activateDialog(helpdialog);
-				 break;
-			 default:
-				 break;
-			 }
+		
+		// Handle Alt+key shortcuts that might not be in shortcut manager
+		// (context-dependent or special cases)
+		if(key.mods & KMOD_ALT && !(key.mods & KMOD_CTRL)) {
+			// These are handled by shortcut manager or by toplevel
+		}
+		
+		// Check for active input field or dialog - they get priority
 		int r;
 		if(dialog && !skip_imm_keypress) {
 			if(key.mods & KMOD_ALT) return OK;
@@ -1140,6 +1351,7 @@ final class UI {
 			}
 		}
 		else {
+			// Pass to toplevel which handles window-specific shortcuts
 			toplevel.keypress(key);
 		}
 		return OK;
