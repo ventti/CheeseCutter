@@ -97,7 +97,7 @@ fi
 if ! command -v mise &> /dev/null; then
     export PATH="$HOME/.local/bin:$PATH"
 fi
-
+mise trust
 # Step 3: Install system dependencies via Homebrew
 log_info "Installing system dependencies (ldc, acme, SDL2)..."
 brew install ldc acme sdl2 2>/dev/null || {
