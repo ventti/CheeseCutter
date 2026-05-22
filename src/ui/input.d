@@ -53,6 +53,7 @@ class Cursor {
 	void set(int nx, int ny) {
 		if(nx < 0 || ny < 0) return;
 		if(x != nx || y != ny) {
+			restore();
 			x = nx; y = ny;
 			uint col = screen.getChar(x, y);
 			counter = BLINK_VAL;
@@ -74,6 +75,11 @@ class Cursor {
 			counter = BLINK_VAL;
 			t = bg2; bg2 = fg2; fg2 = t;
 		}
+	}
+
+	private void restore() {
+		if(x < 0 || y < 0) return;
+		screen.setColor(x, y, bg, fg);
 	}
 }
 

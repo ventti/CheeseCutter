@@ -162,6 +162,12 @@ class HelpDialog : Window {
 
 	override int keypress(Keyinfo key) {
 		int k = key.unicode;
+		if(key.raw == SDLK_F12 && key.mods == 0) {
+			if(title != ui.help.HELPMAIN.title) {
+				mainui.activateDialog(new HelpDialog(area, ui.help.HELPMAIN));
+			}
+			return OK;
+		}
 		if(k == SDLK_SPACE ||
 		   k == SDLK_PLUS ||
 			k == SDLK_RIGHT ||
