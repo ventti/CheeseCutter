@@ -163,10 +163,10 @@ private class HexTable : Table, Undoable {
 				stepColumn(1);
 			}
 			break;
-		case SDLK_INSERT:
+		case SDLK_INSERT, SDLK_RETURN:
 			insertRow();
 			break;
-		case SDLK_DELETE:
+		case SDLK_DELETE, SDLK_BACKSPACE:
 			deleteRow();
 			break;
 		case SDLK_DOWN:
@@ -860,13 +860,13 @@ class WaveTable : HexTable {
 			case SDLK_g:
 				seekCurWave();
 				return OK;
-			case SDLK_DELETE:
+			case SDLK_DELETE, SDLK_BACKSPACE:
 				saveState(true);
 				song.tWave.deleteRow(song, row);
 				refresh();
 				set();
 				return OK;
-			case SDLK_INSERT:
+			case SDLK_INSERT, SDLK_RETURN:
 				saveState(true);
 				song.tWave.insertRow(song, row);
 				refresh();
@@ -953,12 +953,12 @@ class SweepTable : HexTable {
 
 	override int keypress(Keyinfo key) {
 		switch(key.raw) {
-		case SDLK_DELETE:
+		case SDLK_DELETE, SDLK_BACKSPACE:
 			deleteRow();
 			refresh();
 			set();
 			return OK;
-		case SDLK_INSERT:
+		case SDLK_INSERT, SDLK_RETURN:
 			insertRow();
 			refresh();
 			set();

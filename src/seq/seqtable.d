@@ -44,11 +44,11 @@ class SeqVoice : Voice, Undoable {
 				activeRow.seq.expand(activeRow.seqOffset,
 								   (t - (r + t) % t));
 				break;
-			case SDLK_INSERT:
+			case SDLK_INSERT:  // FIXME need substitute key for Macbook too
 				saveState();
 				activeRow.seq.expand(activeRow.seqOffset, 1);
 				break;
-			case SDLK_DELETE:
+			case SDLK_DELETE, SDLK_BACKSPACE:
 				saveState();
 				activeRow.seq.shrink(activeRow.seqOffset, 1, true);
 				break;
@@ -59,11 +59,11 @@ class SeqVoice : Voice, Undoable {
 		else if(key.mods & KMOD_CTRL) {
 			switch(key.raw)
 			{
-			case SDLK_INSERT:
+			case SDLK_INSERT, SDLK_RETURN:
 				saveState();
 				activeRow.seq.expand(0, 1, false);
 				break;
-			case SDLK_DELETE:
+			case SDLK_DELETE, SDLK_BACKSPACE:
 				saveState();
 				if(activeRow.seqOffset < activeRow.seq.rows - 1)
 					activeRow.seq.shrink(0, 1, false);
@@ -95,11 +95,11 @@ class SeqVoice : Voice, Undoable {
 				 return seqinput.step(-1);
 			 case SDLK_RIGHT:
 				 return seqinput.step(1);
-			 case SDLK_INSERT:
+			 case SDLK_INSERT, SDLK_RETURN:
 				 saveState();
 				 activeRow.seq.insert(activeRow.seqOffset);
 				 break;
-			 case SDLK_DELETE:
+			 case SDLK_DELETE, SDLK_BACKSPACE:
 				 saveState();
 				 activeRow.seq.remove(activeRow.seqOffset);
 				 break;

@@ -206,7 +206,7 @@ abstract class BaseTrackTable : VoiceTable, Undoable {
 					jump(Jump.toEnd,true);
 				}
 				return OK;
-			case SDLK_DELETE:
+			case SDLK_DELETE, SDLK_BACKSPACE:
 				saveState(true);
 				if(key.mods & KMOD_SHIFT) {
 					for(int i = 0; i < voices.length; i++) {
@@ -275,12 +275,12 @@ abstract class BaseTrackTable : VoiceTable, Undoable {
 		}
 		else switch(key.raw)
 			 {
-			 case SDLK_INSERT:
+			 case SDLK_INSERT, SDLK_RETURN:
 				 saveState(false);
 				 auto v = (cast(TrackVoice)activeVoice);
 				 v.trackInsert(true);
 				 return OK;
-			 case SDLK_DELETE:	
+			 case SDLK_DELETE, SDLK_BACKSPACE:	
 				 saveState(false);
 				 auto v = (cast(TrackVoice)activeVoice);
 				 v.trackDelete(true);
