@@ -16,6 +16,8 @@ import std.string;
 import audio.player;
 import audio.visualizer;
 
+private enum activeInstrumentColor = 3;
+
 class SeqVoice : Voice, Undoable {
 	InputSeq seqinput;
 
@@ -180,6 +182,12 @@ class SeqVoice : Voice, Undoable {
 					if(scry < area.y + 1) break;
 					Element d = seq.data[i];
 					screen.fprint(area.x + 4, scry, d.toString(wseq.element.transpose));
+					if(state.activeInstrument >= 0 &&
+					   d.instr.hasValue &&
+					   d.instr.value == state.activeInstrument) {
+						screen.setColor(area.x + 8, scry, activeInstrumentColor, 0);
+						screen.setColor(area.x + 9, scry, activeInstrumentColor, 0);
+					}
 					if(i == 0) printTrack();
 					else {
 						if(.seq.sequencer.displaySequenceRowcounter == true) {
@@ -304,34 +312,28 @@ class SequenceTable : VoiceTable {
 					brightness = audio.visualizer.getPersistentBrightness(i, rowCounter);
 				}
 
-			if(brightness > 0.01f) {
-				// Map brightness to 16-step gradient (palette indices 16-31)
-				// brightness ranges from 0.0 to 1.0
-				// Map to gradient: 16 (brightest) to 31 (darkest/black)
-				int step = cast(int)(brightness * 15.0f);
-				if(step > 15) step = 15;
-				int bgcolor = 16 + (15 - step); // Invert so high brightness = low index (brighter color)
+				if(brightness > 0.01f) {
+					// Map brightness to 16-step gradient (palette indices 16-31)
+					// brightness ranges from 0.0 to 1.0
+					// Map to gradient: 16 (brightest) to 31 (darkest/black)
+					int step = cast(int)(brightness * 15.0f);
+					if(step > 15) step = 15;
+					int bgcolor = 16 + (15 - step); // Invert so high brightness = low index (brighter color)
 
-				// During playback on current row: white foreground
-				// Otherwise: read existing foreground from screen and preserve it
-				bool isCurrentlyPlaying = audio.player.isPlaying && !audio.player.keyjamEnabled;
-				PosData fp = fplayPos[i];
-				bool isCurrentRow = isCurrentlyPlaying && (rowCounter == fp.rowCounter);
+					// Apply the visualization as a background-only tint. Existing
+					// nonzero backgrounds carry editor semantics such as tied notes,
+					// playback marks, and wrap marks, so leave those cells intact.
+					for(int x = voices[i].area.x;
+						x < voices[i].area.x + voices[i].area.width; x++) {
+						int y = 1 + area.y + rowIdx;
+						int existingChar = screen.getChar(x, y);
+						int existingBg = (existingChar >> 16) & 0xff;
+						if(existingBg != 0) continue;
 
-				// Apply background color to the entire track column width
-				for(int x = voices[i].area.x;
-					x < voices[i].area.x + voices[i].area.width; x++) {
-					if(isCurrentRow) {
-						// Current playing position: white text on colored background
-						screen.setColor(x, 1 + area.y + rowIdx, 1, bgcolor);
-					} else {
-						// Persistent visualization: read existing fg color and just set bg
-						int existingChar = screen.getChar(x, 1 + area.y + rowIdx);
 						int existingFg = (existingChar >> 8) & 15;
-						screen.setColor(x, 1 + area.y + rowIdx, existingFg, bgcolor);
+						screen.setColor(x, y, existingFg, bgcolor);
 					}
 				}
-			}
 			}
 		}
 	}
@@ -348,7 +350,7 @@ class SequenceTable : VoiceTable {
 	}
 
 	// for positioning the cursor using mouse. x is not used
-	override void clickedAt(int x, int y, int button) {
+	override void clickedAt(int x, int y, int button, int clicks = 1) {
 		y -= 1;
 		step(y-posTable.normalPointerOffset);
 	}

@@ -71,7 +71,7 @@ abstract class Window {
 	void refresh() {}
 	void deactivate() {}
 	void activate() { refresh(); }
-	void clickedAt(int scrx, int scry, int button) {}
+	void clickedAt(int scrx, int scry, int button, int clicks = 1) {}
 
 protected:
 
@@ -152,8 +152,11 @@ class WindowSwitcher : Window {
 	}
 
 	void activateWindow(int n) {
-		if(activeWindow !is null)
+		if(activeWindow !is null) {
+			if(activeWindow.input !is null && activeWindow.input.cursor !is null)
+				activeWindow.input.cursor.clear();
 			activeWindow.deactivate();
+		}
 		activeWindow = windows[n];
 		activeWindow.activate();
 		activeWindowNum = n;
@@ -208,12 +211,12 @@ class WindowSwitcher : Window {
 		return activeWindow.contextHelp();
 	}
 
-	override void clickedAt(int scrx, int scry, int button) {
+	override void clickedAt(int scrx, int scry, int button, int clicks = 1) {
 		//	activateAt(scrx - activeWindow.area.x, scry - activeWindow.area.y);
 	}
 }
 
-class Infobar : Window {
+class Infobar : Window, Undoable {
 	private {
 		const int x1, x2;
 		int idx;
@@ -274,9 +277,15 @@ class Infobar : Window {
 	}
 
 	private void outputStrings() {
-		song.title[0..32] = (cast(InputString)inputTitle).toString(true)[0..32];
-		song.release[0..32] = (cast(InputString)inputReleased).toString(true)[0..32];
-		song.author[0..32] = (cast(InputString)inputAuthor).toString(true)[0..32];
+		auto title = inputValue(inputTitle);
+		auto release = inputValue(inputReleased);
+		auto author = inputValue(inputAuthor);
+		if(song.title == title && song.release == release && song.author == author)
+			return;
+		com.session.insertUndo(this, createState());
+		song.title[] = title[];
+		song.release[] = release[];
+		song.author[] = author[];
 	}
 
 	override int keypress(Keyinfo key) {
@@ -295,6 +304,37 @@ class Infobar : Window {
 			return RETURN;
 		}
 		return OK;
+	}
+
+private:
+
+	char[32] inputValue(InputString input) {
+		return paddedString32(input.toString(false));
+	}
+
+	UndoValue createState() {
+		UndoValue v;
+		v.songTitle = song.title;
+		v.songRelease = song.release;
+		v.songAuthor = song.author;
+		v.hasSongInfo = true;
+		return v;
+	}
+
+public:
+
+	override void undo(UndoValue v) {
+		if(!v.hasSongInfo)
+			return;
+		song.title[] = v.songTitle[];
+		song.release[] = v.songRelease[];
+		song.author[] = v.songAuthor[];
+		refresh();
+		update();
+	}
+
+	override UndoValue createRedoState(UndoValue value) {
+		return createState();
 	}
 }
 
@@ -332,7 +372,7 @@ class Statusline : Window {
 	}
 }
 
-final private class Toplevel : WindowSwitcher {
+final private class Toplevel : WindowSwitcher, Undoable {
 	InputKeyjam inputKeyjam;
 	InsTable instable;
 	CmdTable cmdtable;
@@ -341,6 +381,7 @@ final private class Toplevel : WindowSwitcher {
 	PulseTable pulsetable;
 	FilterTable filtertable;
 	ChordTable chordtable;
+	TracksTable trackstable;
 	Sequencer sequencer;
 	Fplay fplay;
 	UI ui;
@@ -355,33 +396,99 @@ final private class Toplevel : WindowSwitcher {
 		int zone1h = screen.height / 2 - 5;
 		int zone2y = screen.height / 2;
 		int zone2h = screen.height - zone2y - 5;
+		int fullTableHeight = screen.height - zone1y - 5;
+		enum sequencerContentWidth = 48;
+		enum minInsWidth = 3 + 8 * 3 + 14;
+		enum preferredInsWidth = 3 + 8 * 3 + 32;
+		enum tracksWidth = 19;
+		int insWidth = 3 + 8 * 3 + 12;
+		int adjacentFixedWidth = 8 + 14 + 14 + 10 + 6 + tracksWidth + com.fb.border * 6;
+		bool adjacentTableLayout = com.fb.mode > 0 &&
+			screen.width >= sequencerContentWidth + minInsWidth + adjacentFixedWidth;
+
+		int cappedHeight(int rows) {
+			int h = rows + 1;
+			return fullTableHeight < h ? fullTableHeight : h;
+		}
 
 		inputKeyjam = new InputKeyjam();
-		sequencer = new Sequencer(Rectangle(zone1x, zone1y, screen.height - 10, zone2x - zone1x));
-		fplay = new Fplay(Rectangle(zone1x, zone1y, screen.height - 10, zone2x - zone1x));
-		instable = new InsTable(Rectangle(zone2x, zone1y, zone1h, 3 + 8 * 3 + 12));
 
-		int tx = zone2x;
-		wavetable = new WaveTable(Rectangle(tx, zone2y, zone2h, 8));
-		tx += com.fb.border + 8;
-		pulsetable = new PulseTable(Rectangle(tx, zone2y, zone2h, 14));
-		tx += com.fb.border + 14;
-		filtertable = new FilterTable(Rectangle(tx, zone2y, zone2h, 14));
-		tx += com.fb.border + 14;
-		cmdtable = new CmdTable(Rectangle(tx, zone2y, zone2h, 10));
-		tx += com.fb.border + 10;
+		int tx;
+		int bottomSwitcherX;
+		int bottomSwitcherY;
+		int bottomSwitcherH;
+		int bottomSwitcherW;
+		Window[] bottomWindows;
+		string bottomHotkeys;
 
-		Rectangle ca;
-		if(com.fb.mode == 0) {
-			ca = Rectangle(tx - 6, zone1y, zone1h, 6);
+		if(adjacentTableLayout) {
+			int tableX = sequencerContentWidth;
+			insWidth = screen.width - tableX - adjacentFixedWidth;
+			if(insWidth > preferredInsWidth) insWidth = preferredInsWidth;
+			sequencer = new Sequencer(Rectangle(zone1x, zone1y, screen.height - 10,
+												tableX - zone1x));
+			fplay = new Fplay(Rectangle(zone1x, zone1y, screen.height - 10,
+										tableX - zone1x));
+
+			tx = tableX;
+			instable = new InsTable(Rectangle(tx, zone1y, cappedHeight(0x30), insWidth));
+			tx += insWidth + com.fb.border;
+			bottomSwitcherX = tx;
+			bottomSwitcherY = zone1y;
+			bottomSwitcherH = fullTableHeight;
+			wavetable = new WaveTable(Rectangle(tx, zone1y, cappedHeight(0x100), 8));
+			tx += 8 + com.fb.border;
+			pulsetable = new PulseTable(Rectangle(tx, zone1y, cappedHeight(0x40), 14));
+			tx += 14 + com.fb.border;
+			filtertable = new FilterTable(Rectangle(tx, zone1y, cappedHeight(0x40), 14));
+			tx += 14 + com.fb.border;
+			cmdtable = new CmdTable(Rectangle(tx, zone1y, cappedHeight(0x40), 10));
+			tx += 10 + com.fb.border;
+			chordtable = new ChordTable(Rectangle(tx, zone1y, cappedHeight(0x80), 6));
+			tx += 6 + com.fb.border;
+			trackstable = new TracksTable(Rectangle(tx, zone1y, fullTableHeight, tracksWidth));
+			tx += tracksWidth;
+			bottomSwitcherW = tx - bottomSwitcherX;
+			bottomWindows = [cast(Window)wavetable, pulsetable, filtertable,
+							 cmdtable, chordtable, trackstable];
+			bottomHotkeys = "wpfmdr";
 		}
-		else ca = Rectangle(tx, zone2y, zone2h, 6);
-		chordtable = new ChordTable(ca);
-		bottomTabSwitcher = new WindowSwitcher(Rectangle(zone2x, zone2y, zone2h,
-														 tx + com.fb.border + 10),
-											   [cast(Window)wavetable, pulsetable,
-												filtertable, cmdtable, chordtable],
-											   "wpfmd");
+		else {
+			sequencer = new Sequencer(Rectangle(zone1x, zone1y, screen.height - 10,
+												zone2x - zone1x));
+			fplay = new Fplay(Rectangle(zone1x, zone1y, screen.height - 10,
+										zone2x - zone1x));
+			instable = new InsTable(Rectangle(zone2x, zone1y, zone1h, insWidth));
+
+			tx = zone2x;
+			bottomSwitcherX = zone2x;
+			bottomSwitcherY = zone2y;
+			bottomSwitcherH = zone2h;
+			wavetable = new WaveTable(Rectangle(tx, zone2y, zone2h, 8));
+			tx += com.fb.border + 8;
+			pulsetable = new PulseTable(Rectangle(tx, zone2y, zone2h, 14));
+			tx += com.fb.border + 14;
+			filtertable = new FilterTable(Rectangle(tx, zone2y, zone2h, 14));
+			tx += com.fb.border + 14;
+			cmdtable = new CmdTable(Rectangle(tx, zone2y, zone2h, 10));
+			tx += com.fb.border + 10;
+
+			Rectangle ca;
+			if(com.fb.mode == 0) {
+				ca = Rectangle(tx - 6, zone1y, zone1h, 6);
+			}
+			else ca = Rectangle(tx, zone2y, zone2h, 6);
+			chordtable = new ChordTable(ca);
+			bottomSwitcherW = tx + com.fb.border + 10;
+			bottomWindows = [cast(Window)wavetable, pulsetable, filtertable,
+							 cmdtable, chordtable];
+			bottomHotkeys = "wpfmd";
+		}
+
+		bottomTabSwitcher = new WindowSwitcher(Rectangle(bottomSwitcherX, bottomSwitcherY,
+														 bottomSwitcherH, bottomSwitcherW),
+											   bottomWindows,
+											   bottomHotkeys);
 
 		/+
 		super(Rectangle(), [cast(Window)sequencer, instable,
@@ -395,8 +502,27 @@ final private class Toplevel : WindowSwitcher {
 			int x1 = 4;
 			int x2 = x1 + (com.fb.mode > 0 ? 64 : 48);
 			int y1 = screen.height - 4;
+			int settingsX = x1 + 19;
 
 			hotspots = [
+				Hotspot(Rectangle(settingsX, y1, 1, 6), (int b) {
+						if(b == 1)
+							state.octave = clamp(state.octave + 1, 0, 6);
+						else if(b == 3)
+							state.octave = clamp(state.octave - 1, 0, 6);
+					}),
+				Hotspot(Rectangle(settingsX + 8, y1, 1, 7), (int b) {
+						if(b == 1)
+							song.speed = clamp(song.speed + 1, 0, 31);
+						else if(b == 3)
+							song.speed = clamp(song.speed - 1, 0, 31);
+					}),
+				Hotspot(Rectangle(settingsX + 17, y1, 1, 5), (int b) {
+						if(b == 1)
+							seq.sequencer.stepValue = clamp(seq.sequencer.stepValue + 1, 0, 9);
+						else if(b == 3)
+							seq.sequencer.stepValue = clamp(seq.sequencer.stepValue - 1, 0, 9);
+					}),
 				Hotspot(Rectangle(x2 + 3, y1, 1, 30), (int b){
 						ui.activateDialog(UI.infobar);
 					}),
@@ -411,17 +537,22 @@ final private class Toplevel : WindowSwitcher {
 		refresh();
 	}
 
-	override void clickedAt(int x, int y, int b) {
+	override void clickedAt(int x, int y, int b, int clicks = 1) {
 		foreach(idx, win; windows) {
 			if(win.area.overlaps(x, y)) {
 				activateWindow(idx);
-				activeWindow.clickedAt(x, y, b);
+				activeWindow.clickedAt(x, y, b, clicks);
 			}
 		}
 		foreach(idx, win; bottomTabSwitcher.windows) {
 			if(win.area.overlaps(x, y)) {
 				bottomTabSwitcher.activateWindow(idx);
-				bottomTabSwitcher.activeWindow.clickedAt(x, y, b);
+				bottomTabSwitcher.activeWindow.clickedAt(x, y, b, clicks);
+				if(win == trackstable && b == 1 && clicks >= 2) {
+					int offset;
+					if(trackstable.offsetAtCoord(x, y, offset))
+						sequencer.seekPatternOffset(offset);
+				}
 				break;
 			}
 		}
@@ -621,6 +752,9 @@ final private class Toplevel : WindowSwitcher {
 			if(r == RETURN || r == CANCEL) {
 				assert(0);
 			}
+			if(activeWindow == sequencer && trackstable !is null) {
+				trackstable.refresh();
+			}
 		}
 		return OK;
 	}
@@ -644,8 +778,26 @@ final private class Toplevel : WindowSwitcher {
 
 	override void update() {
 		foreach(t; windows) {
-			t.update();
+			if(t == bottomTabSwitcher) {
+				foreach(bottomWindow; bottomTabSwitcher.windows) {
+					bottomWindow.update();
+				}
+			}
+			else {
+				t.update();
+			}
 		}
+	}
+
+	void activateInstrument(int ins) {
+		if(ins > 47) ins = 47;
+		if(ins < 0) ins = 0;
+		instable.seekRow(ins);
+		state.activeInstrument = ins;
+		wavetable.seekRowOnTopIfNeeded(song.instrumentTable[ins + 7 * 48]);
+		pulsetable.seekProgram(song.instrumentTable[ins + 5 * 48]);
+		filtertable.seekProgram(song.instrumentTable[ins + 4 * 48]);
+		refresh();
 	}
 
 	bool fplayEnabled() { return followplay; }
@@ -732,6 +884,7 @@ final private class Toplevel : WindowSwitcher {
 			refresh();
 			// TODO: VALIDATION HERE BEFORE PURGING... PurgeExpception should be useless if validate covers all errorcases
 			try {
+				saveSongState();
 				(new Purge(song,true)).purgeAll();
 			}
 			catch(PurgeException e) {
@@ -749,6 +902,58 @@ final private class Toplevel : WindowSwitcher {
 			UI.statusline.display("Press again to confirm song data optimization...");
 			tickcounter3 = 0;
 		}
+	}
+
+	private void saveSongState() {
+		com.session.insertUndo(this, createSongState());
+	}
+
+	private UndoValue createSongState() {
+		UndoValue v;
+		song.tableIterator((ct.base.Song.Table t) {
+				v.tableData ~= t.data.dup;
+			});
+		v.insLabels = song.insLabels;
+		v.hasInsLabels = true;
+		v.songTitle = song.title;
+		v.songRelease = song.release;
+		v.songAuthor = song.author;
+		v.hasSongInfo = true;
+		for(int i = 0; i < 3; i++) {
+			auto tl = song.tracks[i];
+			v.trackLists ~= TracklistStore(tl.deepcopy, tl);
+		}
+		foreach(s; song.seqs) {
+			v.seqSources ~= s;
+			v.seqData ~= s.data.raw.dup;
+		}
+		return v;
+	}
+
+	override void undo(UndoValue v) {
+		int idx;
+		song.tableIterator((ct.base.Song.Table t) {
+				t.data[0..$] = v.tableData[idx++][0..$];
+			});
+		if(v.hasInsLabels)
+			song.insLabels[] = v.insLabels[];
+		if(v.hasSongInfo) {
+			song.title[] = v.songTitle[];
+			song.release[] = v.songRelease[];
+			song.author[] = v.songAuthor[];
+		}
+		foreach(t; v.trackLists) {
+			t.source.overwriteFrom(t.store);
+		}
+		foreach(i, s; v.seqSources) {
+			s.data.raw[] = v.seqData[i][];
+			s.refresh();
+		}
+		refresh();
+	}
+
+	override UndoValue createRedoState(UndoValue value) {
+		return createSongState();
 	}
 
 	private void clearSong() {
@@ -936,20 +1141,13 @@ final class UI {
 			if(toplevel.fplayEnabled())
 				toplevel.stopFp();
 		});
-		
+
 		sm.registerAction("toggle_follow_mode", {
-			if(!audio.player.isPlaying) return;
-			if(toplevel.fplayEnabled()) {
-				stop(false);
-				seqPos.copyFrom(fplayPos);
-				toplevel.stopFp();
-				statusline.display("Tracking off.");
-			}
-			else {
-				stop(false);
-				toplevel.startFp();
-				statusline.display("Tracking on.");
-			}
+			toggleFollowMode();
+		});
+
+		sm.registerAction("toggle_follow_mode_alt", {
+			toggleFollowMode();
 		});
 		
 		sm.registerAction("fast_forward_5", {
@@ -1184,6 +1382,21 @@ final class UI {
 		sm.loadDefaultBindings();
 	}
 
+	private void toggleFollowMode() {
+		if(!audio.player.isPlaying) return;
+		if(toplevel.fplayEnabled()) {
+			stop(false);
+			seqPos.copyFrom(fplayPos);
+			toplevel.stopFp();
+			statusline.display("Tracking off.");
+		}
+		else {
+			stop(false);
+			toplevel.startFp();
+			statusline.display("Tracking on.");
+		}
+	}
+
 	@property Window activeWindow() {
 		if(dialog) return dialog;
 		return toplevel.activeWindow;
@@ -1237,12 +1450,14 @@ final class UI {
 				}
 				update();  // TESTME: just do video.updateFrame()
 
-				// NOW apply visualization colors as the FINAL step
-				// This must happen AFTER update() to prevent colors from being overwritten
-				if(toplevel.followplay && toplevel.fplay) {
-					toplevel.fplay.renderVisualization();
-				} else if(toplevel.sequencer) {
-					toplevel.sequencer.renderVisualization();
+				// Apply playback row tinting only when no dialog is covering
+				// the tables. Dialogs must remain visually authoritative.
+				if(dialog is null) {
+					if(toplevel.followplay && toplevel.fplay) {
+						toplevel.fplay.renderVisualization();
+					} else if(toplevel.sequencer) {
+						toplevel.sequencer.renderVisualization();
+					}
 				}
 			}
 		}
@@ -1260,12 +1475,7 @@ final class UI {
 
 	private void F1orF2(Keyinfo key, bool fromStart) {
 		if(audio.player.isPlaying) {
-			if(key.mods & KMOD_SHIFT) { // already playing, reinit tracking
-				stop(false);
-				toplevel.startFp();
-				return;
-			}
-			else if(toplevel.fplayEnabled()) { // drop tracking
+			if(!(key.mods & KMOD_SHIFT) && toplevel.fplayEnabled()) { // drop tracking
 				stop(false);
 				seqPos.copyFrom(fplayPos);
 				toplevel.stopFp();
@@ -1362,10 +1572,12 @@ final class UI {
 		return OK;
 	}
 
-	void clickedAt(int x, int y, int b) {
+	void clickedAt(int x, int y, int b, int clicks = 1) {
+		if(activeInput !is null && activeInput.cursor !is null)
+			activeInput.cursor.clear();
 		if(dialog)
-			dialog.clickedAt(x, y, b);
-		else toplevel.clickedAt(x, y, b);
+			dialog.clickedAt(x, y, b, clicks);
+		else toplevel.clickedAt(x, y, b, clicks);
 	}
 
 	private void saveCallback(string s) {
@@ -1503,10 +1715,6 @@ final class UI {
 	}
 
 	static void activateInstrument(int ins) {
-		if(ins > 47) ins = 47;
-		if(ins < 0) ins = 0;
-		toplevel.instable.seekRow(ins);
-		state.activeInstrument = ins;
-		toplevel.refresh();
+		toplevel.activateInstrument(ins);
 	}
 }

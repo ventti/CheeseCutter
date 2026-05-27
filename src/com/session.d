@@ -28,11 +28,16 @@ struct UndoValue {
 	// undo data needed by sequencer
 	Array array;
 	Sequence seq;
+	Sequence[] seqSources;
+	ubyte[][] seqData;
 	// undo data needed by track editor
 	TracklistStore[] trackLists;
 	ushort trackValue;
-	Track track;
 	ubyte[][] tableData;
+	char[32][48] insLabels;
+	bool hasInsLabels;
+	char[32] songTitle, songAuthor, songRelease;
+	bool hasSongInfo;
 	int subtuneNum;
 	PosDataTable posTable;
 	bool allVoices;
@@ -65,6 +70,7 @@ EditorState state;
 
 void insertUndo(Undoable undoable, UndoValue value) {
 	state.undoQueue.insert(UndoState(undoable, value));
+	state.redoQueue.clear();
 }
 
 void executeUndo() {

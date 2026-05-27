@@ -163,8 +163,8 @@ void mainloop(bool verbose) {
 					int x, y;
 					SDL_GetMouseState(&x, &y);
 					video.scalePosition(x, y);
-					int cx = (x + 4) / 8, cy = y / 14;
-					mainui.clickedAt(cx, cy, evt.button.button);
+					int cx = x / FONT_X, cy = y / FONT_Y;
+					mainui.clickedAt(cx, cy, evt.button.button, evt.button.clicks);
 					break;
 				case 5:
 					//rootwin.windowByCoord(cx, cy).mousewheelDown();
@@ -412,4 +412,3 @@ void loadFile(string filename){
 		mainui.update();
 	}
 }
-

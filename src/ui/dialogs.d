@@ -286,6 +286,8 @@ class FileSelector : Window {
 	private File[] filelist;
 	string directory;
 	alias area filearea;
+	private int lastClickNum = -1;
+	private uint lastClickTicks;
 	
 	this(Rectangle a) {
 		super(a);
@@ -307,6 +309,7 @@ class FileSelector : Window {
 
 	void reset() {
 		fpos.offset = fpos.pos = 0;
+		lastClickNum = -1;
 	}
 
 	override void update() { 
@@ -381,6 +384,34 @@ class FileSelector : Window {
 			break;
 		}
 		return OK;
+	}
+
+	int mouseClick(int x, int y, int button) {
+		if(button != SDL_BUTTON_LEFT) return OK;
+		if(y < area.y || y >= area.y + area.height) return OK;
+
+		int row = y - area.y;
+		int clickedNum = fpos.offset + row;
+		if(clickedNum < 0 || clickedNum >= filelist.length) return OK;
+
+		uint now = SDL_GetTicks();
+		bool doubleClick = clickedNum == lastClickNum &&
+			now - lastClickTicks <= 500;
+
+		fpos.pos = row;
+		lastClickNum = clickedNum;
+		lastClickTicks = now;
+
+		if(doubleClick && filelist[clickedNum].isdir) {
+			fileHandler();
+			return WRAPR;
+		}
+
+		return WRAP;
+	}
+
+	override void clickedAt(int x, int y, int button, int clicks = 1) {
+		mouseClick(x, y, button);
 	}
 	
 	char[][] listdir(string udir) {
@@ -504,6 +535,21 @@ class DialogString : Window {
 	}
 	alias setString setOutputString;
 
+	bool containsPoint(int x, int y) {
+		return y == input.y &&
+			x >= input.x &&
+			x < input.x + input.inputLength;
+	}
+
+	override void clickedAt(int x, int y, int button, int clicks = 1) {
+		if(button != SDL_BUTTON_LEFT || y != input.y) return;
+
+		int n = x - input.x;
+		if(n < 0) n = 0;
+		if(n >= input.inputLength) n = input.inputLength - 1;
+		input.nibble = n;
+	}
+
 	override void update() {
 		input.update();
 	}
@@ -595,6 +641,28 @@ class FileSelectorDialog : WindowSwitcher {
 			fsel.update();
 		}
 		input = activeWindow.input;
+	}
+
+	override void clickedAt(int x, int y, int button, int clicks = 1) {
+		if(button != SDL_BUTTON_LEFT) return;
+
+		if(y >= fsel.area.y && y < fsel.area.y + fsel.area.height &&
+		   x >= fsel.area.x && x < fsel.area.x + fsel.area.width + 5) {
+			activateWindow(0);
+			int r = fsel.mouseClick(x, y, button);
+			if(r == WRAPR)
+				sdir.setString(getcwd());
+			if(r == WRAP) {
+				int ind = cast(int) (1 + fsel.getSelected().lastIndexOf(DIR_SEPARATOR));
+				sfile.setString(cast(string)(fsel.getSelected()[ind..$]));
+			}
+			return;
+		}
+
+		if(sfile.containsPoint(x, y)) {
+			activateWindow(2);
+			sfile.clickedAt(x, y, button, clicks);
+		}
 	}
 
 	override int keypress(Keyinfo key) {

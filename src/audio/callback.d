@@ -93,10 +93,9 @@ extern(C) __gshared void audio_frame() nothrow {
 		// 	dump[dumpctr][i] = song.sidbuf[i];
 	}
 
-	// Update visualizer with current SID register state and player memory
-	// Read shinst (shadow instrument) variable location from player
-	int shinstOffset = (song.offsets.length > Offsets.SHTRANS) ? song.offsets[Offsets.SHTRANS] : 0;
-	audio.visualizer.updateSidRegisters(cast(ubyte[])sidreg[0..0x19], song.memspace, shinstOffset);
+	// Update visualizer with current SID register state and player memory.
+	int playerStateOffset = (song.offsets.length > Offsets.SHTRANS) ? song.offsets[Offsets.SHTRANS] : 0;
+	audio.visualizer.updateSidRegisters(cast(ubyte[])sidreg[0..0x19], song.memspace, playerStateOffset);
 
 	// if(com.session.debugMode) {
 	// 	dumpctr++;

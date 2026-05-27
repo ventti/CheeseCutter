@@ -14,6 +14,7 @@ import ui.dialogs;
 import ui.input;
 import derelict.sdl2.sdl;
 import ct.base;
+import std.array : replicate;
 
 
 class TrackVoice : SeqVoice {
@@ -59,6 +60,8 @@ class TrackVoice : SeqVoice {
 		void printTrack() {
 			if(!displayTracklist) return;
 
+			screen.cprint(area.x - 1, scry, 1, 0,
+						  replicate(" ", area.width + 1));
 			screen.cprint(area.x - 1, scry, 1, 0,
 						  " " ~ formatTrackValue(wseq.track.smashedValue));
 
@@ -428,7 +431,6 @@ abstract class BaseTrackTable : VoiceTable, Undoable {
 		UndoValue v;
 
 		v.trackValue = (cast(InputTrack)input).trk.dup;
-		v.track = (cast(InputTrack)input).trk;
 
 		if(allVoices) {
 			for(int i = 0; i < voices.length; i++) {
@@ -455,8 +457,6 @@ abstract class BaseTrackTable : VoiceTable, Undoable {
 		foreach(t; v.trackLists) {
 			t.source.overwriteFrom(t.store);
 		}
-
-		v.track = v.trackValue;
 
 		posTable.copyFrom(v.posTable);
 		refresh();

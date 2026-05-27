@@ -68,6 +68,14 @@ int paddedStringLength(string s, char padchar) {
 	return 0;
 }
 
+char[32] paddedString32(string s) {
+	char[32] value = ' ';
+	int len = cast(int)s.length;
+	if(len > 32) len = 32;
+	value[0..len] = s[0..len];
+	return value;
+}
+
 void hexdump(ubyte[] buf, int rowlen) {
 	hexdump(buf, rowlen, false);
 }

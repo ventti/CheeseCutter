@@ -936,12 +936,7 @@ final class Sequencer : Window, Undoable {
 				 }
 				 if(activeView != trackTable) {
 					 activateTracktable();
-					 trackTable.displayTracklist = (key.mods & KMOD_SHIFT) > 0;
-					 break;
-				 }
-				 if(key.mods & KMOD_SHIFT) {
-					 activateTracktable();
-					 trackTable.displayTracklist(true);
+					 trackTable.displayTracklist = false;
 					 break;
 				 }
 				 goto case SDLK_F6;
@@ -988,13 +983,33 @@ final class Sequencer : Window, Undoable {
 		return OK;
 	}
 
-	override void clickedAt(int x, int y, int button) {
+	override void clickedAt(int x, int y, int button, int clicks = 1) {
 		foreach(idx, Voice v; activeView.voices) {
 			if(v.area.overlaps(x, y)) {
 				activateVoice(cast(int)idx);
-				activeView.clickedAt(x - area.x, y - area.y, button);
+				activeView.clickedAt(x - area.x, y - area.y, button, clicks);
 			}
 		}
+	}
+
+	void seekPatternOffset(int offset) {
+		activeView.posTable.pointerOffset = 0;
+		foreach(voice, v; activeView.voices) {
+			int pos;
+			int lastTrack = v.tracks.trackLength - 1;
+			for(int trackIndex = 0; trackIndex <= lastTrack; trackIndex++) {
+				int rows = song.sequence(v.tracks[trackIndex]).rows;
+				if(offset < pos + rows || trackIndex == lastTrack) {
+					v.pos.trkOffset = trackIndex;
+					v.pos.seqOffset = clamp(offset - pos, 0, rows - 1);
+					v.pos.rowCounter = pos + v.pos.seqOffset;
+					break;
+				}
+				pos += rows;
+			}
+		}
+		activeView.refresh();
+		activeView.step(0);
 	}
 
 protected:

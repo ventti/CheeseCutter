@@ -29,6 +29,7 @@ F3..............Play from cursor position
 F4..............Stop playback
 F8..............Fast forward (w/ Shift = Fast forward more)
 Scroll Lock.....Start/stop tracking (works only when playing)
+Ctrl-F5.........Start/stop tracking (works only when playing)
 Ctrl-1,2,3......Toggle voices on/off
 Ctrl-F9.........Show/hide playback info (works only when playing)
 
@@ -164,4 +165,3 @@ ContextHelp genPlayerContextHelp(string title, char*[] descriptions) {
 	ContextHelp ctx = ContextHelp(title, [text]);
 	return ctx;
 }
-

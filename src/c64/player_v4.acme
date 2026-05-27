@@ -3,11 +3,18 @@
 ;;; Based on JCH NP 21.G4 by Laxity/VIB
 ;;; ----------------------------------------
 ;;;
-;;; BIG PICTURE
-;;; -----------
-;;; A 3-voice SID replayer driven once per frame (or N times per frame
-;;; when MULTISPEED is on). Each voice independently walks a small
-;;; bytecoded VM whose layers are, from top to bottom:
+;;; READER'S MAP
+;;; ------------
+;;; This player is optimized around a small invariant: sequence parsing
+;;; decides WHAT should happen, while the sound pass decides WHEN it is
+;;; safe to touch SID registers. That split lets notes, ties,
+;;; hard-restarts, wavetable movement and effects share one compact
+;;; per-voice state machine without losing the 1-frame timing that
+;;; gives CheeseCutter instruments their character.
+;;;
+;;; The data model is intentionally layered. Higher layers choose
+;;; musical events; lower layers transform the current event into SID
+;;; register values:
 ;;;
 ;;;   song        -> tracklo/trackhi + twraplo/twraphi (per voice)
 ;;;                  A list of "which sequence to play next" plus an
@@ -33,9 +40,10 @@
 ;;;   cmd table   -> cmd1/cmd2/cmd3 ("super" commands: slide, vibrato,
 ;;;                  portamento, set ADSR, set offset, set lovib, stop)
 ;;;
-;;; PER-FRAME PIPELINE (subplay -> run -> main loop per voice)
-;;;   1. speed handling (speedcnt, playspeed, optional break-speed
-;;;      chord-driven groove).
+;;; FRAME INTENT (subplay -> run -> main loop per voice)
+;;;   1. Decide whether this call is a song-frame boundary or only a
+;;;      sound/effect tick. MULTISPEED reaches here more often than
+;;;      the sequencer advances.
 ;;;   2. For each voice x in 2,1,0:
 ;;;        updtrack -> pull next sequence from track (when newseq set)
 ;;;        updseq   -> advance through sequence bytes, latch note /
@@ -50,11 +58,14 @@
 ;;;        checksuper -> apply any non-CMD "super" bytes (inline pulse,
 ;;;                    filter, chord, ADSR nibble, volume, speed set)
 ;;;        setsid   -> commit freq/AD/SR/pulse/waveform to $d400..$d404
-;;;   3. filter routine runs once (global) and writes $d415..$d418.
+;;;   3. Run the filter program once, after all voices, because SID has
+;;;      one shared filter path.
 ;;;
-;;; SYNCHRONISATION STATE MACHINE (tsync / synccnt, per voice)
-;;;   tsync counts down from the moment a new note is triggered and
-;;;   controls the hard-restart handshake:
+;;; NOTE START CONTRACT (tsync / synccnt, per voice)
+;;;   New notes are deliberately delayed across a few frames so the
+;;;   previous gate can close before the new gate opens. This avoids
+;;;   clicks and preserves the old CheeseCutter hard-restart sound.
+;;;   tsync counts down from the moment a new note is parsed:
 ;;;     tsync = $ff -> brand new note this frame, open gate and parse
 ;;;                    any super cmd attached to it
 ;;;     tsync =  1  -> one frame before gate-on: if synccnt >= 2 apply
@@ -371,7 +382,10 @@ mplay		jmp submplay
 }
 sync		!8 0				; global pulse bumped by seq speed=0
 ;---------------------------------------
-;;; subinit: set up song pointers for song number A.
+;;; subinit: bind the selected song record to the live voice state.
+;;; The editor and packed player both enter through this contract, so
+;;; all play modes agree on where tracks wrap and which voices start
+;;; enabled.
 ;;; songsets layout per song (8 bytes): track1_lo/hi, track2_lo/hi,
 ;;; track3_lo/hi, initial voice mask, initial speed. A*8 is the
 ;;; record offset; shift into Y.
@@ -386,9 +400,9 @@ subinit		asl
 !if INCLUDE_SYNC = TRUE {
 		stx sync
 }
-;;; Copy the three track-wrap pointers into twraplo/twraphi; these are
-;;; the addresses the tracks will loop back to when a song-wrap byte
-;;; ($f0..$ff) is hit.
+;;; `twrap*` keeps the immutable start point for each track. `track*`
+;;; may wander as the song plays, but wrap bytes always jump relative
+;;; to this anchor.
 subinit0	lda songsets,y
 		sta twraplo,x
 		iny
@@ -445,11 +459,11 @@ submplay	lda #$40
 		jmp syncskip
 }
 ;;; ----------------------------------------
-;;; Main play tick. If state != 0 (i.e. init just ran) we do a cold
-;;; start: zero all per-voice state variables between clrfirst/clrlast,
-;;; arm synccnt so the very first note gets hard-restarted, set max
-;;; volume, clear filter, and return without producing sound this
-;;; frame. From the next call onwards `run` is taken.
+;;; Main play tick. A non-zero `state` means a caller changed mode
+;;; (init/keyjam/multispeed), so the first call establishes a known
+;;; audio baseline before any note data is consumed. This is why init
+;;; is silent for one frame: register state becomes deterministic
+;;; before the next call enters the real pipeline.
 ;;; ----------------------------------------
 subplay
 		lda state
@@ -511,9 +525,10 @@ nowrap          inc speedsub
 speedok		sta speedcnt
 speeddone
 ;---------------------------------------
-;;; Per-voice main loop. X iterates 2,1,0 (voice 3,2,1). Silent voices
-;;; (voicon = 0) fall straight through. Otherwise pick which stage of
-;;; the pipeline to run on this tick:
+;;; Per-voice scheduler. Every enabled voice runs sound work each call,
+;;; but track and sequence decoding happen only on specific speedcnt
+;;; phases. This keeps effect timing smooth while preserving the compact
+;;; sequence format:
 ;;;   speedcnt == 0    -> song frame boundary, advance sequence
 ;;;   speedcnt == 1    -> one tick before that, advance track if seq
 ;;;                       asked for a new one (newseq)
@@ -530,8 +545,13 @@ trackon		inc synccnt,x			; "frames this voice has been on"
 		jmp updsound
 jupdseq		jmp updseq
 ;---------------------------------------
-;;; updtrack: consume one track record into curseq and (optionally)
-;;; update the per-track transpose. Track bytes are signed:
+;;; Track rows are the song's arrangement layer: they choose the next
+;;; sequence and optionally update the transposition that future real
+;;; notes inherit. `newseq` also doubles as a resume offset, which is
+;;; how the editor can restart playback from the middle of a sequence
+;;; without inventing a separate cursor-only path.
+;;;
+;;; Track bytes are signed:
 ;;;   $80      no transpose change, but next byte is the sequence #
 ;;;   $80..$9f no-op reserved
 ;;;   $a0..$bf set shtrans2 = A-$a0 (signed transpose for new seqs)
@@ -539,8 +559,6 @@ jupdseq		jmp updseq
 ;;;   $f0..$ff song-wrap: next byte is an offset added to twraplo/hi;
 ;;;            low 3 bits of the wrap byte bump the high byte, so a
 ;;;            full 11-bit relative jump inside the track block.
-;;; newseq also encodes "how many sequence bytes to skip" in its low
-;;; 7 bits (seqcnt init), letting the editor start mid-pattern.
 updtrack	lda newseq,x
 		beq skiptrack
 		sec
@@ -592,18 +610,19 @@ trk03		inc tracklo,x
 		inc trackhi,x
 skiptrack	jmp updsound
 ;---------------------------------------
-;;; updseq: advance inside the current sequence. durcnt holds "ticks
-;;; left on the currently held row"; while it's non-negative we just
-;;; sustain and keep running effects. When it underflows we pull the
-;;; next row's bytes from (seqlo[curseq], seqhi[curseq]).
+;;; Sequence parsing only latches intent into shadow registers. It does
+;;; not open gates or write SID state directly; that is left to
+;;; updsound so hard-restart timing remains identical for sequencer,
+;;; keyjam and follow-play paths. While durcnt is non-negative the
+;;; current row is still being held and only sound/effects run.
 ;;;
 ;;; Sequence bytecode (byte at seqcnt,y):
-;;;   $00..$5e  note value (stored in shnote)
-;;;   $5f..$5f  "tie" (legato) - set tienote, continue parsing
+;;;   $00..$5e  note/gate token (0 rest, 1 off, 2 on, >=3 pitch)
+;;;   $5f       tie flag: keep parsing and apply next note legato
 ;;;   $60..$bf  note + super cmd: A-$60 = note, next byte = cmd index
-;;;   $bf       end-of-sequence -> request next track entry
 ;;;   $c0..$ef  instrument change: instrument = A - $bf (sets newins)
 ;;;   $f0..$ff  set row duration: low nibble = ticks to hold
+;;;   next byte after a row may be $bf to request the next track entry
 ;;; tsync = 2 primes the sync machine: next frame will evaluate HR,
 ;;; the frame after that opens the gate.
 updseq		dec durcnt,x
@@ -707,9 +726,12 @@ snotporta
 }
 
 ;;; ----------------------------------------
-;;; sound work.
+;;; Sound work.
 ;;;
-;;; The sync state machine is the trickiest part of the player.
+;;; This pass turns shadow intent into SID-facing state. It is the only
+;;; place that may decide to close/reopen a gate, so note starts stay
+;;; consistent regardless of who triggered them.
+;;;
 ;;; tsync,x transitions (decremented each call while > 0):
 ;;;   tsync < 0 ($fe/$ff when idle): nothing to do -> syncskip
 ;;;   tsync == 2: parsed a new note last frame, waiting
@@ -766,10 +788,10 @@ syncgate	cmp #$ff
 		beq syncgateon
 		jmp syncskip
 
-;;; Full note-on: latch ADSR into shadow regs, set up freq base,
-;;; trigger pulse/filter programs, set the wave-table position, open
-;;; the gate, and clear synccnt so a future note has to wait 2 frames
-;;; before it may HR again.
+;;; Full note-on. From this point the new row becomes audible: cached
+;;; instrument values are applied, table programs are armed, the gate is
+;;; opened and synccnt is reset so a later hard-restart must wait for a
+;;; real gap again.
 syncgateon	lda newinsflag,x
 		beq checknote
 
@@ -796,8 +818,9 @@ checknote	lda shtrans,x			;set transpose to current
 		ldy effstate,x			;skip if portamento
 		bmi skipsetfrq			
 !if INCLUDE_CMD_PORTA = TRUE {
-		;; Not porta: seed plo/phi with this note's frequency so
-		;; any future portamento starts from the correct pitch.
+		;; Portamento owns plo/phi as "current pitch". For ordinary
+		;; notes, seed them from the new note so the next porta starts
+		;; from what the listener actually heard.
 		tay
 		lda freqtable_lo,y
 		sta plo,x
@@ -805,11 +828,10 @@ checknote	lda shtrans,x			;set transpose to current
 		sta phi,x
 }		
 
-		txa				; (garbage but irrelevant: we
-		sta shfreqlo,x			;  immediately overwrite lo-
-		lda #0				;  byte with 0 on next store?
-		sta shfreqhi,x			;  Actually just a non-zero to
-						;  avoid fall-through edge case)
+		txa				; Preserve exact legacy replay:
+		sta shfreqlo,x			; non-porta notes inherit this
+		lda #0				; original low-byte seed before
+		sta shfreqhi,x			; later effects overwrite it
 skipsetfrq	ldy shinst,x
 		lda inst+INS_ARP,y		;set wave pos
 		sta wavepos,x
@@ -869,10 +891,10 @@ scmddone	lda #0
 		lda #0
 		sta wavecnt,x
 
-		;; HR high nibble decides how to arm the waveform:
-		;;   $40 "soft restart": leave waveform to wave table
-		;;   otherwise          force HR waveform + gate bit now
-		;;                      and mark hardon so dowave skips
+		;; Soft restart lets the wave table define the first audible
+		;; waveform. Other restart modes force the configured HR wave
+		;; immediately and hold off dowave for this frame, preserving
+		;; the intended restart transient.
 		lda inst+INS_HR,y
 		and #$c0			;Check for soft
 		cmp #$40			;restart
@@ -894,7 +916,11 @@ noeffreset	jmp checksuper
 
 syncskip
 ;;; ----------------------------------------
-;;; Pulse-width program. Runs every frame once a program is armed.
+;;; Pulse-width program. Pulse modulation is intentionally independent
+;;; of note duration: once armed, it keeps stepping on sound ticks until
+;;; the program stops or another note/super command points at a new
+;;; entry. This is what lets an instrument carry a living pulse sweep
+;;; across held rows.
 ;;;
 ;;; pulstab is 4 bytes per step:
 ;;;   +0  duration byte. Bit 7 selects direction:
@@ -967,7 +993,12 @@ pulsesub	lda pulselo,x
 		dec pulsehi,x
 pulsedone		  
 ;;; ----------------------------------------
-;;; Per-voice effects (aka SFX). effstate selects exactly one:
+;;; Per-voice effects (aka SFX). Only one continuous effect owns the
+;;; pitch delta at a time. One-shot commands update state immediately
+;;; in checksuper/iscmd; continuous commands set effstate and are
+;;; advanced here each sound tick.
+;;;
+;;; effstate selects:
 ;;;   1 slide up / 2 slide down  -> linear freq offset ramp
 ;;;   3 hi-fi vibrato            -> depth = delta between adjacent
 ;;;                                 semitones (pitch-accurate vibrato)
@@ -1195,9 +1226,15 @@ effdone
 ;;; ----------------------------------------
 ;;; Wavetable + chord -> final SID freq.
 ;;;
+;;; This is the final pitch composition point. Earlier stages record the
+;;; base note and effect offset; the wave table may reinterpret that as
+;;; relative transpose or absolute pitch, and the chord walker may add a
+;;; signed arpeggio offset. Keeping composition here makes slides,
+;;; vibrato, chords and absolute waves interact predictably.
+;;;
 ;;; Wave table is a pair of columns arp1[] (transpose) and arp2[]
-;;; (waveform/delay/loop). It is walked at most once per wavetime
-;;; ticks (set from instrument HR low nibble).
+;;; (waveform/delay/loop). It is walked at most once per wavetime ticks
+;;; (set from instrument HR low nibble).
 ;;;
 ;;; arp1[y] semantics:
 ;;;   $00..$5f  relative transpose up (added to notereal)
@@ -1304,8 +1341,12 @@ wavenotabs	clc
 	
 wavedone
 ;;; ------------------------------------------------------------
-;;; "Super commands" are inline bytes embedded in the sequence that
-;;; don't reference the cmd table. Dispatch by value range:
+;;; Super commands are row-local performance controls. They are parsed
+;;; after the gate opens so ADSR, pulse/filter/chord starts and speed
+;;; changes line up with the audible note rather than the earlier
+;;; sequence-decoding frame.
+;;;
+;;; Dispatch by value range:
 ;;;   $00..$3f  -> true cmd table entry, handled by iscmd below
 ;;;   $40..$5f  -> set pulse program (index = (A & $1f) << 2)
 ;;;   $60..$7f  -> set filter program
@@ -1874,7 +1915,9 @@ freqtable_hi
 		!8 $c4,$d0,$dd,$ea,$f8,$fd
 ;---------------------------------------
 ;;; ----------------------------------------
-;;; Persistent state (not zeroed by subplay).
+;;; Persistent state (not zeroed by subplay). These values represent
+;;; the transport/song position that must survive a cold-start clear of
+;;; per-note sound state.
 ;;; ----------------------------------------
 voicon		!8 1,1,1			;flags channels on and off
 !if EXPORT = FALSE {
@@ -1914,7 +1957,9 @@ clrfirst ;Clear variables from here - all state between clrfirst and
 		 ;clrlast is zeroed by the cold-start branch of subplay.
 
 ;;; ----------------------------------------
-;;; Per-voice runtime state.
+;;; Per-voice runtime state. Everything between clrfirst/clrlast is
+;;; disposable sound state; init clears it so replay starts from a known
+;;; baseline without disturbing song table pointers above.
 ;;; ----------------------------------------
 newinsflag	!8 0,0,0			; instrument just latched?
 newcmdflag	!8 0,0,0			; super/cmd byte just latched?
@@ -1933,8 +1978,10 @@ effstate	!8 0,0,0
 		;; 0x80 = portamento
 		
 ;;; ----------------------------------------
-;;; Shadow variables - latched while parsing the sequence, consumed
-;;; by the gate-on code in updsound.
+;;; Shadow variables are the contract between the parser and sound
+;;; engine. The parser can overwrite them while walking a compact row;
+;;; updsound consumes the final values only when the sync gate says the
+;;; note may become audible.
 ;;; ----------------------------------------
 		;; bit 0 = instrument was set
 		;; bit 1 = cmd was set

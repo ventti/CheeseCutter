@@ -69,6 +69,11 @@ class Cursor {
 		fg2 = bg;
 	}
 
+	void clear() {
+		restore();
+		x = y = -1;
+	}
+
 	void blink() {
 		if(--counter < 0) {
 			int t;

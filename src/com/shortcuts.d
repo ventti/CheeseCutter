@@ -10,6 +10,15 @@ import derelict.sdl2.sdl;
 import ui.input : Keyinfo;
 import std.typecons : Tuple;
 
+private int normalizeShortcutMods(int mods) {
+	int normalized = 0;
+	if(mods & KMOD_SHIFT) normalized |= KMOD_SHIFT;
+	if(mods & KMOD_CTRL) normalized |= KMOD_CTRL;
+	if(mods & KMOD_ALT) normalized |= KMOD_ALT;
+	if(mods & KMOD_GUI) normalized |= KMOD_GUI;
+	return normalized;
+}
+
 /**
  * Represents a keyboard shortcut: a key code and modifier flags.
  * This struct can be used as a hash key in associative arrays.
@@ -23,7 +32,7 @@ struct Shortcut {
 	 */
 	this(Keyinfo keyinfo) {
 		this.key = keyinfo.key;
-		this.mods = keyinfo.mods;
+		this.mods = normalizeShortcutMods(keyinfo.mods);
 	}
 
 	/**
@@ -31,7 +40,7 @@ struct Shortcut {
 	 */
 	this(int key, int mods) {
 		this.key = key;
-		this.mods = mods;
+		this.mods = normalizeShortcutMods(mods);
 	}
 
 	/**
@@ -123,7 +132,6 @@ class ShortcutManager {
 	 */
 	bool handleKeypress(Keyinfo key) {
 		Shortcut shortcut = Shortcut(key);
-		stderr.writefln("DEBUG: Handling keypress");// %d", key);
 
 		// Look up the shortcut in bindings
 		if(shortcut in bindings) {
@@ -174,10 +182,11 @@ class ShortcutManager {
 		bindShortcut("play_from_mark", SDLK_F1, 0);
 		bindShortcut("play_from_mark_follow", SDLK_F1, KMOD_SHIFT);
 		bindShortcut("play_from_beginning", SDLK_F2, 0);
-		bindShortcut("play_from_beginning_follow", SDLK_F2, KMOD_SHIFT);
-		bindShortcut("play_from_cursor", SDLK_F3, 0);
-		bindShortcut("stop_playback", SDLK_F4, 0);
-		bindShortcut("toggle_follow_mode", SDLK_SCROLLLOCK, 0);
+			bindShortcut("play_from_beginning_follow", SDLK_F2, KMOD_SHIFT);
+			bindShortcut("play_from_cursor", SDLK_F3, 0);
+			bindShortcut("stop_playback", SDLK_F4, 0);
+			bindShortcut("toggle_follow_mode", SDLK_SCROLLLOCK, 0);
+			bindShortcut("toggle_follow_mode_alt", SDLK_F5, KMOD_CTRL);
 
 		// Playback Options
 		bindShortcut("fast_forward_5", SDLK_F8, 0);

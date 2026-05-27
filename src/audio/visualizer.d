@@ -71,16 +71,28 @@ private __gshared ubyte[3] lastShinstValues = [255, 255, 255];
 private __gshared float[int][3] persistentBrightness;
 private __gshared int[3] lastRowCounter = [-1, -1, -1];
 
+enum PlaybackTable {
+	Wave,
+	Pulse,
+	Filter,
+	Chord
+}
+
+private __gshared int[3] activeWaveRows = [-1, -1, -1];
+private __gshared int[3] activePulseRows = [-1, -1, -1];
+private __gshared int[3] activeChordRows = [-1, -1, -1];
+private __gshared int activeFilterRow = -1;
+
 /**
  * Call this from audio callback to update SID register monitoring.
  * Monitors control registers (0x04, 0x0b, 0x12) for gate changes.
  * Also reads current instrument numbers from player memory.
  */
-void updateSidRegisters(const ubyte[] sidreg, const ubyte[] playerMem, int shinstOffset) nothrow {
+void updateSidRegisters(const ubyte[] sidreg, const ubyte[] playerMem, int playerStateOffset) nothrow {
 	if(sidreg.length < 0x19) return;
 
 	// Store offset for debug
-	lastShinstOffset = shinstOffset;
+	lastShinstOffset = playerStateOffset + 6;
 
 	// Process each voice
 	for(int v = 0; v < 3; v++) {
@@ -103,7 +115,8 @@ void updateSidRegisters(const ubyte[] sidreg, const ubyte[] playerMem, int shins
 			int currentInstrument = voice.instrumentNum; // Keep current by default
 
 			// Approach 1: Read from shinst if available
-			if(shinstOffset > 0 && shinstOffset + v < playerMem.length) {
+			int shinstOffset = playerStateOffset + 6;
+			if(playerStateOffset > 0 && shinstOffset + v < playerMem.length) {
 				ubyte memInstr = playerMem[shinstOffset + v];
 				lastShinstValues[v] = memInstr; // Store for debug
 				if(memInstr < 48) {
@@ -118,6 +131,13 @@ void updateSidRegisters(const ubyte[] sidreg, const ubyte[] playerMem, int shins
 			}
 
 			voice.instrumentNum = currentInstrument;
+		}
+
+		if(playerStateOffset > 0 && playerStateOffset + 118 < playerMem.length) {
+			activeWaveRows[v] = playerMem[playerStateOffset + 110 + v];
+			activePulseRows[v] = playerMem[playerStateOffset + 80 + v] >> 2;
+			int chordPos = playerMem[playerStateOffset + 116 + v];
+			activeChordRows[v] = chordPos < 0x80 ? chordPos : -1;
 		}
 
 		// Detect gate on transition
@@ -152,6 +172,10 @@ void updateSidRegisters(const ubyte[] sidreg, const ubyte[] playerMem, int shins
 				voice.sustainLevel = sustain;
 			}
 		}
+	}
+
+	if(playerStateOffset > 0 && playerStateOffset + 45 < playerMem.length) {
+		activeFilterRow = playerMem[playerStateOffset + 45] >> 2;
 	}
 }
 
@@ -246,6 +270,36 @@ float getInstrumentBrightness(int instrumentNum) nothrow {
 	return instrumentBrightness[instrumentNum];
 }
 
+float getTableRowBrightness(PlaybackTable table, int row) nothrow {
+	if(row < 0) return 0.0f;
+
+	float brightness = 0.0f;
+	final switch(table) {
+	case PlaybackTable.Wave:
+		for(int v = 0; v < 3; v++)
+			if(activeWaveRows[v] == row)
+				brightness = max(brightness, voices[v].brightness);
+		break;
+	case PlaybackTable.Pulse:
+		for(int v = 0; v < 3; v++)
+			if(activePulseRows[v] == row)
+				brightness = max(brightness, voices[v].brightness);
+		break;
+	case PlaybackTable.Filter:
+		if(activeFilterRow == row) {
+			for(int v = 0; v < 3; v++)
+				brightness = max(brightness, voices[v].brightness);
+		}
+		break;
+	case PlaybackTable.Chord:
+		for(int v = 0; v < 3; v++)
+			if(activeChordRows[v] == row)
+				brightness = max(brightness, voices[v].brightness);
+		break;
+	}
+	return brightness;
+}
+
 /**
  * Get the current brightness for a voice/channel (0.0 to 1.0)
  */
@@ -325,7 +379,10 @@ void resetVisualizer() nothrow {
 	for(int v = 0; v < 3; v++) {
 		voices[v] = VoiceActivity.init;
 		lastInstrument[v] = 0;
+		activeWaveRows[v] = -1;
+		activePulseRows[v] = -1;
+		activeChordRows[v] = -1;
 	}
+	activeFilterRow = -1;
 	instrumentBrightness[] = 0.0f;
 }
-
