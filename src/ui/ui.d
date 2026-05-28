@@ -218,15 +218,17 @@ class WindowSwitcher : Window {
 
 class Infobar : Window, Undoable {
 	private {
-		const int x1, x2;
+		const int x1, infoX, playerX;
 		int idx;
+		bool editing;
 	}
 	InputString inputTitle, inputAuthor, inputReleased;
 
 	this(Rectangle a) {
 		super(a);
 		x1 = area.x;
-		x2 = x1 + (com.fb.mode > 0 ? 64 : 48);
+		infoX = x1 + (com.fb.mode > 0 ? 64 : 48);
+		playerX = infoX + 43;
 	}
 
 	override void update() {
@@ -246,17 +248,18 @@ class Infobar : Window, Undoable {
 		screen.fprint(x1 + 19,area.y,
 				   format("`05Oct: `0d%d  `05Spd: `0d%X  `05St: `0d%d ",
 						  state.octave, song.speed, seq.sequencer.stepValue));
-		screen.fprint(x2+3, area.y+1,
-				   format("`05Rate: `0d%-1d*%dhz  `05SID: `0d%s%s    ",
-						  song.multiplier, audio.player.ntsc ? 60 : 50,
+		screen.fprint(x1,area.y+1,format("`05Filename: `0d%s", state.filename.leftJustify(38)));
+		drawSongField(0, "  `b1T`01itle:", inputTitle, song.title);
+		drawSongField(1, " `01Author:", inputAuthor, song.author);
+		drawSongField(2, "`01Release:", inputReleased, song.release);
+		screen.fprint(playerX, area.y,
+				   format("`05Rate:   `0d%-1d*%dhz",
+						  song.multiplier, audio.player.ntsc ? 60 : 50));
+		screen.fprint(playerX, area.y+1,
+				   format("`05SID:    `0d%s%s",
 						  audio.player.usefp ? audio.player.curfp.id : audio.player.sidtype ? "8580" : "6581",
 						  audio.player.badline ? "&0fb" : " "));
-		screen.fprint(x1,area.y+1,format("`05Filename: `0d%s", state.filename.leftJustify(38)));
-		//screen.fprint(x2,area.y,format("`05  `b1T`01itle: `0d%-32s", std.string.toString(cast(char *)song.title)));
-		screen.fprint(x2,area.y,
-					  format("`05%s `0d%-32s", (["  `b1T`01itle:", " `01Author:", "`01Release:" ])[idx],
-							 song.title));
-		screen.fprint(x2,area.y+2,format("`05 Player: `0d%s", ztos(song.playerID)));
+		screen.fprint(playerX, area.y+2,format("`05Player: `0d%s", ztos(song.playerID)));
 	}
 
 	override void refresh() {
@@ -264,16 +267,18 @@ class Infobar : Window, Undoable {
 		inputReleased = new InputString(cast(string)(song.release), cast(int)( song.release.length));
 		inputAuthor = new InputString(cast(string)(song.author), cast(int)(song.author.length));
 		input = ([ inputTitle, inputAuthor, inputReleased ])[idx];
-		input.setCoord(x2 + 9,area.y);
+		input.setCoord(infoX + 9,area.y + idx);
 	}
 
 	override void activate() {
+		editing = true;
 		idx = 0;
 		refresh();
 	}
 
 	override void deactivate() {
 		outputStrings();
+		editing = false;
 	}
 
 	private void outputStrings() {
@@ -306,7 +311,18 @@ class Infobar : Window, Undoable {
 		return OK;
 	}
 
-private:
+	private:
+
+	void drawSongField(int row, string label, InputString field, ref char[32] value) {
+		screen.fprint(infoX, area.y + row, format("`05%s ", label));
+		if(editing && field !is null && idx == row) {
+			field.update();
+		}
+		else {
+			screen.fprint(infoX + 9, area.y + row,
+						  format("`0d%-32s", value));
+		}
+	}
 
 	char[32] inputValue(InputString input) {
 		return paddedString32(input.toString(false));
@@ -500,7 +516,8 @@ final private class Toplevel : WindowSwitcher, Undoable {
 					   bottomTabSwitcher]);
 		{
 			int x1 = 4;
-			int x2 = x1 + (com.fb.mode > 0 ? 64 : 48);
+			int infoX = x1 + (com.fb.mode > 0 ? 64 : 48);
+			int playerX = infoX + 43;
 			int y1 = screen.height - 4;
 			int settingsX = x1 + 19;
 
@@ -523,13 +540,13 @@ final private class Toplevel : WindowSwitcher, Undoable {
 						else if(b == 3)
 							seq.sequencer.stepValue = clamp(seq.sequencer.stepValue - 1, 0, 9);
 					}),
-				Hotspot(Rectangle(x2 + 3, y1, 1, 30), (int b){
+				Hotspot(Rectangle(infoX, y1, 3, 41), (int b){
 						ui.activateDialog(UI.infobar);
 					}),
-				Hotspot(Rectangle(x2 + 18, y1 + 1, 1, 10), (int b){
+				Hotspot(Rectangle(playerX + 8, y1 + 1, 1, 10), (int b){
 						b > 1 ? audio.player.toggleSIDModel() : audio.player.nextFP();
 					}),
-				Hotspot(Rectangle(x2 + 3, y1 + 1, 1, 14), (int b) {
+				Hotspot(Rectangle(playerX + 8, y1, 1, 14), (int b) {
 						b == 1 ? audio.player.incMultiplier() : audio.player.decMultiplier();
 					})
 				];
@@ -992,7 +1009,7 @@ final class UI {
 	private {
 		Window dialog = null;
 		//bool printSIDDump = false;
-		int vismode;
+		int vismode = VisMode.Regs;
 		AboutDialog aboutdialog;
 		FileSelectorDialog loaddialog, savedialog;
 	}
