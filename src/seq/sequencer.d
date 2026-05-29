@@ -15,6 +15,7 @@ import seq.fplay;
 import seq.tracktable;
 import seq.seqtable;
 import seq.trackmap;
+import com.shortcuts;
 import derelict.sdl2.sdl;
 import std.string;
 import std.stdio;
@@ -760,9 +761,13 @@ final class Sequencer : Window, Undoable {
 	VoiceTable activeView;
 	//private Clip[] clip;
 
+	/// Show the (generated) sequencer help live, so regenerating HELPSEQUENCER
+	/// after the registry is populated takes effect.
+	override ContextHelp contextHelp() { return ui.help.HELPSEQUENCER; }
+
 	this(Rectangle a) {
 		int h = screen.height - 10;
-		super(a,ui.help.HELPSEQUENCER);
+		super(a, ui.help.HELPSEQUENCER);
 
 		// Apply initial height: use command line if set, otherwise use minimum
 		if(initialHeight > 0) {
@@ -886,9 +891,31 @@ final class Sequencer : Window, Undoable {
 		}
 	}
 
+	/// The active sequencer column determines the keyboard-shortcut context.
+	override @property string contextId() {
+		if(activeView is sequenceTable)
+			return Ctx.noteColumn;
+		// trackTable (F5) and trackmapTable (F7 overview) share track commands
+		return Ctx.trackColumn;
+	}
+
+	/// Push the current column's context into the shortcut manager.
+	private void pushContext() {
+		if(mainui !is null && mainui.sm !is null)
+			mainui.sm.setActiveContext(contextId);
+	}
+
 	override int keypress(Keyinfo key) {
-		if(key.raw >= SDLK_KP_0 && key.raw <= SDLK_KP_9) {
+		// Set cursor step value. Keypad 1-9 (Keypad 0 is reserved for "play row",
+		// handled by the note column). Ctrl+Shift+0..9 is the keypad-free
+		// equivalent for keyboards without a numeric keypad (e.g. laptops).
+		if(key.raw >= SDLK_KP_1 && key.raw <= SDLK_KP_9) {
 			stepValue = key.raw - SDLK_KP_0;
+			return OK;
+		}
+		if((key.mods & KMOD_CTRL) && (key.mods & KMOD_SHIFT) &&
+		   key.raw >= SDLK_0 && key.raw <= SDLK_9) {
+			stepValue = key.raw - SDLK_0;
 			return OK;
 		}
 		if(key.mods & KMOD_ALT) {
@@ -937,6 +964,7 @@ final class Sequencer : Window, Undoable {
 				 if(activeView != trackTable) {
 					 activateTracktable();
 					 trackTable.displayTracklist = false;
+					 pushContext();
 					 break;
 				 }
 				 goto case SDLK_F6;
@@ -946,6 +974,7 @@ final class Sequencer : Window, Undoable {
 				 activeView.activate();
 				 // making sure cursor is not past endmark
 				 activeView.step(0);
+				 pushContext();
 				 break;
 			 case SDLK_F7:
 				 activeView.deactivate();
@@ -959,6 +988,7 @@ final class Sequencer : Window, Undoable {
 					 activeView = trackmapTable;
 				 }
 				 activeView.activate();
+				 pushContext();
 				 break;
 /+
 			 case SDLK_MINUS:

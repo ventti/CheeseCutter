@@ -18,6 +18,7 @@ import seq.fplay;
 import com.fb;
 import com.util;
 import com.shortcuts;
+import ui.shorthelp;
 import seq.sequencer;
 import audio.audio;
 import std.string;
@@ -55,9 +56,10 @@ abstract class Window {
 	Rectangle area;
 	Input input;
 	protected ContextHelp help;
+	private bool hasCustomHelp;
 
 	this(Rectangle a) {
-		this(a, ui.help.HELPMAIN);
+		area = a;
 	}
 
 	this(Rectangle a, ContextHelp ctx) {
@@ -73,10 +75,17 @@ abstract class Window {
 	void activate() { refresh(); }
 	void clickedAt(int scrx, int scry, int button, int clicks = 1) {}
 
+	/// Identifies the keyboard-shortcut context this window provides. The active
+	/// window's contextId is pushed into the ShortcutManager so context-specific
+	/// command shortcuts resolve correctly. Defaults to global.
+	@property string contextId() { return Ctx.global; }
+
 protected:
 
-	@property void contextHelp(ContextHelp h) { help = h; }
-	@property ContextHelp contextHelp() { return help; }
+	@property void contextHelp(ContextHelp h) { help = h; hasCustomHelp = true; }
+	// Default windows show the (generated) global help live, so regenerating
+	// ui.help.HELPMAIN after the registry is populated takes effect everywhere.
+	@property ContextHelp contextHelp() { return hasCustomHelp ? help : ui.help.HELPMAIN; }
 
 	final void drawFrame() { drawFrame(area); }
 
@@ -161,6 +170,8 @@ class WindowSwitcher : Window {
 		activeWindow.activate();
 		activeWindowNum = n;
 		input = activeWindow.input;
+		if(mainui !is null && mainui.sm !is null)
+			mainui.sm.setActiveContext(activeWindow.contextId);
 		refresh();
 	}
 
@@ -211,6 +222,10 @@ class WindowSwitcher : Window {
 		return activeWindow.contextHelp();
 	}
 
+	override @property string contextId() {
+		return activeWindow.contextId;
+	}
+
 	override void clickedAt(int scrx, int scry, int button, int clicks = 1) {
 		//	activateAt(scrx - activeWindow.area.x, scry - activeWindow.area.y);
 	}
@@ -223,6 +238,9 @@ class Infobar : Window, Undoable {
 		bool editing;
 	}
 	InputString inputTitle, inputAuthor, inputReleased;
+
+	override @property string contextId() { return Ctx.songInfo; }
+	override ContextHelp contextHelp() { return ui.help.HELPMAIN; }
 
 	this(Rectangle a) {
 		super(a);
@@ -237,7 +255,7 @@ class Infobar : Window, Undoable {
 
 		screen.clrtoeol(0, headerColor);
 
-		enum hdr = "CheeseCutter 2.9" ~ com.util.versionInfo;
+		enum hdr = com.util.APP_NAME ~ " " ~ com.util.APP_VERSION ~ com.util.versionInfo;
 		screen.cprint(4, 0, 1, headerColor, hdr);
 		screen.cprint(screen.width - 14, 0, 1, headerColor, "F12 = Help");
 		int c1 = audio.player.isPlaying ? 13 : 12;
@@ -490,15 +508,22 @@ final private class Toplevel : WindowSwitcher, Undoable {
 			tx += com.fb.border + 10;
 
 			Rectangle ca;
+			int tracksX;
 			if(com.fb.mode == 0) {
 				ca = Rectangle(tx - 6, zone1y, zone1h, 6);
+				tracksX = tx;
 			}
-			else ca = Rectangle(tx, zone2y, zone2h, 6);
+			else {
+				ca = Rectangle(tx, zone2y, zone2h, 6);
+				tracksX = tx + 6 + com.fb.border;
+			}
 			chordtable = new ChordTable(ca);
-			bottomSwitcherW = tx + com.fb.border + 10;
+			// Tracks table is always present; place it after the bottom tables.
+			trackstable = new TracksTable(Rectangle(tracksX, zone2y, zone2h, tracksWidth));
+			bottomSwitcherW = tracksX + tracksWidth - bottomSwitcherX;
 			bottomWindows = [cast(Window)wavetable, pulsetable, filtertable,
-							 cmdtable, chordtable];
-			bottomHotkeys = "wpfmd";
+							 cmdtable, chordtable, trackstable];
+			bottomHotkeys = "wpfmdr";
 		}
 
 		bottomTabSwitcher = new WindowSwitcher(Rectangle(bottomSwitcherX, bottomSwitcherY,
@@ -608,123 +633,14 @@ final private class Toplevel : WindowSwitcher, Undoable {
 			break;
 		}
 
-		if(key.mods & KMOD_ALT) {
-			switch(key.raw)
-			{
-			case SDLK_v:
-				activateWindow(0);
-				break;
-			case SDLK_1:
-				if(!(key.mods & KMOD_CTRL)) {
-					activateWindow(0);
-					sequencer.activateVoice(0);
-				}
-				break;
-			case SDLK_2:
-				if(!(key.mods & KMOD_CTRL)) {
-					activateWindow(0);
-					sequencer.activateVoice(1);
-				}
-				break;
-			case SDLK_3:
-				if(!(key.mods & KMOD_CTRL)) {
-					activateWindow(0);
-					sequencer.activateVoice(2);
-				}
-				break;
-			case SDLK_4:
-			case SDLK_i:
-				activateWindow(1);
-				break;
-			case SDLK_5, SDLK_w:
-				activateWindow(2);
-				key.key = SDLK_w;
-				activeWindow.keypress(key);
-				return OK;
-			case SDLK_6, SDLK_p:
-				activateWindow(2);
-				key.key = SDLK_p;
-				activeWindow.keypress(key);
-				return OK;
-			case SDLK_7, SDLK_f:
-				activateWindow(2);
-				key.key = SDLK_f;
-				activeWindow.keypress(key);
-				return OK;
-			case SDLK_8, SDLK_m:
-				activateWindow(2);
-				key.key = SDLK_m;
-				activeWindow.keypress(key);
-				return OK;
-			case SDLK_9, SDLK_d:
-				activateWindow(2);
-				key.key = SDLK_d;
-				activeWindow.keypress(key);
-				return OK;
-			case SDLK_t:
-				ui.activateDialog(UI.infobar);
-				return OK;
-			case SDLK_KP_0:
-				clearSeqs();
-				return OK;
-			case SDLK_KP_PERIOD:
-				optimizeSong();
-				return OK;
-			case SDLK_o:
-				if(key.mods & KMOD_CTRL) {
-					optimizeSong();
-					return OK;
-				}
-				break;
-			case SDLK_n:
-				if(key.mods & KMOD_CTRL) {
-					return OK;
-				}
-				break;
-			case SDLK_c:
-				if(key.mods & KMOD_CTRL) {
-					clearSeqs();
-					return OK;
-				}
-				break;
-			case SDLK_h:
-				state.displayHelp ^= 1;
-				UI.statusline.display("Help texts " ~ (state.displayHelp ? "enabled." : "disabled."));
-				break;
-			default:
-				break;
-			}
-		}
-		else if(key.mods & KMOD_CTRL) {
-			switch(key.raw)
-			{
-			 case SDLK_PLUS:
-			 case SDLK_KP_PLUS:
-				 song.speed = clamp(song.speed + 1, 0, 31);
-				 break;
-			 case SDLK_MINUS:
-			 case SDLK_KP_MINUS:
-				 song.speed = clamp(song.speed - 1, 0, 31);
-				 break;
-			case SDLK_TAB:
-				key.mods & KMOD_SHIFT ? activeWindowNum-- : activeWindowNum++ ;
-				if(activeWindowNum < 0) activeWindowNum = cast(int)( windows.length - 1);
-				if(activeWindowNum >= windows.length)
-					activeWindowNum %= windows.length;
-				activateWindow();
-				return OK;
-			case SDLK_z:
-				com.session.executeUndo();
-				return OK;
-			case SDLK_r:
-				com.session.executeRedo();
-				refresh();
-				return OK;
-			default:
-				break;
-			}
-		}
-		else if(!key.mods & KMOD_SHIFT) {
+		// Global Alt- and Ctrl- command shortcuts (window switching, undo/redo,
+		// song speed, clear/optimize, etc.) are handled centrally by the
+		// ShortcutManager in UI.keypress before reaching here, so their former
+		// duplicate switch branches have been removed. The [ ] { } speed and
+		// multiplier keys above stay because they are matched on key.unicode,
+		// which the registry does not key on. The block below keeps the
+		// data-entry / cursor keys that are intentionally not in the registry.
+		if(!key.mods & KMOD_SHIFT) {
 			switch(key.raw)
 			 {
 			 case SDLK_KP_DIVIDE:
@@ -815,6 +731,17 @@ final private class Toplevel : WindowSwitcher, Undoable {
 		pulsetable.seekProgram(song.instrumentTable[ins + 5 * 48]);
 		filtertable.seekProgram(song.instrumentTable[ins + 4 * 48]);
 		refresh();
+	}
+
+	void cycleBottomSubwindow(bool reverse) {
+		if(activeWindow != bottomTabSwitcher) {
+			activateWindow(2);
+		}
+		bottomTabSwitcher.activeWindowNum += reverse ? -1 : 1;
+		bottomTabSwitcher.activeWindowNum = umod(bottomTabSwitcher.activeWindowNum, 0,
+												 cast(int)bottomTabSwitcher.windows.length - 1);
+		bottomTabSwitcher.activateWindow();
+		input = bottomTabSwitcher.input;
 	}
 
 	bool fplayEnabled() { return followplay; }
@@ -1017,9 +944,13 @@ final class UI {
 	static Infobar infobar;
 	static Toplevel toplevel;
 	bool exitRequested = false;
-	ShortcutManager sm = new ShortcutManager();
-	
+	// Constructed at runtime in the ctor (NOT via a field initializer): a
+	// `= new` field initializer is evaluated with CTFE and baked into shared
+	// .init memory, which corrupts the manager's associative arrays at runtime.
+	ShortcutManager sm;
+
 	this() {
+		sm = new ShortcutManager();
 		statusline = new Statusline(Rectangle(0, 2, 1));
 		toplevel = new Toplevel(this);
 
@@ -1039,7 +970,7 @@ final class UI {
 												  dialog_width), &saveCallback);
 
 		int aboutdlg_width = screen.width - 18;
-		int aboutdlg_height = 12;
+		int aboutdlg_height = 13;
 		// Cap dialog width to reasonable size (prevent overflow in fprint)
 		if(aboutdlg_width > 100) aboutdlg_width = 100;
 		int aboutdlg_x = screen.width / 2 - aboutdlg_width / 2;
@@ -1058,16 +989,25 @@ final class UI {
 		
 		// Initialize and register keyboard shortcuts
 		registerShortcuts();
-		
+		// Seed the active context from the initially active window (mainui is not
+		// assigned yet during construction, so the WindowSwitcher push is skipped).
+		sm.setActiveContext(toplevel.contextId);
+		// Generate the F12 help pages from the now-populated registry.
+		ui.help.HELPMAIN = genMainHelp(sm);
+		ui.help.HELPSEQUENCER = genSequencerHelp(sm);
+
 		update();
 	}
 	
 	/**
-	 * Register all keyboard shortcut actions and load default bindings
+	 * Register all keyboard shortcut actions, their bindings and metadata.
+	 * This is the single source of truth for global command shortcuts; help
+	 * text and doc/KEYBOARD.md are generated from these registrations.
 	 */
-	private void registerShortcuts() {		
+	private void registerShortcuts() {
 		// Application Control
-		sm.registerAction("exit_app", {
+		sm.register("exit_app", Ctx.global, "Application",
+					"Quit program (press twice)", SDLK_ESCAPE, 0, {
 			if(dialog || activeWindow == infobar)
 				return;
 			if(++escapecounter > 1) {
@@ -1079,12 +1019,14 @@ final class UI {
 			}
 			tickcounter3 = 0;
 		});
-		
-		sm.registerAction("toggle_fullscreen", {
+
+		sm.register("toggle_fullscreen", Ctx.global, "Application",
+					"Toggle fullscreen", SDLK_RETURN, KMOD_ALT, {
 			video.toggleFullscreen();
 		});
-		
-		sm.registerAction("help_dialog", {
+
+		sm.register("help_dialog", Ctx.global, "Application",
+					"Open context help", SDLK_F12, 0, {
 			int helpdlg_width = screen.width - 10;
 			int helpdlg_height = 36;
 			int helpdlg_x = screen.width / 2 - helpdlg_width / 2;
@@ -1095,22 +1037,26 @@ final class UI {
 										 helpdlg_width), activeWindow.contextHelp);
 			activateDialog(helpdialog);
 		});
-		
-		sm.registerAction("screenshot", {
+
+		sm.register("screenshot", Ctx.global, "Application",
+					"Save screenshot", SDLK_F12, KMOD_CTRL, {
 			// Handled in main.d before translation
 			// This action registered for consistency but won't be triggered here
 		});
-		
+
 		// File Operations
-		sm.registerAction("load_file", {
+		sm.register("load_file", Ctx.global, "File",
+					"Open the Load song dialog", SDLK_F9, 0, {
 			activateDialog(loaddialog);
 		});
-		
-		sm.registerAction("save_file", {
+
+		sm.register("save_file", Ctx.global, "File",
+					"Open the Save song dialog", SDLK_F10, 0, {
 			activateDialog(savedialog);
 		});
-		
-		sm.registerAction("quick_save", {
+
+		sm.register("quick_save", Ctx.global, "File",
+					"Quick save song (doesn't ask a filename)", SDLK_F10, KMOD_CTRL, {
 			string s = savedialog.filename;
 			if(s == "")
 				statusline.display("Cannot Quicksave; give filename first by doing a regular save.");
@@ -1119,39 +1065,45 @@ final class UI {
 				statusline.display(format("Saved \"%s\".",s));
 			}
 		});
-		
+
 		// Undo/Redo
-		sm.registerAction("undo", {
+		sm.register("undo", Ctx.global, "Edit", "Undo", SDLK_z, KMOD_CTRL, {
 			com.session.executeUndo();
 		});
-		
-		sm.registerAction("redo", {
+
+		sm.register("redo", Ctx.global, "Edit", "Redo", SDLK_r, KMOD_CTRL, {
 			com.session.executeRedo();
 			refresh();
 		});
-		
+
 		// Playback Controls
-		sm.registerAction("play_from_mark", {
+		sm.register("play_from_mark", Ctx.global, "Playback",
+					"Play from playback mark", SDLK_F1, 0, {
 			F1orF2(Keyinfo(0, 0, 0), false);
 		});
-		
-		sm.registerAction("play_from_mark_follow", {
+
+		sm.register("play_from_mark_follow", Ctx.global, "Playback",
+					"Play / resume from mark with tracking", SDLK_F1, KMOD_SHIFT, {
 			F1orF2(Keyinfo(0, KMOD_SHIFT, 0), false);
 		});
-		
-		sm.registerAction("play_from_beginning", {
+
+		sm.register("play_from_beginning", Ctx.global, "Playback",
+					"Play from the start", SDLK_F2, 0, {
 			F1orF2(Keyinfo(0, 0, 0), true);
 		});
-		
-		sm.registerAction("play_from_beginning_follow", {
+
+		sm.register("play_from_beginning_follow", Ctx.global, "Playback",
+					"Play / resume from the start with tracking", SDLK_F2, KMOD_SHIFT, {
 			F1orF2(Keyinfo(0, KMOD_SHIFT, 0), true);
 		});
-		
-		sm.registerAction("play_from_cursor", {
+
+		sm.register("play_from_cursor", Ctx.global, "Playback",
+					"Play from cursor position", SDLK_F3, 0, {
 			toplevel.playFromCursor();
 		});
-		
-		sm.registerAction("stop_playback", {
+
+		sm.register("stop_playback", Ctx.global, "Playback",
+					"Stop playback", SDLK_F4, 0, {
 			if(toplevel.fplayEnabled())
 				seqPos.copyFrom(fplayPos);
 			stop();
@@ -1159,244 +1111,483 @@ final class UI {
 				toplevel.stopFp();
 		});
 
-		sm.registerAction("toggle_follow_mode", {
+		sm.register("toggle_follow_mode", Ctx.global, "Playback",
+					"Start/stop tracking (works only when playing)", SDLK_SCROLLLOCK, 0, {
 			toggleFollowMode();
 		});
+		sm.bindAlias("toggle_follow_mode", SDLK_F5, KMOD_CTRL);
 
-		sm.registerAction("toggle_follow_mode_alt", {
-			toggleFollowMode();
-		});
-		
-		sm.registerAction("fast_forward_5", {
+		sm.register("fast_forward_5", Ctx.global, "Playback",
+					"Fast forward", SDLK_F8, 0, {
 			audio.player.fastForward(5);
 		});
-		
-		sm.registerAction("fast_forward_25", {
+
+		sm.register("fast_forward_25", Ctx.global, "Playback",
+					"Fast forward more", SDLK_F8, KMOD_SHIFT, {
 			audio.player.fastForward(25);
 		});
-		
+
 		// Playback Options
-		sm.registerAction("next_filter_preset", {
+		sm.register("next_filter_preset", Ctx.global, "Playback options",
+					"Select next SID filter preset", SDLK_F8, KMOD_CTRL, {
 			audio.player.nextFP();
 		});
-		
-		sm.registerAction("prev_filter_preset", {
+
+		sm.register("prev_filter_preset", Ctx.global, "Playback options",
+					"Select previous SID filter preset", SDLK_F8, KMOD_CTRL | KMOD_SHIFT, {
 			audio.player.prevFP();
 		});
-		
-		sm.registerAction("toggle_interpolation", {
+
+		sm.register("toggle_interpolation", Ctx.global, "Playback options",
+					"Toggle interpolation", SDLK_F2, KMOD_CTRL, {
 			audio.player.interpolate ^= 1;
 			audio.player.init();
 		});
-		
-		sm.registerAction("toggle_sid_model", {
+
+		sm.register("toggle_sid_model", Ctx.global, "Playback options",
+					"Toggle SID type (6581/8580)", SDLK_F3, KMOD_CTRL, {
 			song.sidModel ^= 1;
 			audio.player.setSidModel(song.sidModel);
 		});
-		
-		sm.registerAction("cycle_visualization", {
+
+		sm.register("cycle_visualization", Ctx.global, "Playback options",
+					"Cycle playback visualization", SDLK_F9, KMOD_CTRL, {
 			vismode = umod(vismode + 1, 0, VisMode.max);
 			screen.clrtoeol(55, 1, 0);
 			screen.clrtoeol(55, 2, 0);
 			screen.clrtoeol(55, 3, 0);
 			video.clearVisualizer();
 		});
-		
-		sm.registerAction("dump_frame", {
+
+		sm.register("dump_frame", Ctx.global, "Playback options",
+					"Dump current SID register frame", SDLK_F12, KMOD_ALT, {
 			audio.player.dumpFrame();
 		});
-		
+
 		// Voice Control
-		sm.registerAction("toggle_voice_1", {
+		sm.register("toggle_voice_1", Ctx.global, "Voice control",
+					"Toggle voice 1 on/off", SDLK_1, KMOD_CTRL, {
 			audio.player.toggleVoice(0);
 		});
-		
-		sm.registerAction("toggle_voice_2", {
+
+		sm.register("toggle_voice_2", Ctx.global, "Voice control",
+					"Toggle voice 2 on/off", SDLK_2, KMOD_CTRL, {
 			audio.player.toggleVoice(1);
 		});
-		
-		sm.registerAction("toggle_voice_3", {
+
+		sm.register("toggle_voice_3", Ctx.global, "Voice control",
+					"Toggle voice 3 on/off", SDLK_3, KMOD_CTRL, {
 			audio.player.toggleVoice(2);
 		});
-		
+
 		// Window Navigation
-		sm.registerAction("next_window", {
-			// This is handled in Toplevel, will need special handling
+		sm.register("next_window", Ctx.global, "Window navigation",
+					"Move cursor between subwindows", SDLK_TAB, 0, {
+			toplevel.cycleBottomSubwindow(false);
 		});
-		
-		sm.registerAction("prev_window", {
-			// This is handled in Toplevel, will need special handling
+
+		sm.register("prev_window", Ctx.global, "Window navigation",
+					"Move cursor between subwindows (reverse)", SDLK_TAB, KMOD_SHIFT, {
+			toplevel.cycleBottomSubwindow(true);
 		});
-		
-		sm.registerAction("cycle_window", {
+
+		sm.register("cycle_window", Ctx.global, "Window navigation",
+					"Move cursor between main windows", SDLK_TAB, KMOD_CTRL, {
 			toplevel.activeWindowNum++;
 			if(toplevel.activeWindowNum >= toplevel.windows.length)
 				toplevel.activeWindowNum %= toplevel.windows.length;
 			toplevel.activateWindow();
 		});
-		
-		sm.registerAction("cycle_window_reverse", {
+
+		sm.register("cycle_window_reverse", Ctx.global, "Window navigation",
+					"Move cursor between main windows (reverse)", SDLK_TAB, KMOD_CTRL | KMOD_SHIFT, {
 			toplevel.activeWindowNum--;
 			if(toplevel.activeWindowNum < 0) toplevel.activeWindowNum = cast(int)(toplevel.windows.length - 1);
 			toplevel.activateWindow();
 		});
-		
+
 		// Direct Window Access
-		sm.registerAction("window_voice1", {
+		sm.register("window_voice1", Ctx.global, "Window navigation",
+					"Jump to voice 1", SDLK_1, KMOD_ALT, {
 			toplevel.activateWindow(0);
 			toplevel.sequencer.activateVoice(0);
 		});
-		
-		sm.registerAction("window_voice2", {
+
+		sm.register("window_voice2", Ctx.global, "Window navigation",
+					"Jump to voice 2", SDLK_2, KMOD_ALT, {
 			toplevel.activateWindow(0);
 			toplevel.sequencer.activateVoice(1);
 		});
-		
-		sm.registerAction("window_voice3", {
+
+		sm.register("window_voice3", Ctx.global, "Window navigation",
+					"Jump to voice 3", SDLK_3, KMOD_ALT, {
 			toplevel.activateWindow(0);
 			toplevel.sequencer.activateVoice(2);
 		});
-		
-		sm.registerAction("window_sequence", {
+
+		sm.register("window_sequence", Ctx.global, "Window navigation",
+					"Jump to Sequencer", SDLK_v, KMOD_ALT, {
 			toplevel.activateWindow(0);
 		});
-		
-		sm.registerAction("window_instrument", {
+
+		sm.register("window_instrument", Ctx.global, "Window navigation",
+					"Jump to Instrument table", SDLK_4, KMOD_ALT, {
 			toplevel.activateWindow(1);
 		});
-		
-		sm.registerAction("window_instrument_alt", {
-			toplevel.activateWindow(1);
-		});
-		
-		sm.registerAction("window_wave", {
+		sm.bindAlias("window_instrument", SDLK_i, KMOD_ALT);
+
+		sm.register("window_wave", Ctx.global, "Window navigation",
+					"Jump to Wave table", SDLK_5, KMOD_ALT, {
 			toplevel.activateWindow(2);
-			auto key = Keyinfo(SDLK_w, 0, 0);
+			// Alt modifier required so the bottom tab-switcher treats this as a
+			// tab hotkey (Alt+letter) rather than data entry.
+			auto key = Keyinfo(SDLK_w, KMOD_ALT, 0);
 			toplevel.activeWindow.keypress(key);
 		});
-		
-		sm.registerAction("window_wave_alt", {
+		sm.bindAlias("window_wave", SDLK_w, KMOD_ALT);
+
+		sm.register("window_pulse", Ctx.global, "Window navigation",
+					"Jump to Pulse table", SDLK_6, KMOD_ALT, {
 			toplevel.activateWindow(2);
-			auto key = Keyinfo(SDLK_w, 0, 0);
+			auto key = Keyinfo(SDLK_p, KMOD_ALT, 0);
 			toplevel.activeWindow.keypress(key);
 		});
-		
-		sm.registerAction("window_pulse", {
+		sm.bindAlias("window_pulse", SDLK_p, KMOD_ALT);
+
+		sm.register("window_filter", Ctx.global, "Window navigation",
+					"Jump to Filter table", SDLK_7, KMOD_ALT, {
 			toplevel.activateWindow(2);
-			auto key = Keyinfo(SDLK_p, 0, 0);
+			auto key = Keyinfo(SDLK_f, KMOD_ALT, 0);
 			toplevel.activeWindow.keypress(key);
 		});
-		
-		sm.registerAction("window_pulse_alt", {
+		sm.bindAlias("window_filter", SDLK_f, KMOD_ALT);
+
+		sm.register("window_command", Ctx.global, "Window navigation",
+					"Jump to Cmd table", SDLK_8, KMOD_ALT, {
 			toplevel.activateWindow(2);
-			auto key = Keyinfo(SDLK_p, 0, 0);
+			auto key = Keyinfo(SDLK_m, KMOD_ALT, 0);
 			toplevel.activeWindow.keypress(key);
 		});
-		
-		sm.registerAction("window_filter", {
+		sm.bindAlias("window_command", SDLK_m, KMOD_ALT);
+
+		sm.register("window_chord", Ctx.global, "Window navigation",
+					"Jump to Chord table", SDLK_9, KMOD_ALT, {
 			toplevel.activateWindow(2);
-			auto key = Keyinfo(SDLK_f, 0, 0);
+			auto key = Keyinfo(SDLK_d, KMOD_ALT, 0);
 			toplevel.activeWindow.keypress(key);
 		});
-		
-		sm.registerAction("window_filter_alt", {
-			toplevel.activateWindow(2);
-			auto key = Keyinfo(SDLK_f, 0, 0);
-			toplevel.activeWindow.keypress(key);
-		});
-		
-		sm.registerAction("window_command", {
-			toplevel.activateWindow(2);
-			auto key = Keyinfo(SDLK_m, 0, 0);
-			toplevel.activeWindow.keypress(key);
-		});
-		
-		sm.registerAction("window_command_alt", {
-			toplevel.activateWindow(2);
-			auto key = Keyinfo(SDLK_m, 0, 0);
-			toplevel.activeWindow.keypress(key);
-		});
-		
-		sm.registerAction("window_chord", {
-			toplevel.activateWindow(2);
-			auto key = Keyinfo(SDLK_d, 0, 0);
-			toplevel.activeWindow.keypress(key);
-		});
-		
-		sm.registerAction("window_chord_alt", {
-			toplevel.activateWindow(2);
-			auto key = Keyinfo(SDLK_d, 0, 0);
-			toplevel.activeWindow.keypress(key);
-		});
-		
-		sm.registerAction("window_song_info", {
+		sm.bindAlias("window_chord", SDLK_d, KMOD_ALT);
+
+		sm.register("window_song_info", Ctx.global, "Window navigation",
+					"Edit title / author / release info", SDLK_t, KMOD_ALT, {
 			toplevel.activateInfobar();
 		});
-		
+
 		// Song Settings
-		sm.registerAction("increase_speed", {
+		sm.register("increase_speed", Ctx.global, "Song variables",
+					"Increase default song speed", SDLK_PLUS, KMOD_CTRL, {
 			song.speed = clamp(song.speed + 1, 0, 31);
 		});
-		
-		sm.registerAction("increase_speed_kp", {
-			song.speed = clamp(song.speed + 1, 0, 31);
-		});
-		
-		sm.registerAction("decrease_speed", {
+		sm.bindAlias("increase_speed", SDLK_KP_PLUS, KMOD_CTRL);
+
+		sm.register("decrease_speed", Ctx.global, "Song variables",
+					"Decrease default song speed", SDLK_MINUS, KMOD_CTRL, {
 			song.speed = clamp(song.speed - 1, 0, 31);
 		});
-		
-		sm.registerAction("decrease_speed_kp", {
-			song.speed = clamp(song.speed - 1, 0, 31);
-		});
-		
-		sm.registerAction("increase_multiplier_alt", {
+		sm.bindAlias("decrease_speed", SDLK_KP_MINUS, KMOD_CTRL);
+
+		sm.register("increase_multiplier_alt", Ctx.global, "Song variables",
+					"Increase multispeed framecall counter", SDLK_KP_PLUS, KMOD_ALT, {
 			audio.player.setMultiplier(song.multiplier + 1);
 		});
-		
-		sm.registerAction("decrease_multiplier_alt", {
+
+		sm.register("decrease_multiplier_alt", Ctx.global, "Song variables",
+					"Decrease multispeed framecall counter", SDLK_KP_MINUS, KMOD_ALT, {
 			audio.player.setMultiplier(song.multiplier - 1);
 		});
-		
+
 		// Keyjam Mode
-		sm.registerAction("toggle_keyjam", {
+		sm.register("toggle_keyjam", Ctx.global, "Keyjam",
+					"Toggle keyjam mode", SDLK_SPACE, KMOD_CTRL, {
 			if(song.ver < 7) return;
 			state.keyjamStatus ^= 1;
 			enableKeyjamMode(state.keyjamStatus);
 			statusline.display("Keyjam " ~ (state.keyjamStatus ? "enabled." : "disabled.")
 							   ~ " Press Ctrl-Space to toggle.");
 		});
-		
+
 		// Song Management
-		sm.registerAction("clear_sequences", {
+		sm.register("clear_sequences", Ctx.global, "Song management",
+					"Clear sequences (press twice to activate)", SDLK_KP_0, KMOD_ALT, {
 			toplevel.clearSeqs();
 		});
-		
-		sm.registerAction("clear_sequences_ctrl", {
-			toplevel.clearSeqs();
-		});
-		
-		sm.registerAction("optimize_song", {
+		sm.bindAlias("clear_sequences", SDLK_c, KMOD_CTRL | KMOD_ALT);
+
+		sm.register("optimize_song", Ctx.global, "Song management",
+					"Optimize (clear unused sequences & data)", SDLK_KP_PERIOD, KMOD_ALT, {
 			toplevel.optimizeSong();
 		});
-		
-		sm.registerAction("optimize_song_ctrl", {
-			toplevel.optimizeSong();
-		});
-		
-		// Help
-		sm.registerAction("toggle_help_text", {
+		sm.bindAlias("optimize_song", SDLK_o, KMOD_CTRL | KMOD_ALT);
+
+		// Display
+		sm.register("toggle_help_text", Ctx.global, "Display",
+					"Toggle help texts", SDLK_h, KMOD_ALT, {
 			state.displayHelp ^= 1;
 			UI.statusline.display("Help texts " ~ (state.displayHelp ? "enabled." : "disabled."));
 		});
-		
+
 		// Dialogs
-		sm.registerAction("about_dialog", {
+		sm.register("about_dialog", Ctx.global, "Application",
+					"Open the About dialog", SDLK_F11, 0, {
 			activateDialog(aboutdialog);
 		});
-		
-		// Load default bindings
-		sm.loadDefaultBindings();
+
+		// Context-specific command shortcuts (sequencer, tables, ...)
+		registerContextShortcuts();
+	}
+
+	/**
+	 * Re-dispatches a synthetic keypress through the normal window path
+	 * (bypassing the shortcut manager, so no recursion). Context-command
+	 * callbacks use this so the proven per-widget keypress logic remains the
+	 * single implementation, while the registry is the single place that knows
+	 * about every command (for help generation and future menus).
+	 */
+	private void invokeKey(int key, int mods, int unicode = 0) {
+		toplevel.keypress(Keyinfo(key, mods, unicode));
+	}
+
+	/**
+	 * Register context-specific command shortcuts. Each is registered under a
+	 * non-global context; dispatch resolves the active context (pushed as the
+	 * active window / sequencer column changes), walking note_column/
+	 * track_column -> sequencer -> global. Callbacks re-dispatch the key to the
+	 * active widget, so behaviour is identical to pressing the key directly,
+	 * while every command is catalogued here for docs and menus. Raw data entry
+	 * (hex nibbles, the QWERTY piano, text fields) is intentionally NOT listed.
+	 */
+	private void registerContextShortcuts() {
+		alias C = Ctx;
+
+		// --- Sequencer (common to note/track/overview columns) ---
+		sm.register("seq_song_start", C.sequencer, "Navigation",
+					"Move cursor to song start", SDLK_HOME, KMOD_SHIFT,
+					{ invokeKey(SDLK_HOME, KMOD_SHIFT); });
+		sm.register("seq_song_end", C.sequencer, "Navigation",
+					"Move cursor to song end", SDLK_END, KMOD_SHIFT,
+					{ invokeKey(SDLK_END, KMOD_SHIFT); });
+		sm.register("seq_jump_mark", C.sequencer, "Navigation",
+					"Jump to playback mark (realigns the voices)", SDLK_HOME, KMOD_CTRL,
+					{ invokeKey(SDLK_HOME, KMOD_CTRL); });
+		sm.bindAlias("seq_jump_mark", SDLK_h, KMOD_CTRL);
+		sm.register("seq_centralize", C.sequencer, "Navigation",
+					"Center the cursor on screen", SDLK_l, KMOD_CTRL,
+					{ invokeKey(SDLK_l, KMOD_CTRL); });
+		sm.register("seq_set_mark", C.sequencer, "Navigation",
+					"Set playback start mark to current position", SDLK_BACKSPACE, 0,
+					{ invokeKey(SDLK_BACKSPACE, 0); });
+		sm.register("seq_wrap_mark", C.sequencer, "Navigation",
+					"Set loop (wrap) mark to current position", SDLK_BACKSPACE, KMOD_CTRL,
+					{ invokeKey(SDLK_BACKSPACE, KMOD_CTRL); });
+
+		sm.register("seq_highlight_inc", C.sequencer, "Display",
+					"Increase row highlight value", SDLK_m, KMOD_CTRL,
+					{ invokeKey(SDLK_m, KMOD_CTRL); });
+		sm.register("seq_highlight_dec", C.sequencer, "Display",
+					"Decrease row highlight value", SDLK_n, KMOD_CTRL,
+					{ invokeKey(SDLK_n, KMOD_CTRL); });
+		sm.register("seq_highlight_reset", C.sequencer, "Display",
+					"Reset highlighting to current row", SDLK_0, KMOD_CTRL,
+					{ invokeKey(SDLK_0, KMOD_CTRL); });
+		sm.register("seq_rowcounter", C.sequencer, "Display",
+					"Show/hide row counters for sequences", SDLK_e, KMOD_CTRL,
+					{ invokeKey(SDLK_e, KMOD_CTRL); });
+		sm.register("seq_relative_notes", C.sequencer, "Display",
+					"Toggle notes relative to current transpose", SDLK_t, KMOD_CTRL,
+					{ invokeKey(SDLK_t, KMOD_CTRL); });
+
+		sm.register("seq_copy", C.sequencer, "Sequence operations",
+					"Ask for a SEQ number and copy contents over current SEQ", SDLK_c, KMOD_ALT,
+					{ invokeKey(SDLK_c, KMOD_ALT); });
+		sm.register("seq_append", C.sequencer, "Sequence operations",
+					"Ask for a SEQ number and insert contents to cursor pos", SDLK_a, KMOD_ALT,
+					{ invokeKey(SDLK_a, KMOD_ALT); });
+		sm.register("seq_prev_subtune", C.sequencer, "Sequence operations",
+					"Activate previous subtune", SDLK_LEFT, KMOD_ALT,
+					{ invokeKey(SDLK_LEFT, KMOD_ALT); });
+		sm.register("seq_next_subtune", C.sequencer, "Sequence operations",
+					"Activate next subtune", SDLK_RIGHT, KMOD_ALT,
+					{ invokeKey(SDLK_RIGHT, KMOD_ALT); });
+		sm.register("seq_height_inc", C.sequencer, "Sequence operations",
+					"Increase sequencer height", SDLK_EQUALS, KMOD_CTRL,
+					{ invokeKey(SDLK_EQUALS, KMOD_CTRL); });
+		sm.bindAlias("seq_height_inc", SDLK_KP_PLUS, KMOD_CTRL);
+		sm.register("seq_height_dec", C.sequencer, "Sequence operations",
+					"Decrease sequencer height", SDLK_MINUS, KMOD_CTRL,
+					{ invokeKey(SDLK_MINUS, KMOD_CTRL); });
+		sm.bindAlias("seq_height_dec", SDLK_KP_MINUS, KMOD_CTRL);
+		sm.register("seq_enter_track_col", C.sequencer, "Sequence operations",
+					"Enter the track column / toggle tracklist display", SDLK_F5, 0,
+					{ invokeKey(SDLK_F5, 0); });
+		sm.register("seq_enter_note_col", C.sequencer, "Sequence operations",
+					"Enter the note column", SDLK_F6, 0,
+					{ invokeKey(SDLK_F6, 0); });
+		sm.register("seq_overview", C.sequencer, "Sequence operations",
+					"Toggle tracklist overview mode", SDLK_F7, 0,
+					{ invokeKey(SDLK_F7, 0); });
+
+		// --- Note column (F6) ---
+		sm.register("note_play_row", C.noteColumn, "Note column",
+					"Play notes for all voices in current row", SDLK_KP_0, 0,
+					{ invokeKey(SDLK_KP_0, 0); });
+		// Keypad-free alias for keyboards without a numpad.
+		sm.bindAlias("note_play_row", SDLK_p, KMOD_CTRL | KMOD_SHIFT);
+		sm.register("note_split", C.noteColumn, "Note column",
+					"Split current sequence into two from cursor pos", SDLK_p, KMOD_CTRL,
+					{ invokeKey(SDLK_p, KMOD_CTRL); });
+		sm.register("note_seq_start", C.noteColumn, "Note column",
+					"Move cursor to SEQ start (or screen top)", SDLK_HOME, 0,
+					{ invokeKey(SDLK_HOME, 0); });
+		sm.register("note_seq_end", C.noteColumn, "Note column",
+					"Move cursor to SEQ end (or screen bottom)", SDLK_END, 0,
+					{ invokeKey(SDLK_END, 0); });
+		sm.register("note_expand_quick", C.noteColumn, "Note column",
+					"Quick expand sequence (by highlight value * 4)", SDLK_RETURN, KMOD_SHIFT,
+					{ invokeKey(SDLK_RETURN, KMOD_SHIFT); });
+		sm.register("note_insert_row", C.noteColumn, "Note column",
+					"Insert a row (with sequence expand)", SDLK_INSERT, KMOD_SHIFT,
+					{ invokeKey(SDLK_INSERT, KMOD_SHIFT); });
+		sm.register("note_delete_row", C.noteColumn, "Note column",
+					"Delete a row (with sequence shrink)", SDLK_DELETE, KMOD_SHIFT,
+					{ invokeKey(SDLK_DELETE, KMOD_SHIFT); });
+		sm.register("note_expand", C.noteColumn, "Note column",
+					"Expand the sequence", SDLK_INSERT, KMOD_CTRL,
+					{ invokeKey(SDLK_INSERT, KMOD_CTRL); });
+		sm.register("note_shrink", C.noteColumn, "Note column",
+					"Shrink the sequence", SDLK_DELETE, KMOD_CTRL,
+					{ invokeKey(SDLK_DELETE, KMOD_CTRL); });
+		sm.register("note_trans_semi_up", C.noteColumn, "Note column",
+					"Transpose semitone up", SDLK_q, KMOD_CTRL,
+					{ invokeKey(SDLK_q, KMOD_CTRL); });
+		sm.register("note_trans_semi_down", C.noteColumn, "Note column",
+					"Transpose semitone down", SDLK_a, KMOD_CTRL,
+					{ invokeKey(SDLK_a, KMOD_CTRL); });
+		sm.register("note_trans_oct_up", C.noteColumn, "Note column",
+					"Transpose octave up", SDLK_w, KMOD_CTRL,
+					{ invokeKey(SDLK_w, KMOD_CTRL); });
+		sm.register("note_trans_oct_down", C.noteColumn, "Note column",
+					"Transpose octave down", SDLK_s, KMOD_CTRL,
+					{ invokeKey(SDLK_s, KMOD_CTRL); });
+		sm.register("note_grab_instr", C.noteColumn, "Note column",
+					"Grab the instrument value in the current row", SDLK_RETURN, 0,
+					{ invokeKey(SDLK_RETURN, 0); });
+		sm.register("note_tie", C.noteColumn, "Note column",
+					"Change the note in current row to a tie note", SDLK_COMMA, 0,
+					{ invokeKey(SDLK_COMMA, 0, ','); });
+		sm.register("note_autoinsert", C.noteColumn, "Note column",
+					"Toggle automatic instrument value insert", SDLK_SEMICOLON, 0,
+					{ invokeKey(SDLK_SEMICOLON, 0, ';'); });
+		sm.register("note_octave_dec", C.noteColumn, "Note column",
+					"Decrease base octave", SDLK_LESS, 0,
+					{ invokeKey(SDLK_LESS, 0, '<'); });
+		sm.register("note_octave_inc", C.noteColumn, "Note column",
+					"Increase base octave", SDLK_GREATER, 0,
+					{ invokeKey(SDLK_GREATER, 0, '>'); });
+
+		// --- Track column (F5) ---
+		sm.register("trk_insert", C.trackColumn, "Track column",
+					"Insert a track at cursor", SDLK_INSERT, 0,
+					{ invokeKey(SDLK_INSERT, 0); });
+		sm.register("trk_delete", C.trackColumn, "Track column",
+					"Delete track at cursor", SDLK_DELETE, 0,
+					{ invokeKey(SDLK_DELETE, 0); });
+		sm.register("trk_insert_end", C.trackColumn, "Track column",
+					"Insert a track to end of voice and move there", SDLK_INSERT, KMOD_CTRL,
+					{ invokeKey(SDLK_INSERT, KMOD_CTRL); });
+		sm.register("trk_delete_end", C.trackColumn, "Track column",
+					"Delete track to end of voice and move there", SDLK_DELETE, KMOD_CTRL,
+					{ invokeKey(SDLK_DELETE, KMOD_CTRL); });
+		sm.register("trk_insert_all", C.trackColumn, "Track column",
+					"Insert a track for all voices", SDLK_INSERT, KMOD_CTRL | KMOD_SHIFT,
+					{ invokeKey(SDLK_INSERT, KMOD_CTRL | KMOD_SHIFT); });
+		sm.register("trk_delete_all", C.trackColumn, "Track column",
+					"Delete a track for all voices", SDLK_DELETE, KMOD_CTRL | KMOD_SHIFT,
+					{ invokeKey(SDLK_DELETE, KMOD_CTRL | KMOD_SHIFT); });
+		sm.register("trk_trans_up", C.trackColumn, "Track column",
+					"Transpose tracks up from cursor down", SDLK_q, KMOD_CTRL,
+					{ invokeKey(SDLK_q, KMOD_CTRL); });
+		sm.register("trk_trans_down", C.trackColumn, "Track column",
+					"Transpose tracks down from cursor down", SDLK_a, KMOD_CTRL,
+					{ invokeKey(SDLK_a, KMOD_CTRL); });
+		sm.register("trk_copy", C.trackColumn, "Track column",
+					"Ask for a number and copy tracks into clipboard", SDLK_c, KMOD_CTRL,
+					{ invokeKey(SDLK_c, KMOD_CTRL); });
+		sm.bindAlias("trk_copy", SDLK_z, KMOD_ALT);
+		sm.register("trk_paste", C.trackColumn, "Track column",
+					"Paste copied tracks (ask insert or overwrite)", SDLK_v, KMOD_CTRL,
+					{ invokeKey(SDLK_v, KMOD_CTRL); });
+		sm.register("trk_paste_insert", C.trackColumn, "Track column",
+					"Paste copied tracks as insert", SDLK_i, KMOD_CTRL,
+					{ invokeKey(SDLK_i, KMOD_CTRL); });
+		sm.bindAlias("trk_paste_insert", SDLK_b, KMOD_ALT);
+		sm.register("trk_paste_overwrite", C.trackColumn, "Track column",
+					"Paste copied tracks as overwrite", SDLK_o, KMOD_CTRL,
+					{ invokeKey(SDLK_o, KMOD_CTRL); });
+		sm.register("trk_swap_v1", C.trackColumn, "Track column",
+					"Swap voice's tracks with voice 1's from cursor down", SDLK_1, KMOD_CTRL | KMOD_ALT,
+					{ invokeKey(SDLK_1, KMOD_CTRL | KMOD_ALT); });
+		sm.register("trk_swap_v2", C.trackColumn, "Track column",
+					"Swap voice's tracks with voice 2's from cursor down", SDLK_2, KMOD_CTRL | KMOD_ALT,
+					{ invokeKey(SDLK_2, KMOD_CTRL | KMOD_ALT); });
+		sm.register("trk_swap_v3", C.trackColumn, "Track column",
+					"Swap voice's tracks with voice 3's from cursor down", SDLK_3, KMOD_CTRL | KMOD_ALT,
+					{ invokeKey(SDLK_3, KMOD_CTRL | KMOD_ALT); });
+		sm.register("trk_find_unused", C.trackColumn, "Track column",
+					"Find next unused sequence from current value", SDLK_f, KMOD_CTRL,
+					{ invokeKey(SDLK_f, KMOD_CTRL, 6); });
+		sm.register("trk_prev_seq", C.trackColumn, "Track column",
+					"Select previous sequence", SDLK_LESS, 0,
+					{ invokeKey(SDLK_LESS, 0, '<'); });
+		sm.register("trk_next_seq", C.trackColumn, "Track column",
+					"Select next sequence", SDLK_GREATER, 0,
+					{ invokeKey(SDLK_GREATER, 0, '>'); });
+
+		// --- Instrument table ---
+		sm.register("ins_load", C.instrumentTable, "Instrument table",
+					"Load current instrument from disk", SDLK_l, KMOD_CTRL,
+					{ invokeKey(SDLK_l, KMOD_CTRL); });
+		sm.register("ins_save", C.instrumentTable, "Instrument table",
+					"Save current instrument to disk", SDLK_s, KMOD_CTRL,
+					{ invokeKey(SDLK_s, KMOD_CTRL); });
+		sm.register("ins_delete", C.instrumentTable, "Instrument table",
+					"Delete current instrument", SDLK_d, KMOD_CTRL,
+					{ invokeKey(SDLK_d, KMOD_CTRL); });
+		sm.register("ins_copy", C.instrumentTable, "Instrument table",
+					"Copy instrument to clipboard", SDLK_c, KMOD_CTRL,
+					{ invokeKey(SDLK_c, KMOD_CTRL); });
+		sm.register("ins_paste", C.instrumentTable, "Instrument table",
+					"Paste instrument from clipboard", SDLK_v, KMOD_CTRL,
+					{ invokeKey(SDLK_v, KMOD_CTRL); });
+
+		// --- Sub-tables (wave / pulse / filter) ---
+		sm.register("wave_goto_instr", C.subtable, "Tables",
+					"Jump to current instrument's wave", SDLK_g, 0,
+					{ invokeKey(SDLK_g, 0, 'g'); });
+		sm.register("wave_clear_row", C.subtable, "Tables",
+					"Clear current wave row", SDLK_PERIOD, 0,
+					{ invokeKey(SDLK_PERIOD, 0, '.'); });
+		sm.register("table_row_top", C.subtable, "Tables",
+					"Jump to first row", SDLK_HOME, KMOD_SHIFT,
+					{ invokeKey(SDLK_HOME, KMOD_SHIFT); });
+		sm.register("table_row_bottom", C.subtable, "Tables",
+					"Jump to last used row", SDLK_END, KMOD_SHIFT,
+					{ invokeKey(SDLK_END, KMOD_SHIFT); });
+		sm.register("table_insert_row", C.subtable, "Tables",
+					"Insert a row", SDLK_INSERT, 0,
+					{ invokeKey(SDLK_INSERT, 0); });
+		sm.register("table_delete_row", C.subtable, "Tables",
+					"Delete a row", SDLK_DELETE, 0,
+					{ invokeKey(SDLK_DELETE, 0); });
 	}
 
 	private void toggleFollowMode() {

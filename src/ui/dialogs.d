@@ -256,10 +256,11 @@ class AboutDialog : Window {
 			screen.fprint(area.x + 1, y, "`01" ~ line.center(area.width-2));
 			y++;
 		}
-		screen.cprint(area.x + 1, y++,15, 0,"(C) 2009-17 Abaddon + contributors".center(area.width-2));
+		screen.cprint(area.x + 1, y++,15, 0,(com.util.APP_NAME ~ " " ~ com.util.APP_VERSION).center(area.width-2));
+		screen.cprint(area.x + 1, y++,15, 0,("Based on " ~ com.util.UPSTREAM_NAME ~ " " ~ com.util.UPSTREAM_VERSION).center(area.width-2));
+		screen.cprint(area.x + 1, y++,15, 0,"(C) 2009-17 Abaddon + contributors, 2026 Vent + minions".center(area.width-2));
 		screen.cprint(area.x + 1, y++,15, 0,"reSID engine by Dag Lem".center(area.width-2));
 		screen.cprint(area.x + 1, y++,15, 0,"Released under GNU GPL".center(area.width-2));
-		screen.fprint(area.x + 1, y++," ".center(area.width-2));
 	}
   
 	override int keypress(Keyinfo key) {

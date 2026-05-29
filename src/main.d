@@ -37,9 +37,11 @@ version(Win32) {
 	const DIR_SEPARATOR = '\\';
 }
 
-// Default compact mode dimensions
-enum DEFAULT_COLUMNS = 100;  // 800px / 8px per char
-enum DEFAULT_ROWS = 42;      // ~32 sequencer + 10 overhead
+// Minimum / fixed-size-mode dimensions in characters. This is also the floor
+// applied to autoscale, so the window is never smaller than 160x50 chars
+// (1280x700 px at the 8x14 font).
+enum DEFAULT_COLUMNS = 160;  // minimum UI width in characters
+enum DEFAULT_ROWS = 50;      // minimum UI height in characters (40 seq + 10 overhead)
 
 void initVideo(bool useFullscreen, bool useyuv, int seqHeight = 0, int uiWidthCols = 0, bool useAutoscale = false, out int actualSeqHeight) {
     int mx, my;
@@ -49,50 +51,39 @@ void initVideo(bool useFullscreen, bool useyuv, int seqHeight = 0, int uiWidthCo
 		throw new DisplayError("Couldn't initialize framebuffer.");
 	}
 
-    // Autoscale mode: auto-scale to screen size
+    // Autoscale mode (the default): size to ~90% of the screen.
     if(useAutoscale) {
         SDL_DisplayMode dm;
         if(SDL_GetDesktopDisplayMode(0, &dm) == 0) {
             // Use 90% of screen dimensions for comfortable windowed mode
-            mx = cast(int)(dm.w * 0.9);
-            my = cast(int)(dm.h * 0.9);
-            logicalCols = mx / FONT_X;
-            logicalRows = my / FONT_Y;
+            logicalCols = cast(int)(dm.w * 0.9) / FONT_X;
+            logicalRows = cast(int)(dm.h * 0.9) / FONT_Y;
         } else {
-            // Fallback if query fails
-            mx = 1600;
-            my = 900;
-            logicalCols = mx / FONT_X;
-            logicalRows = my / FONT_Y;
-        }
-        // Calculate sequencer height from total rows (subtract overhead)
-        actualSeqHeight = logicalRows - 10;
-        // Clamp to valid range
-        if(actualSeqHeight < 32) actualSeqHeight = 32;
-        if(actualSeqHeight > 64) actualSeqHeight = 64;
-    }
-    // Compact mode or explicit dimensions
-    else {
-        // Determine logical rows (height in character rows)
-        if(seqHeight > 0) {
-            logicalRows = seqHeight + 10; // sequencer + overhead
-            actualSeqHeight = seqHeight;
-        } else {
-            logicalRows = DEFAULT_ROWS;
-            actualSeqHeight = DEFAULT_ROWS - 10; // 32 rows for sequencer
-        }
-
-        // Determine logical columns (width in character columns)
-        if(uiWidthCols > 0) {
-            logicalCols = uiWidthCols;
-        } else {
+            // Fallback if the display query fails: use the minimum size.
             logicalCols = DEFAULT_COLUMNS;
+            logicalRows = DEFAULT_ROWS;
         }
-
-        // Convert to pixels
-        mx = logicalCols * FONT_X;
-        my = logicalRows * FONT_Y;
     }
+    // Fixed-size mode: explicit --width / --height (autoscale disabled).
+    else {
+        logicalCols = uiWidthCols > 0 ? uiWidthCols : DEFAULT_COLUMNS;
+        logicalRows = seqHeight > 0 ? seqHeight + 10 : DEFAULT_ROWS;
+    }
+
+    // Enforce the 160x50 character minimum window in every mode.
+    if(logicalCols < DEFAULT_COLUMNS) logicalCols = DEFAULT_COLUMNS;
+    if(logicalRows < DEFAULT_ROWS) logicalRows = DEFAULT_ROWS;
+
+    // Sequencer height follows the window height, capped to its valid range.
+    actualSeqHeight = logicalRows - 10;
+    if(actualSeqHeight > 64) {
+        actualSeqHeight = 64;
+        logicalRows = actualSeqHeight + 10;
+    }
+
+    // Convert to pixels (aligned to the character grid).
+    mx = logicalCols * FONT_X;
+    my = logicalRows * FONT_Y;
 
     screen = new Screen(logicalCols, logicalRows);
     video = new VideoStandard(mx, my, screen, useFullscreen ? 1 : 0);
@@ -221,6 +212,8 @@ void mainloop(bool verbose) {
 }
 
 void printheader() {
+	stderr.writefln("%s %s", com.util.APP_NAME, com.util.APP_VERSION);
+	stderr.writefln("Based on %s %s.", com.util.UPSTREAM_NAME, com.util.UPSTREAM_VERSION);
 	stderr.writefln("CheeseCutter (C) 2009-15 Abaddon");
 	stderr.writefln("Released under GNU GPL.");
 	stderr.writef("\n");
@@ -232,14 +225,32 @@ void printheader() {
 	stderr.writefln("  -nofp            Do not use resid-fp emulation");
 	stderr.writefln("  -fpr [x]         Specify filter preset. x = 0..16 for 6581 and 0..1 for 8580");
 	stderr.writefln("  -i               Disable resid interpolation (use fast mode instead)");
+	stderr.writefln("  -l               Enable VIC-II badline timing emulation");
 	stderr.writefln("  -m [0|1]         Specify SID model for reSID (6581/8580) (def=0)");
 	stderr.writefln("  -n               Enable NTSC mode");
 	stderr.writefln("  -r [value]       Set playback frequency (def=48000)");
 	stderr.writefln("  -y               Use YUV video overlay");
-	stderr.writefln("  --height [rows]  Set sequencer height in rows (def=32, min=32, max=64)");
-	stderr.writefln("  --width [cols]   Set UI width in columns (def=%d, min=%d, max=200)", DEFAULT_COLUMNS, DEFAULT_COLUMNS);
-	stderr.writefln("  --autoscale      Auto-scale UI to screen size");
+	stderr.writefln("  -h, --help       Show this help and exit");
+	stderr.writefln("  --height [rows]  Set sequencer height in rows (min=%d, max=64); disables autoscale", DEFAULT_ROWS - 10);
+	stderr.writefln("  --width [cols]   Set UI width in columns (min=%d, max=200); disables autoscale", DEFAULT_COLUMNS);
+	stderr.writefln("  --dump-keys      Print the keyboard reference as Markdown and exit");
+	stderr.writefln("  --verbose        Enable verbose logging");
+	stderr.writefln("  The UI auto-scales to the screen by default (minimum %dx%d chars);", DEFAULT_COLUMNS, DEFAULT_ROWS);
+	stderr.writefln("  pass --width and/or --height for a fixed size.");
 	stderr.writef("\n");
+}
+
+// Parse a numeric command-line option without crashing on bad input. Reports a
+// friendly error via UserException (caught in main) for a missing or
+// non-numeric value.
+int intOption(char[][] args, int i, string name) {
+	if(i + 1 >= args.length)
+		throw new UserException(format("Option %s requires a numeric value.", name));
+	try
+		return to!int(args[i + 1]);
+	catch(std.conv.ConvException)
+		throw new UserException(format("Option %s expects a number, got \"%s\".",
+									   name, args[i + 1]));
 }
 
 int main(char[][] args) {
@@ -251,7 +262,8 @@ int main(char[][] args) {
 	int sequencerHeight = 0; // 0 means use default
 	bool verbose = false;
 	int requestedUiWidth = 0; // columns; 0 means use default
-	bool useAutoscale = false;
+	bool useAutoscale = true; // autoscale by default; --width/--height disables it
+	bool dumpKeys = false;
   // DerelictSDL2.load();
 
 	scope(exit) {
@@ -315,28 +327,36 @@ int main(char[][] args) {
 			yuvOverlay = true;
 			break;
 		case "--height":
-			sequencerHeight = to!int(args[i+1]);
-			if(sequencerHeight < 32)
-				throw new UserException("Sequencer height must be at least 32 rows");
-			if(sequencerHeight > 64)
-				throw new UserException("Sequencer height cannot exceed 64 rows");
-			i++;
+			{
+				// Window minimum is 160x50 chars, i.e. >= 40 sequencer rows.
+				const int minRows = DEFAULT_ROWS - 10;
+				const int maxRows = 64;
+				int h = intOption(args, i, "--height");
+				if(h < minRows)
+					throw new UserException(format("Sequencer height must be at least %d rows", minRows));
+				if(h > maxRows)
+					throw new UserException(format("Sequencer height cannot exceed %d rows", maxRows));
+				sequencerHeight = h;
+				useAutoscale = false; // explicit size disables autoscale
+				i++;
+			}
 			break;
 		case "--width":
 			{
-				int wcols = to!int(args[i+1]);
 				const int minCols = DEFAULT_COLUMNS;
 				const int maxCols = 200;
+				int wcols = intOption(args, i, "--width");
 				if(wcols < minCols)
 					throw new UserException(format("Window width must be at least %d columns", minCols));
 				if(wcols > maxCols)
 					throw new UserException(format("Window width cannot exceed %d columns", maxCols));
 				requestedUiWidth = wcols;
+				useAutoscale = false; // explicit size disables autoscale
 				i++;
 			}
 			break;
-		case "--autoscale":
-			useAutoscale = true;
+		case "--dump-keys":
+			dumpKeys = true;
 			break;
 		case "--verbose":
 			verbose = true;
@@ -383,6 +403,11 @@ int main(char[][] args) {
 
 	initSession();
 	mainui = new UI();
+	if(dumpKeys) {
+		import ui.shorthelp : exportMarkdown;
+		std.stdio.write(exportMarkdown(mainui.sm));
+		return 0;
+	}
 	loadFile(filename);
 	video.updateFrame();
 

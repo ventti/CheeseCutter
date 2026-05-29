@@ -20,6 +20,7 @@ import std.conv, std.array;
 import audio.visualizer;
 import audio.player;
 import seq.sequencer : playbackBarColor, wrapBarColor;
+import com.shortcuts : Ctx;
 import std.algorithm : sort;
 
 abstract class Table : Window {
@@ -91,6 +92,8 @@ private class HexTable : Table, Undoable {
 		super(a,tbl,c,r);
 		(cast(InputValue)input).setValueChangedCallback(&valueChangedCallback);
 	}
+
+	override @property string contextId() { return Ctx.subtable; }
 
 	void valueChangedCallback() {
 		saveState(false);
@@ -575,6 +578,8 @@ class InsTable : Window {
 	}
 	Window active;
 
+	override @property string contextId() { return Ctx.instrumentTable; }
+
 	this(Rectangle a) {
 		super(a);
 		insdesc = new DialogString(a, com.fb.mode ? 32 : 16);
@@ -1004,6 +1009,9 @@ private class TrackCellInput : InputWord {
 }
 
 class TracksTable : Window, Undoable {
+	override @property string contextId() { return Ctx.trackColumn; }
+	override ContextHelp contextHelp() { return ui.help.HELPMAIN; }
+
 	private {
 		struct TrackRow {
 			int offset;

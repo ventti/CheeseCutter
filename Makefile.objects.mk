@@ -20,6 +20,7 @@ OBJS= \
 	src/ui/ui.o \
 	src/ui/input.o \
 	src/ui/help.o \
+	src/ui/shorthelp.o \
 	src/seq/seqtable.o \
 	src/seq/tracktable.o \
 	src/seq/trackmap.o \
