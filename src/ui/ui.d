@@ -1063,6 +1063,7 @@ final class UI {
 
 		sm.register("save_prg", Ctx.global, "File",
 					"Save current subtune as a playable .prg", SDLK_F10, KMOD_SHIFT, {
+			prgdialog.setDirectory(getcwd());   // = the loaded .ct's dir
 			prgdialog.setFilename(proposePrgName());
 			activateDialog(prgdialog);
 		});
@@ -1893,7 +1894,8 @@ final class UI {
 		infobar.refresh();
 
 		// sync save filesel to load filesel in case dir was changed
-		foreach(d; [loaddialog, savedialog]) {
+		// (prgdialog too, so the .prg is offered in the loaded .ct's dir)
+		foreach(d; [loaddialog, savedialog, prgdialog]) {
 			d.setFilename(fn);
 			d.setDirectory(getcwd());
 		}
