@@ -1,36 +1,52 @@
 ;;; ----------------------------------------------------------------------
 ;;; ultimate_host.acme
 ;;;
-;;; Self-running host shim for C64 Ultimate (1541U / Ultimate64) playback.
-;;; CheeseCutter's player is normally driven frame-by-frame by the host
-;;; (the D side calls init/play/mplay in the emulated CPU). On real
-;;; hardware nobody provides that tick, so this small, separate stub
-;;; installs a CIA timer IRQ and dispatches to the *unmodified* player
-;;; entry points. It also exposes a tiny control block in RAM that the
-;;; host pokes over the REST writemem API to start/stop/keyjam.
+;;; Self-running host shim for C64 Ultimate (1541U / Ultimate64) playback
+;;; and for the exported standalone .prg (Shift+F10). CheeseCutter's player
+;;; is normally driven frame-by-frame by the host (the D side calls
+;;; init/play/mplay in the emulated CPU). On real hardware nobody provides
+;;; that tick, so this small, separate stub installs a CIA timer IRQ and
+;;; dispatches to the *unmodified* player entry points. It also exposes a
+;;; tiny control block in RAM that the host pokes over the REST writemem API
+;;; to start/stop/keyjam.
 ;;;
 ;;; The whole live song image (player + data) lives at $0e00..~$f83d and
 ;;; deliberately uses RAM under BASIC/KERNAL ROM, so we run in all-RAM
 ;;; mode ($01 = $35: ROM banked out, IO still mapped for the SID at $d400)
 ;;; and take the hardware IRQ vector at $fffe (no KERNAL available).
 ;;;
-;;; Display: black screen + border; song title/author/release are shown in
-;;; light grey (built into the image by ct/build.d). The border is flipped
-;;; to dark green for the duration of each player call, so its height is a
-;;; live raster-time meter, and black the rest of the time.
+;;; Display (black screen, light-grey text, lowercase/mixed charset):
+;;;   row 0  CheeseCutter-Extended <ver>
+;;;   row 1  Player: <playerID>
+;;;   row 3  <title>
+;;;   row 4  <author>
+;;;   row 5  <release>
+;;;   row 7  Time: MM:SS / $RR   (live, like CheeseCutter's Time/raster line)
+;;; The border is flipped to dark green for the duration of each player call,
+;;; so its height is a live raster-time meter; black otherwise.
 ;;;
-;;; The following symbols are prepended by ct/build.d before assembly:
+;;; Symbols prepended by ct/build.d before assembly:
 ;;;   INITADDR, PLAYADDR, MPLAYADDR  - player jump table ($1000/$1003/$1006)
 ;;;   SUBNOTE, SUBMPLAY             - keyjam entry points (from song.offsets)
 ;;;   SHTRANSADDR                   - per-voice transpose table base
 ;;;   CIAVAL                        - CIA #1 timer A latch (PAL/NTSC * speed)
 ;;;   MULT                          - multispeed reload (song.multiplier - 1)
 ;;;   NEWKEYJAM                     - 1 if song.ver > 7 (use SUBNOTE/SUBMPLAY)
+;;;   FRAMERATE                     - frames per second (50 PAL / 60 NTSC)
 ;;; ----------------------------------------------------------------------
 
 COL_BLACK	= 0
 COL_GREEN	= 5		; the C64 "green" is a dark green
 COL_LTGREY	= 15
+
+;;; Screen cells of the live digits in the "Time: MM:SS / $RR" row (row 7).
+SCR_ROW7	= $0400 + 7*40
+CELL_MIN10	= SCR_ROW7 + 6
+CELL_MIN1	= SCR_ROW7 + 7
+CELL_SEC10	= SCR_ROW7 + 9
+CELL_SEC1	= SCR_ROW7 + 10
+CELL_RASH	= SCR_ROW7 + 15
+CELL_RASL	= SCR_ROW7 + 16
 
 ;;; ----------------------------------------
 ;;; BASIC autostart: "10 SYS 2080". run_prg does a RUN, which jumps here.
@@ -99,6 +115,11 @@ install
 
 		lda #0
 		sta cntr
+		sta fcnt
+		sta secs
+		sta mins
+		sta rasval
+		sta rasacc
 		lda ctrl_subtune
 		jsr INITADDR		; init the player (silent first frame)
 		lda #1
@@ -109,10 +130,11 @@ spin		jmp spin
 nmihandler	rti
 
 ;;; ----------------------------------------
-;;; Black screen + border, light-grey text, then paint the song strings.
+;;; Black screen + border, light-grey text (lowercase/mixed charset), then
+;;; paint the static text rows.
 ;;; ----------------------------------------
 setup_screen
-		lda #$17		; screen $0400, char base $1800 (lowercase/mixed set)
+		lda #$17		; screen $0400, char base $1800 (lowercase set)
 		sta $d018
 		lda #COL_BLACK
 		sta $d020		; border
@@ -130,22 +152,29 @@ clrscr		lda #$20		; space
 		sta $dae8,x		; covers up to $dbe7
 		inx
 		bne clrscr
-		ldx #0
-cpyname		lda sn_title,x		; row 1
-		sta $0428,x
-		lda sn_author,x		; row 3
-		sta $0478,x
-		lda sn_release,x	; row 5
-		sta $04c8,x
-		inx
-		cpx #32
-		bne cpyname
+
+		ldx #39
+ss0		lda sn_appver,x
+		sta $0400,x		; row 0
+		lda sn_player,x
+		sta $0428,x		; row 1
+		lda sn_title,x
+		sta $0478,x		; row 3
+		lda sn_author,x
+		sta $04a0,x		; row 4
+		lda sn_release,x
+		sta $04c8,x		; row 5
+		lda sn_status,x
+		sta $0518,x		; row 7
+		dex
+		bpl ss0
 		rts
 
 ;;; ----------------------------------------
 ;;; IRQ handler. A hardware IRQ only stacks PC+status, so preserve the
 ;;; registers ourselves. The border is green only while a player routine
-;;; runs, giving a raster-time bar.
+;;; runs, giving a raster-time bar; the numeric raster value comes from the
+;;; $d012 delta across the main play tick.
 ;;; ----------------------------------------
 irqhandler
 		pha
@@ -169,6 +198,9 @@ irqhandler
 do_restart
 		lda #0
 		sta cntr
+		sta fcnt		; restart the playback clock
+		sta secs
+		sta mins
 		lda ctrl_subtune
 		jsr INITADDR
 		lda #1
@@ -208,25 +240,42 @@ dispatch
 		cmp #2
 		beq kjtick
 
-		;; mode 1 = play. Multispeed: run the full play tick on the
-		;; frame boundary, mplay on the in-between subframes (mirrors
-		;; the player's own cplay/cntr logic and the host's audio_frame).
+		;; mode 1 = play. The CIA runs at 50*mult Hz, and we make exactly ONE
+		;; player call per IRQ, so the calls are evenly spaced across the
+		;; frame: a full play tick on the frame boundary, then MULT = mult-1
+		;; sound-only mplay ticks in between (e.g. 2x -> play, mplay, play,
+		;; mplay at 100 Hz, ~156 raster lines apart). cntr counts the
+		;; remaining subframes; it lives in memory because the player call
+		;; clobbers the registers.
 		dec cntr
-		bmi playfull
+		bmi pf_play
+		jsr read_raster		; mplay subframe: time it and add to the frame total
+		stx ras_start_hi
+		sta ras_start
 		lda #COL_GREEN
 		sta $d020
 		jsr MPLAYADDR
 		lda #COL_BLACK
 		sta $d020
+		jsr add_raster
 		jmp irqdone
-playfull
+pf_play
 		lda #MULT
 		sta cntr
+		lda rasacc		; frame boundary: publish the previous frame's
+		sta rasval		; summed raster time (all play+mplay calls)...
+		lda #0
+		sta rasacc		; ...then start accumulating the new frame
+		jsr read_raster
+		stx ras_start_hi
+		sta ras_start
 		lda #COL_GREEN
 		sta $d020
 		jsr PLAYADDR
 		lda #COL_BLACK
 		sta $d020
+		jsr add_raster
+		jsr update_status	; advance the MM:SS clock once per frame
 		jmp irqdone
 
 kjtick
@@ -250,6 +299,112 @@ irqdone
 		rti
 
 ;;; ----------------------------------------
+;;; Advance the MM:SS clock (once per frame) and repaint the Time/raster row.
+;;; ----------------------------------------
+update_status
+		inc fcnt
+		lda fcnt
+		cmp #FRAMERATE
+		bcc us_show
+		lda #0
+		sta fcnt
+		inc secs
+		lda secs
+		cmp #60
+		bcc us_show
+		lda #0
+		sta secs
+		inc mins
+		lda mins
+		cmp #100
+		bcc us_show
+		lda #0
+		sta mins
+us_show
+		lda mins
+		jsr dec2
+		stx CELL_MIN10
+		sta CELL_MIN1
+		lda secs
+		jsr dec2
+		stx CELL_SEC10
+		sta CELL_SEC1
+		lda rasval
+		jsr hex2
+		stx CELL_RASH
+		sta CELL_RASL
+		rts
+
+;;; value A (0..99) -> X = tens screen char, A = ones screen char
+dec2
+		ldx #$ff
+		sec
+dec2l		inx
+		sbc #10
+		bcs dec2l
+		adc #10
+		ora #$30		; ones char
+		pha
+		txa
+		ora #$30		; tens char
+		tax
+		pla
+		rts
+
+;;; Read the full 9-bit raster line: X = bit 8 (from $d011), A = $d012.
+read_raster
+		ldx #0
+		lda $d011
+		and #$80
+		beq rr_lo
+		ldx #1
+rr_lo		lda $d012
+		rts
+
+;;; rasacc += (raster now - ras_start), i.e. the raster lines the player call
+;;; that just ran consumed. Uses the full 9-bit line and corrects for the
+;;; PAL frame wrap (a call straddling line 311->0), then sums into rasacc.
+add_raster
+		jsr read_raster		; A = lo, X = hi (raster now)
+		sec
+		sbc ras_start		; A = after_lo - before_lo (sets borrow)
+		sta d_lo
+		txa
+		sbc ras_start_hi	; high byte of the signed difference
+		bpl ar_add		; >= 0: no wrap, d_lo is the line count
+		lda d_lo		; negative: wrapped, add 312 lines ($138)
+		clc
+		adc #$38		; low byte of 312; result < 256, carry ignored
+		sta d_lo
+ar_add
+		clc
+		lda rasacc
+		adc d_lo
+		sta rasacc
+		rts
+
+;;; value A (0..255) -> X = high-nibble char, A = low-nibble char
+hex2
+		pha
+		lsr
+		lsr
+		lsr
+		lsr
+		jsr hexd
+		tax
+		pla
+		and #$0f
+		jsr hexd
+		rts
+hexd		cmp #10
+		bcc hexd0
+		clc
+		adc #$41-10		; A..F
+		rts
+hexd0		ora #$30		; 0..9
+		rts
+
+;;; ----------------------------------------
 ;;; Silence: master volume off and gate-off all three voices.
 ;;; ----------------------------------------
 silence
@@ -260,13 +415,23 @@ silence
 		sta $d412
 		rts
 
-cntr		!8 0
+fcnt		!8 0		; frames within the current second
+secs		!8 0
+mins		!8 0
+ras_start	!8 0		; raster line (low 8 bits) when the current call started
+ras_start_hi	!8 0		; raster line bit 8 when the current call started
+d_lo		!8 0		; scratch: lines used by the last call
+rasval		!8 0		; published per-frame raster total (shown as $RR)
+rasacc		!8 0		; raster lines accumulated so far this frame
+cntr		!8 0		; multispeed subframe counter (remaining mplay ticks)
 
 ;;; ----------------------------------------
-;;; Song text, in C64 screen codes. ct/build.d fills these from the song's
-;;; title / author / release before assembly+upload.
+;;; Text rows in C64 screen codes, filled by ct/build.d (40 bytes each).
 ;;; ----------------------------------------
-		* = $0a00
-sn_title	!fill 32, $20
-sn_author	!fill 32, $20
-sn_release	!fill 32, $20
+		* = $0b00
+sn_title	!fill 40, $20
+sn_author	!fill 40, $20
+sn_release	!fill 40, $20
+sn_appver	!fill 40, $20
+sn_player	!fill 40, $20
+sn_status	!fill 40, $20

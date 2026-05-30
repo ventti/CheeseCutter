@@ -154,10 +154,13 @@ enum ULTIMATE_IMG_LO = 0x0e00;   // first address taken verbatim from song.memsp
 enum ULTIMATE_IMG_HI = 0xf840;   // one past the last (covers the player's $f83d end)
 enum ULTIMATE_PAL_CLOCK = 0x4cc7;
 enum ULTIMATE_NTSC_CLOCK = 0x4295;
-// Fixed addresses of the song-text buffers in ultimate_host.acme.
-enum ULTIMATE_SN_TITLE = 0x0a00;
-enum ULTIMATE_SN_AUTHOR = 0x0a20;
-enum ULTIMATE_SN_RELEASE = 0x0a40;
+// Fixed addresses of the text-row buffers in ultimate_host.acme (40 bytes each).
+enum ULTIMATE_SN_TITLE = 0x0b00;
+enum ULTIMATE_SN_AUTHOR = 0x0b28;
+enum ULTIMATE_SN_RELEASE = 0x0b50;
+enum ULTIMATE_SN_APPVER = 0x0b78;
+enum ULTIMATE_SN_PLAYER = 0x0ba0;
+enum ULTIMATE_SN_STATUS = 0x0bc8;
 
 // ASCII -> C64 screen code for the lowercase/mixed charset (VIC char base
 // $1800, set by the shim). A-Z map to $41-$5A, a-z to $01-$1A.
@@ -170,6 +173,10 @@ private ubyte toScreenCode(ubyte c) {
 
 ubyte[] buildResidentImage(Song song, bool ntsc) {
 	int mult = song.multiplier < 1 ? 1 : song.multiplier;
+	// CIA fires at 50*mult Hz (one frame divided by the multiplier), and the
+	// shim makes exactly one player call per IRQ — play on the frame boundary,
+	// mplay on the in-between subframes. So a 2x song triggers the player at
+	// 100 Hz, evenly spaced (~156 raster lines apart), not back-to-back.
 	int ciaval = (ntsc ? ULTIMATE_NTSC_CLOCK : ULTIMATE_PAL_CLOCK) / mult;
 	bool newKeyjam = song.ver > 7;
 	int subnote = newKeyjam ? song.offsets[Offsets.Subnoteplay] : 0x1009;
@@ -186,7 +193,8 @@ ubyte[] buildResidentImage(Song song, bool ntsc) {
 		format("SHTRANSADDR = $%04x\n", shtrans & 0xffff) ~
 		format("CIAVAL = $%04x\n", ciaval & 0xffff) ~
 		format("MULT = %d\n", mult - 1) ~
-		format("NEWKEYJAM = %d\n", newKeyjam ? 1 : 0);
+		format("NEWKEYJAM = %d\n", newKeyjam ? 1 : 0) ~
+		format("FRAMERATE = %d\n", ntsc ? 60 : 50);
 
 	ubyte[] shim = cast(ubyte[])assemble(defs ~ ultimateShimSource);
 	if(shim.length < 2)
@@ -206,15 +214,18 @@ ubyte[] buildResidentImage(Song song, bool ntsc) {
 	prg ~= shimBody;
 	prg.length = 2 + shimRegion;                 // zero-pad the gap up to $0e00
 
-	// Paint the song text (screen codes) into the shim's buffers.
-	void putName(int addr, char[] s) {
+	// Paint the text rows (screen codes) into the shim's buffers (40 wide).
+	void putText(int addr, const(char)[] s) {
 		int off = (addr - 0x0801) + 2;
-		foreach(i; 0 .. 32)
+		foreach(i; 0 .. 40)
 			prg[off + i] = toScreenCode(i < s.length ? cast(ubyte)s[i] : 0x20);
 	}
-	putName(ULTIMATE_SN_TITLE, song.title);
-	putName(ULTIMATE_SN_AUTHOR, song.author);
-	putName(ULTIMATE_SN_RELEASE, song.release);
+	putText(ULTIMATE_SN_TITLE, song.title);
+	putText(ULTIMATE_SN_AUTHOR, song.author);
+	putText(ULTIMATE_SN_RELEASE, song.release);
+	putText(ULTIMATE_SN_APPVER, APP_NAME ~ " " ~ APP_VERSION);
+	putText(ULTIMATE_SN_PLAYER, "Player: " ~ song.playerID[0 .. 6].idup);
+	putText(ULTIMATE_SN_STATUS, "Time: 00:00 / $00");
 
 	int imgBase = cast(int)prg.length;           // prg index of address $0e00
 	prg ~= song.memspace[ULTIMATE_IMG_LO .. ULTIMATE_IMG_HI];
