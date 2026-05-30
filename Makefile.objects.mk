@@ -6,8 +6,11 @@ OBJS= \
 	src/audio/timer.o \
 	src/audio/callback.o \
 	src/audio/visualizer.o \
+	src/audio/ultimate.o \
 	src/ct/purge.o \
 	src/ct/base.o \
+	src/ct/dump.o \
+	src/ct/build.o \
 	src/com/fb.o \
 	src/com/cpu.o \
 	src/com/kbd.o \

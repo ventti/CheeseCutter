@@ -7,6 +7,7 @@ import derelict.sdl2.sdl;
 import std.conv;
 import main;
 import ct.base;
+import ct.build;
 import com.session;
 import ct.purge;
 import ui.help;
@@ -25,6 +26,7 @@ import std.string;
 import std.file;
 import std.stdio;
 import audio.audio, audio.timer, audio.callback;
+static import audio.ultimate;
 
 enum PAGESTEP = 16;
 enum CONFIRM_TIMEOUT = 90;
@@ -938,7 +940,7 @@ final class UI {
 		//bool printSIDDump = false;
 		int vismode = VisMode.Regs;
 		AboutDialog aboutdialog;
-		FileSelectorDialog loaddialog, savedialog;
+		FileSelectorDialog loaddialog, savedialog, prgdialog;
 	}
 	static Statusline statusline;
 	static Infobar infobar;
@@ -968,6 +970,8 @@ final class UI {
 												  dialog_width), &loadCallback, &importCallback);
 		savedialog = new SaveFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
 												  dialog_width), &saveCallback);
+		prgdialog = new SaveFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
+												  dialog_width), &savePrgCallback, "Save playable .prg");
 
 		int aboutdlg_width = screen.width - 18;
 		int aboutdlg_height = 13;
@@ -1053,6 +1057,12 @@ final class UI {
 		sm.register("save_file", Ctx.global, "File",
 					"Open the Save song dialog", SDLK_F10, 0, {
 			activateDialog(savedialog);
+		});
+
+		sm.register("save_prg", Ctx.global, "File",
+					"Save current subtune as a playable .prg", SDLK_F10, KMOD_SHIFT, {
+			prgdialog.setFilename(proposePrgName());
+			activateDialog(prgdialog);
 		});
 
 		sm.register("quick_save", Ctx.global, "File",
@@ -1813,6 +1823,30 @@ final class UI {
 		}
 	}
 
+	// Propose a .prg filename from the current .ct(2) file (or a default).
+	private string proposePrgName() {
+		string fn = state.filename.strip();
+		if(fn.length == 0) return "song.prg";
+		auto dot = fn.lastIndexOf('.');
+		if(dot > 0) fn = fn[0 .. dot];
+		return fn ~ ".prg";
+	}
+
+	private void savePrgCallback(string s) {
+		try {
+			ubyte[] prg = ct.build.buildResidentImage(song, audio.player.ntsc != 0);
+			std.file.write(s, prg);
+		}
+		catch(Exception e) {
+			stderr.writeln(e.toString);
+			statusline.display("Could not write .prg! " ~ e.msg);
+			return;
+		}
+		string fn = s.strip();
+		auto ind = 1 + fn.lastIndexOf(DIR_SEPARATOR);
+		statusline.display(format("Saved playable \"%s\".", fn[ind .. $]));
+	}
+
 	void importCallback(string s) {
 		loadCallback(s, true);
 	}
@@ -1841,6 +1875,10 @@ final class UI {
 			statusline.display("Error: " ~ e.toString);
 			return;
 		}
+
+		// A new song image means the resident C64 Ultimate copy is stale.
+		if(audio.ultimate.isUltimate())
+			audio.ultimate.markReload();
 
 		refresh();
 		// all voices ON

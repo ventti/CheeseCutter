@@ -2,7 +2,7 @@
 
 PREFIX?=/usr
 EXAMPLESDIR?=/usr/share/examples/ccutter
-LIBS=-L-ldl -L-lstdc++
+LIBS=-L-ldl -L-lstdc++ -L-lcurl
 COMFLAGS=-O2
 VERSION=$(shell cat Version)
 DFLAGS=-d-version=DerelictSDL2_Static $(COMFLAGS) -I./src -J./src/c64 -J./src/font
@@ -20,8 +20,8 @@ include Makefile.objects.mk
 
 all: ct2util ccutter
 
-ccutter: $(C64OBJS) $(OBJS) $(CXX_OBJS)
-	$(DC) $(COMFLAGS) -of=$@ $(OBJS) $(CXX_OBJS) $(LIBS)
+ccutter: $(C64OBJS) $(OBJS) $(CXX_OBJS) $(C_OBJS)
+	$(DC) $(COMFLAGS) -of=$@ $(OBJS) $(CXX_OBJS) $(C_OBJS) $(LIBS)
 
 .cpp.o : $(CXX_SRCS)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -70,6 +70,7 @@ src/c64/player.bin: src/c64/player_v4.acme
 	acme -f cbm --outfile $@ $<
 
 src/ct/base.o: src/c64/player.bin
+src/ct/build.o: src/c64/player_v4.acme src/c64/ultimate_host.acme
 src/ui/ui.o: src/ui/help.o
 
 %.o: %.d

@@ -2,7 +2,7 @@
 #LIBS=/opt/ldc2/lib/libphobos-ldc.a /opt/ldc2/lib/libdruntime-ldc.a -lstdc++
 # libspath from env, default given here
 LIBSPATH?=/opt/homebrew/lib
-LIBS=${LIBSPATH}/libphobos2-ldc.a ${LIBSPATH}/libdruntime-ldc.a -lstdc++ -L${LIBSPATH} -lsdl2
+LIBS=${LIBSPATH}/libphobos2-ldc.a ${LIBSPATH}/libdruntime-ldc.a -lstdc++ -L${LIBSPATH} -lsdl2 -lcurl
 FRAMEWORKS=-framework Foundation
 COMFLAGS= -mmacosx-version-min=15.0
 VERSION=$(shell cat Version)
@@ -18,8 +18,8 @@ TARGET=ccutter
 
 include Makefile.objects.mk
 
-$(TARGET): $(C64OBJS) $(OBJS) $(CXX_OBJS)
-	$(CC) $(DLINK) -Wl,$(LDFLAGS) -o $(TARGET) $(OBJS) $(CXX_OBJS) $(LIBS) $(FRAMEWORKS)
+$(TARGET): $(C64OBJS) $(OBJS) $(CXX_OBJS) $(C_OBJS)
+	$(CC) $(DLINK) -Wl,$(LDFLAGS) -o $(TARGET) $(OBJS) $(CXX_OBJS) $(C_OBJS) $(LIBS) $(FRAMEWORKS)
 
 .cpp.o : $(CXX_SRCS)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -72,6 +72,7 @@ src/c64/player.bin: src/c64/player_v4.acme
 	acme -f cbm --outfile $@ $<
 
 src/ct/base.o: src/c64/player.bin
+src/ct/build.o: src/c64/player_v4.acme src/c64/ultimate_host.acme
 src/ui/ui.o: src/ui/help.o
 
 %.o: %.d

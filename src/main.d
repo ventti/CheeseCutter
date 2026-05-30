@@ -14,6 +14,7 @@ import ui.input;
 import audio.player;
 import audio.resid.filter;
 import audio.audio, audio.callback, audio.timer;
+static import audio.ultimate;
 import std.stdio;
 import std.string;
 import std.conv;
@@ -208,6 +209,13 @@ void mainloop(bool verbose) {
 		}
 		SDL_Delay(40);
 		video.updateFrame();
+
+		// Mirror any edited song data to the C64 Ultimate (no-op when
+		// nothing changed). Re-injects the image if a new song was loaded.
+		if(audio.ultimate.isUltimate()) {
+			audio.ultimate.ensureLoaded(song);
+			audio.ultimate.syncDeltas(song);
+		}
 	}
 }
 
@@ -234,6 +242,9 @@ void printheader() {
 	stderr.writefln("  --height [rows]  Set sequencer height in rows (min=%d, max=64); disables autoscale", DEFAULT_ROWS - 10);
 	stderr.writefln("  --width [cols]   Set UI width in columns (min=%d, max=200); disables autoscale", DEFAULT_COLUMNS);
 	stderr.writefln("  --dump-keys      Print the keyboard reference as Markdown and exit");
+	stderr.writefln("  --ultimate [IP]  Play on a C64 Ultimate (1541U/U64) at IP over its REST API");
+	stderr.writefln("  --ultimate-port [n] REST API port for --ultimate (def=80)");
+	stderr.writefln("                   (set CHEESECUTTER_ULTIMATE_PASSWORD for the X-Password header)");
 	stderr.writefln("  --verbose        Enable verbose logging");
 	stderr.writefln("  The UI auto-scales to the screen by default (minimum %dx%d chars);", DEFAULT_COLUMNS, DEFAULT_ROWS);
 	stderr.writefln("  pass --width and/or --height for a fixed size.");
@@ -264,6 +275,9 @@ int main(char[][] args) {
 	int requestedUiWidth = 0; // columns; 0 means use default
 	bool useAutoscale = true; // autoscale by default; --width/--height disables it
 	bool dumpKeys = false;
+	bool ultimateOn = false;
+	string ultimateHost;
+	int ultimatePort = 80;
   // DerelictSDL2.load();
 
 	scope(exit) {
@@ -358,6 +372,17 @@ int main(char[][] args) {
 		case "--dump-keys":
 			dumpKeys = true;
 			break;
+		case "--ultimate":
+			if(i + 1 >= args.length || args[i+1][0] == '-')
+				throw new UserException("Option --ultimate requires an IP address.");
+			ultimateHost = cast(string)args[i+1].dup;
+			ultimateOn = true;
+			i++;
+			break;
+		case "--ultimate-port":
+			ultimatePort = intOption(args, i, "--ultimate-port");
+			i++;
+			break;
 		case "--verbose":
 			verbose = true;
 			break;
@@ -392,6 +417,9 @@ int main(char[][] args) {
 		com.fb.mode = 1;
 	}
 
+	if(ultimateOn)
+		audio.ultimate.configure(ultimateHost, ultimatePort, audio.player.ntsc != 0);
+
 	audio.player.init();
 
 	// Initialize video and get the actual sequencer height
@@ -411,9 +439,15 @@ int main(char[][] args) {
 	loadFile(filename);
 	video.updateFrame();
 
+	// Reboot the C64 Ultimate and inject the player + current song image.
+	if(audio.ultimate.isUltimate())
+		audio.ultimate.ensureLoaded(song);
+
 	SDL_PauseAudio(0);
 	log("Started");
 	mainloop(verbose);
+	if(audio.ultimate.isUltimate())
+		audio.ultimate.resetMachine();
 	audio.audio.audio_close();
 	return 0;
 }

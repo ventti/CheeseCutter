@@ -1,0 +1,272 @@
+;;; ----------------------------------------------------------------------
+;;; ultimate_host.acme
+;;;
+;;; Self-running host shim for C64 Ultimate (1541U / Ultimate64) playback.
+;;; CheeseCutter's player is normally driven frame-by-frame by the host
+;;; (the D side calls init/play/mplay in the emulated CPU). On real
+;;; hardware nobody provides that tick, so this small, separate stub
+;;; installs a CIA timer IRQ and dispatches to the *unmodified* player
+;;; entry points. It also exposes a tiny control block in RAM that the
+;;; host pokes over the REST writemem API to start/stop/keyjam.
+;;;
+;;; The whole live song image (player + data) lives at $0e00..~$f83d and
+;;; deliberately uses RAM under BASIC/KERNAL ROM, so we run in all-RAM
+;;; mode ($01 = $35: ROM banked out, IO still mapped for the SID at $d400)
+;;; and take the hardware IRQ vector at $fffe (no KERNAL available).
+;;;
+;;; Display: black screen + border; song title/author/release are shown in
+;;; light grey (built into the image by ct/build.d). The border is flipped
+;;; to dark green for the duration of each player call, so its height is a
+;;; live raster-time meter, and black the rest of the time.
+;;;
+;;; The following symbols are prepended by ct/build.d before assembly:
+;;;   INITADDR, PLAYADDR, MPLAYADDR  - player jump table ($1000/$1003/$1006)
+;;;   SUBNOTE, SUBMPLAY             - keyjam entry points (from song.offsets)
+;;;   SHTRANSADDR                   - per-voice transpose table base
+;;;   CIAVAL                        - CIA #1 timer A latch (PAL/NTSC * speed)
+;;;   MULT                          - multispeed reload (song.multiplier - 1)
+;;;   NEWKEYJAM                     - 1 if song.ver > 7 (use SUBNOTE/SUBMPLAY)
+;;; ----------------------------------------------------------------------
+
+COL_BLACK	= 0
+COL_GREEN	= 5		; the C64 "green" is a dark green
+COL_LTGREY	= 15
+
+;;; ----------------------------------------
+;;; BASIC autostart: "10 SYS 2080". run_prg does a RUN, which jumps here.
+;;; ----------------------------------------
+		* = $0801
+		!8 $0b,$08		; link to next BASIC line ($080b)
+		!8 $0a,$00		; line number 10
+		!8 $9e			; SYS token
+		!8 $32,$30,$38,$30	; "2080"  -> $0820
+		!8 $00			; end of line
+		!8 $00,$00		; end of program
+
+;;; ----------------------------------------
+;;; Control block at a fixed RAM address. The host pokes these bytes via
+;;; POST /v1/machine:writemem?address=0810. Keep in sync with the CTRL_*
+;;; constants in src/audio/ultimate.d.
+;;; ----------------------------------------
+		* = $0810
+ctrl_mode	!8 0		; mode the IRQ runs each tick: 0 stop, 1 play, 2 keyjam
+ctrl_req	!8 0		; one-shot host request (cleared by the shim):
+				;   1 = restart (jsr init, then play)
+				;   2 = keyjam trigger (jsr subnoteplay, then keyjam)
+				;   3 = stop (silence)
+ctrl_subtune	!8 0		; A value passed to init
+ctrl_kjnote	!8 0		; keyjam note
+ctrl_kjvoice	!8 0		; keyjam voice (0..2)
+ctrl_kjinstr	!8 0		; keyjam instrument
+
+;;; ----------------------------------------
+;;; Installer. Entered from BASIC (SYS 2080) with ROM still mapped.
+;;; ----------------------------------------
+		* = $0820
+install
+		sei
+		lda #$35		; ROM out (BASIC+KERNAL), IO in
+		sta $01
+
+		jsr setup_screen
+
+		lda #$7f
+		sta $dc0d		; disable all CIA #1 IRQ sources
+		sta $dd0d		; disable all CIA #2 IRQ/NMI sources
+		lda $dc0d		; ack pending
+		lda $dd0d
+		lda #$00
+		sta $d01a		; disable VIC raster/sprite IRQ
+
+		lda #<CIAVAL		; program CIA #1 timer A latch
+		sta $dc04
+		lda #>CIAVAL
+		sta $dc05
+
+		lda #<irqhandler	; hardware IRQ vector (RAM, KERNAL is out)
+		sta $fffe
+		lda #>irqhandler
+		sta $ffff
+		lda #<nmihandler	; keep NMI harmless
+		sta $fffa
+		lda #>nmihandler
+		sta $fffb
+
+		lda #$11		; start timer A, continuous, force latch
+		sta $dc0e
+		lda #$81		; enable timer A underflow IRQ
+		sta $dc0d
+
+		lda #0
+		sta cntr
+		lda ctrl_subtune
+		jsr INITADDR		; init the player (silent first frame)
+		lda #1
+		sta ctrl_mode		; default to PLAY
+		cli
+spin		jmp spin
+
+nmihandler	rti
+
+;;; ----------------------------------------
+;;; Black screen + border, light-grey text, then paint the song strings.
+;;; ----------------------------------------
+setup_screen
+		lda #$17		; screen $0400, char base $1800 (lowercase/mixed set)
+		sta $d018
+		lda #COL_BLACK
+		sta $d020		; border
+		sta $d021		; background
+		ldx #0
+clrscr		lda #$20		; space
+		sta $0400,x
+		sta $0500,x
+		sta $0600,x
+		sta $06e8,x		; covers up to $07e7
+		lda #COL_LTGREY
+		sta $d800,x
+		sta $d900,x
+		sta $da00,x
+		sta $dae8,x		; covers up to $dbe7
+		inx
+		bne clrscr
+		ldx #0
+cpyname		lda sn_title,x		; row 1
+		sta $0428,x
+		lda sn_author,x		; row 3
+		sta $0478,x
+		lda sn_release,x	; row 5
+		sta $04c8,x
+		inx
+		cpx #32
+		bne cpyname
+		rts
+
+;;; ----------------------------------------
+;;; IRQ handler. A hardware IRQ only stacks PC+status, so preserve the
+;;; registers ourselves. The border is green only while a player routine
+;;; runs, giving a raster-time bar.
+;;; ----------------------------------------
+irqhandler
+		pha
+		txa
+		pha
+		tya
+		pha
+		lda $dc0d		; ack CIA #1 timer A
+
+		;; --- handle one-shot host request, if any ---
+		lda ctrl_req
+		beq dispatch
+		cmp #1
+		beq do_restart
+		cmp #2
+		beq do_keyjam
+		cmp #3
+		beq do_stop
+		jmp clrreq		; unknown -> just clear
+
+do_restart
+		lda #0
+		sta cntr
+		lda ctrl_subtune
+		jsr INITADDR
+		lda #1
+		sta ctrl_mode
+		jmp clrreq
+
+do_keyjam
+!if NEWKEYJAM = 1 {
+		ldx ctrl_kjvoice	; clear per-voice transpose (ver>8 semantics)
+		lda #0
+		sta SHTRANSADDR,x
+}
+		lda ctrl_kjnote
+		ldx ctrl_kjvoice
+		ldy ctrl_kjinstr
+!if NEWKEYJAM = 1 {
+		jsr SUBNOTE
+} else {
+		jsr $1009
+}
+		lda #2
+		sta ctrl_mode
+		jmp clrreq
+
+do_stop
+		jsr silence
+		lda #0
+		sta ctrl_mode
+clrreq
+		lda #0
+		sta ctrl_req
+
+		;; --- run the current mode for this tick ---
+dispatch
+		lda ctrl_mode
+		beq irqdone		; 0 = stopped
+		cmp #2
+		beq kjtick
+
+		;; mode 1 = play. Multispeed: run the full play tick on the
+		;; frame boundary, mplay on the in-between subframes (mirrors
+		;; the player's own cplay/cntr logic and the host's audio_frame).
+		dec cntr
+		bmi playfull
+		lda #COL_GREEN
+		sta $d020
+		jsr MPLAYADDR
+		lda #COL_BLACK
+		sta $d020
+		jmp irqdone
+playfull
+		lda #MULT
+		sta cntr
+		lda #COL_GREEN
+		sta $d020
+		jsr PLAYADDR
+		lda #COL_BLACK
+		sta $d020
+		jmp irqdone
+
+kjtick
+		ldx #0
+		lda #COL_GREEN
+		sta $d020
+!if NEWKEYJAM = 1 {
+		jsr SUBMPLAY
+} else {
+		jsr $100c
+}
+		lda #COL_BLACK
+		sta $d020
+
+irqdone
+		pla
+		tay
+		pla
+		tax
+		pla
+		rti
+
+;;; ----------------------------------------
+;;; Silence: master volume off and gate-off all three voices.
+;;; ----------------------------------------
+silence
+		lda #0
+		sta $d418
+		sta $d404
+		sta $d40b
+		sta $d412
+		rts
+
+cntr		!8 0
+
+;;; ----------------------------------------
+;;; Song text, in C64 screen codes. ct/build.d fills these from the song's
+;;; title / author / release before assembly+upload.
+;;; ----------------------------------------
+		* = $0a00
+sn_title	!fill 32, $20
+sn_author	!fill 32, $20
+sn_release	!fill 32, $20
