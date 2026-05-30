@@ -989,8 +989,10 @@ final class UI {
 		//if(com.fb.mode > 0)
 		//	state.shortTitles = false;
 		toplevel.activate();
-		activateDialog(aboutdialog);
-		
+		// Don't pop the About dialog on startup: it would swallow the first
+		// Esc, breaking the documented Esc-Esc-y quit chord. About is still
+		// available on F11 (the about_dialog shortcut).
+
 		// Initialize and register keyboard shortcuts
 		registerShortcuts();
 		// Seed the active context from the initially active window (mainui is not
