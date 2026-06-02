@@ -39,8 +39,12 @@ all: c64 $(OBJS) $(CXX_OBJS) ct2util ct $(TARGET)
 # Regenerate the man page and keyboard reference from the tool itself
 # (single source of truth: src/main.d cliOptions() and the com.shortcuts registry).
 docs: $(TARGET)
-	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./$(TARGET) --dump-man  > doc/ccutter.1
-	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./$(TARGET) --dump-keys > doc/KEYBOARD.md
+	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./$(TARGET) --dump-man     > doc/ccutter.1
+	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./$(TARGET) --dump-man fr  > doc/ccutter.fr.1
+	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./$(TARGET) --dump-man de  > doc/ccutter.de.1
+	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./$(TARGET) --dump-man sv  > doc/ccutter.sv.1
+	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./$(TARGET) --dump-man fi  > doc/ccutter.fi.1
+	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./$(TARGET) --dump-keys    > doc/KEYBOARD.md
 
 release: all
 	strip ccutter$(EXE)

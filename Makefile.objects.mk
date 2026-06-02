@@ -17,6 +17,7 @@ OBJS= \
 	src/com/session.o \
 	src/com/util.o \
 	src/com/shortcuts.o \
+	src/manpage.o \
 	src/main.o \
 	src/ui/tables.o \
 	src/ui/dialogs.o \

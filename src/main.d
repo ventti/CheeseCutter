@@ -15,6 +15,7 @@ import audio.player;
 import audio.resid.filter;
 import audio.audio, audio.callback, audio.timer;
 static import audio.ultimate;
+import manpage;
 import std.stdio;
 import std.string;
 import std.conv;
@@ -220,11 +221,9 @@ void mainloop(bool verbose) {
 }
 
 // Single source of truth for the command-line options. Both --help
-// (printheader) and the man page (--dump-man / doc/ccutter.1) are generated
-// from this list, so they can never drift out of sync. Keep new CLI flags
-// here only.
-struct CliOpt { string flags; string arg; string help; }
-
+// (printheader) and the localized man pages (--dump-man, see module manpage)
+// are generated from this list, so they can never drift out of sync. Keep new
+// CLI flags here only. (CliOpt is defined in module manpage.)
 CliOpt[] cliOptions() {
 	return [
 		CliOpt("-b", "[value]", format("Set playback buffer size (def=%d)", audio.audio.bufferSize)),
@@ -265,38 +264,6 @@ void printheader() {
 	stderr.writefln("  pass --width and/or --height for a fixed size. Set");
 	stderr.writefln("  CHEESECUTTER_ULTIMATE_PASSWORD for the C64 Ultimate X-Password header.");
 	stderr.writef("\n");
-}
-
-// Render the man page (roff) from the same option list. Regenerate with:
-//   ccutter --dump-man > doc/ccutter.1
-string dumpManPage() {
-	import std.array : appender, replace, split, join;
-	string esc(string s) { return s.replace(`\`, `\\`).replace("-", `\-`); }
-	auto a = appender!string();
-	a.put(format(".TH CCUTTER \"1\" \"\" \"%s %s\" \"User Commands\"\n",
-				 com.util.APP_NAME, com.util.APP_VERSION));
-	a.put(".SH NAME\nccutter \\- SID music editor\n");
-	a.put(".SH SYNOPSIS\n.B ccutter\n[\\fI\\,OPTION\\/\\fR]... [\\fI\\,FILE\\/\\fR]\n");
-	a.put(".SH DESCRIPTION\n");
-	a.put(format("%s %s, based on %s %s.\n.PP\n",
-				 com.util.APP_NAME, com.util.APP_VERSION,
-				 com.util.UPSTREAM_NAME, com.util.UPSTREAM_VERSION));
-	a.put("CheeseCutter (C) 2009\\-17 Abaddon. Released under GNU GPL.\n");
-	a.put(".SH OPTIONS\n");
-	foreach(o; cliOptions()) {
-		a.put(".TP\n");
-		string[] bolded;
-		foreach(f; o.flags.split(", "))
-			bolded ~= "\\fB" ~ esc(f) ~ "\\fR";
-		a.put(bolded.join(", ") ~ (o.arg.length ? " " ~ esc(o.arg) : "") ~ "\n");
-		a.put(esc(o.help) ~ "\n");
-	}
-	a.put(".SH ENVIRONMENT\n.TP\n\\fBCHEESECUTTER_ULTIMATE_PASSWORD\\fR\n");
-	a.put("If set, sent as the X\\-Password header on every C64 Ultimate REST request (firmware 3.12+).\n");
-	a.put(".SH KEYS\n");
-	a.put("In the editor press F12 for context help, or run \\fBccutter \\-\\-dump\\-keys\\fR for the full reference. \\fBShift\\-F10\\fR saves the current subtune as a self\\-running .prg.\n");
-	a.put(".SH SEE ALSO\nct2util(1)\n");
-	return a.data;
 }
 
 // Parse a numeric command-line option without crashing on bad input. Reports a
@@ -350,8 +317,16 @@ int main(char[][] args) {
 				printheader();
 				return 0;
 			case "--dump-man":
-				std.stdio.write(dumpManPage());
-				return 0;
+				{
+					// optional language code: --dump-man [en|fr|de|sv|fi]
+					string lang = "";
+					if(i + 1 < args.length && args[i+1].length && args[i+1][0] != '-') {
+						lang = cast(string)args[i+1].dup;
+						i++;
+					}
+					std.stdio.write(dumpManPage(cliOptions(), lang));
+					return 0;
+				}
 			case "-m":
 				sidtype = to!int(args[i+1]);
 				if(sidtype != 0 && sidtype != 1 && sidtype != 6581 && sidtype != 8580)
