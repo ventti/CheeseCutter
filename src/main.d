@@ -219,6 +219,35 @@ void mainloop(bool verbose) {
 	}
 }
 
+// Single source of truth for the command-line options. Both --help
+// (printheader) and the man page (--dump-man / doc/ccutter.1) are generated
+// from this list, so they can never drift out of sync. Keep new CLI flags
+// here only.
+struct CliOpt { string flags; string arg; string help; }
+
+CliOpt[] cliOptions() {
+	return [
+		CliOpt("-b", "[value]", format("Set playback buffer size (def=%d)", audio.audio.bufferSize)),
+		CliOpt("-f, --full", "", "Start in fullscreen mode"),
+		CliOpt("-nofp", "", "Do not use resid-fp emulation"),
+		CliOpt("-fpr", "[x]", "Specify filter preset. x = 0..16 for 6581 and 0..1 for 8580"),
+		CliOpt("-i", "", "Disable resid interpolation (use fast mode instead)"),
+		CliOpt("-l", "", "Enable VIC-II badline timing emulation"),
+		CliOpt("-m", "[0|1]", "Specify SID model for reSID (6581/8580) (def=0)"),
+		CliOpt("-n", "", "Enable NTSC mode"),
+		CliOpt("-r", "[value]", "Set playback frequency (def=48000)"),
+		CliOpt("-y", "", "Use YUV video overlay"),
+		CliOpt("-h, --help", "", "Show this help and exit"),
+		CliOpt("--height", "[rows]", format("Set sequencer height in rows (min=%d, max=64); disables autoscale", DEFAULT_ROWS - 10)),
+		CliOpt("--width", "[cols]", format("Set UI width in columns (min=%d, max=200); disables autoscale", DEFAULT_COLUMNS)),
+		CliOpt("--dump-keys", "", "Print the keyboard reference as Markdown and exit"),
+		CliOpt("--dump-man", "", "Print the man page (roff) to stdout and exit"),
+		CliOpt("--ultimate", "[IP]", "Play on a C64 Ultimate (1541U/Ultimate64) at IP over its REST API"),
+		CliOpt("--ultimate-port", "[n]", "REST API port for --ultimate (def=80)"),
+		CliOpt("--verbose", "", "Enable verbose logging"),
+	];
+}
+
 void printheader() {
 	stderr.writefln("%s %s", com.util.APP_NAME, com.util.APP_VERSION);
 	stderr.writefln("Based on %s %s.", com.util.UPSTREAM_NAME, com.util.UPSTREAM_VERSION);
@@ -228,27 +257,46 @@ void printheader() {
 	stderr.writefln("Usage: ccutter [OPTION]... [FILE]");
 	stderr.writef("\n");
 	stderr.writefln("Options:");
-	stderr.writefln("  -b [value]       Set playback buffer size (def=%d)", audio.audio.bufferSize);
-	stderr.writefln("  -f               Start in fullscreen mode");
-	stderr.writefln("  -nofp            Do not use resid-fp emulation");
-	stderr.writefln("  -fpr [x]         Specify filter preset. x = 0..16 for 6581 and 0..1 for 8580");
-	stderr.writefln("  -i               Disable resid interpolation (use fast mode instead)");
-	stderr.writefln("  -l               Enable VIC-II badline timing emulation");
-	stderr.writefln("  -m [0|1]         Specify SID model for reSID (6581/8580) (def=0)");
-	stderr.writefln("  -n               Enable NTSC mode");
-	stderr.writefln("  -r [value]       Set playback frequency (def=48000)");
-	stderr.writefln("  -y               Use YUV video overlay");
-	stderr.writefln("  -h, --help       Show this help and exit");
-	stderr.writefln("  --height [rows]  Set sequencer height in rows (min=%d, max=64); disables autoscale", DEFAULT_ROWS - 10);
-	stderr.writefln("  --width [cols]   Set UI width in columns (min=%d, max=200); disables autoscale", DEFAULT_COLUMNS);
-	stderr.writefln("  --dump-keys      Print the keyboard reference as Markdown and exit");
-	stderr.writefln("  --ultimate [IP]  Play on a C64 Ultimate (1541U/U64) at IP over its REST API");
-	stderr.writefln("  --ultimate-port [n] REST API port for --ultimate (def=80)");
-	stderr.writefln("                   (set CHEESECUTTER_ULTIMATE_PASSWORD for the X-Password header)");
-	stderr.writefln("  --verbose        Enable verbose logging");
+	foreach(o; cliOptions()) {
+		string left = o.arg.length ? o.flags ~ " " ~ o.arg : o.flags;
+		stderr.writefln("  %-18s %s", left, o.help);
+	}
 	stderr.writefln("  The UI auto-scales to the screen by default (minimum %dx%d chars);", DEFAULT_COLUMNS, DEFAULT_ROWS);
-	stderr.writefln("  pass --width and/or --height for a fixed size.");
+	stderr.writefln("  pass --width and/or --height for a fixed size. Set");
+	stderr.writefln("  CHEESECUTTER_ULTIMATE_PASSWORD for the C64 Ultimate X-Password header.");
 	stderr.writef("\n");
+}
+
+// Render the man page (roff) from the same option list. Regenerate with:
+//   ccutter --dump-man > doc/ccutter.1
+string dumpManPage() {
+	import std.array : appender, replace, split, join;
+	string esc(string s) { return s.replace(`\`, `\\`).replace("-", `\-`); }
+	auto a = appender!string();
+	a.put(format(".TH CCUTTER \"1\" \"\" \"%s %s\" \"User Commands\"\n",
+				 com.util.APP_NAME, com.util.APP_VERSION));
+	a.put(".SH NAME\nccutter \\- SID music editor\n");
+	a.put(".SH SYNOPSIS\n.B ccutter\n[\\fI\\,OPTION\\/\\fR]... [\\fI\\,FILE\\/\\fR]\n");
+	a.put(".SH DESCRIPTION\n");
+	a.put(format("%s %s, based on %s %s.\n.PP\n",
+				 com.util.APP_NAME, com.util.APP_VERSION,
+				 com.util.UPSTREAM_NAME, com.util.UPSTREAM_VERSION));
+	a.put("CheeseCutter (C) 2009\\-17 Abaddon. Released under GNU GPL.\n");
+	a.put(".SH OPTIONS\n");
+	foreach(o; cliOptions()) {
+		a.put(".TP\n");
+		string[] bolded;
+		foreach(f; o.flags.split(", "))
+			bolded ~= "\\fB" ~ esc(f) ~ "\\fR";
+		a.put(bolded.join(", ") ~ (o.arg.length ? " " ~ esc(o.arg) : "") ~ "\n");
+		a.put(esc(o.help) ~ "\n");
+	}
+	a.put(".SH ENVIRONMENT\n.TP\n\\fBCHEESECUTTER_ULTIMATE_PASSWORD\\fR\n");
+	a.put("If set, sent as the X\\-Password header on every C64 Ultimate REST request (firmware 3.12+).\n");
+	a.put(".SH KEYS\n");
+	a.put("In the editor press F12 for context help, or run \\fBccutter \\-\\-dump\\-keys\\fR for the full reference. \\fBShift\\-F10\\fR saves the current subtune as a self\\-running .prg.\n");
+	a.put(".SH SEE ALSO\nct2util(1)\n");
+	return a.data;
 }
 
 // Parse a numeric command-line option without crashing on bad input. Reports a
@@ -300,6 +348,9 @@ int main(char[][] args) {
 			{
 			case "-h", "-help", "--help", "-?":
 				printheader();
+				return 0;
+			case "--dump-man":
+				std.stdio.write(dumpManPage());
 				return 0;
 			case "-m":
 				sidtype = to!int(args[i+1]);
