@@ -1,7 +1,7 @@
 [Desktop Entry]
 # Actions=Play;
-Name=CheeseCutter
-Comment=SID music editor
+Name=CheeseCutter-Extended
+Comment=SID music editor based on CheeseCutter 2.9
 Comment[fr]=Éditeur de musique SID
 Terminal=false
 Exec=ccutter %f
