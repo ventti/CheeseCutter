@@ -10,6 +10,14 @@ import std.array;
 
 alias char* PetString;
 
+enum APP_NAME = "CheeseCutter-Extended";
+// Single source of truth for the version: the repo-root `Version` file, read at
+// compile time (string import; the Makefiles add -J. and `make` also reads it
+// for dist/tarball names). Bump the version by editing `Version` only.
+enum APP_VERSION = import("Version").strip;
+enum UPSTREAM_NAME = "CheeseCutter";
+enum UPSTREAM_VERSION = "2.9";
+
 //private auto regexFn = regex("[^a-zA-Z0-9_\\-\\.]");
 
 

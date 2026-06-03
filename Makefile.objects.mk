@@ -91,6 +91,15 @@ C64OBJS = src/c64/player.bin
 
 CTOBJS	=
 
+# The version lives only in the ./Version file; com.util.APP_VERSION is
+# string-imported from it at compile time (build flags include -J.). Because
+# it is an enum, its value is inlined into each user, so all of these objects
+# must rebuild when Version changes. Add new APP_VERSION users here. The
+# matching dependency rule lives in the main Makefiles (placing it here would
+# hijack the default goal, since this file is included first).
+VERSION_USERS = src/com/util.o src/main.o src/manpage.o src/ct/build.o \
+	src/ui/ui.o src/ui/dialogs.o src/ct2util.o
+
 DIST_FILES = \
 	./ChangeLog \
 	./LICENSE.md \

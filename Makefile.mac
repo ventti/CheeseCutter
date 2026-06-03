@@ -7,7 +7,7 @@ FRAMEWORKS=-framework Foundation
 COMFLAGS= -mmacosx-version-min=15.0
 VERSION=$(shell cat Version)
 DLINK=$(COMFLAGS)
-DFLAGS=-d-version=DerelictSDL2_Static -I./src -J./src/c64 -J./src/font
+DFLAGS=-d-version=DerelictSDL2_Static -I./src -J. -J./src/c64 -J./src/font
 CFLAGS=$(COMFLAGS)
 CXXFLAGS=$(CFLAGS) -I./src -O2
 LDFLAGS=-rpath,@executable_path/../Frameworks
@@ -83,6 +83,7 @@ src/c64/player.bin: src/c64/player_v4.acme
 
 src/ct/base.o: src/c64/player.bin
 src/ct/build.o: src/c64/player_v4.acme src/c64/ultimate_host.acme
+$(VERSION_USERS): Version
 src/ui/ui.o: src/ui/help.o
 
 %.o: %.d

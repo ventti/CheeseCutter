@@ -5,7 +5,7 @@ EXAMPLESDIR?=/usr/share/examples/ccutter
 LIBS=-L-ldl -L-lstdc++ -L-lcurl
 COMFLAGS=-O2
 VERSION=$(shell cat Version)
-DFLAGS=-d-version=DerelictSDL2_Static $(COMFLAGS) -I./src -J./src/c64 -J./src/font
+DFLAGS=-d-version=DerelictSDL2_Static $(COMFLAGS) -I./src -J. -J./src/c64 -J./src/font
 CFLAGS=$(COMFLAGS)
 CXXFLAGS=$(COMFLAGS) -I./src 
 COMPILE.d = $(DC) $(DFLAGS) -c
@@ -81,6 +81,7 @@ src/c64/player.bin: src/c64/player_v4.acme
 
 src/ct/base.o: src/c64/player.bin
 src/ct/build.o: src/c64/player_v4.acme src/c64/ultimate_host.acme
+$(VERSION_USERS): Version
 src/ui/ui.o: src/ui/help.o
 
 %.o: %.d

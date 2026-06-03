@@ -23,8 +23,13 @@ Doc surfaces — check each that applies:
   non-English man pages are machine-translated (a `.\"` note says so) — flag a
   native-speaker review when strings change.
 - **`doc/ct2util.1`** — still hand-maintained; update for ct2util CLI changes.
-- **`Version`** file and the `APP_VERSION` enum in `src/com/util.d` on a version
-  bump (they must match; the version is shown in-app and baked into exported PRGs).
+- **Version** lives only in the repo-root `Version` file. `com.util.APP_VERSION`
+  string-imports it at compile time (build flags include `-J.`), so bumping the
+  version = editing `Version` then rebuilding; it flows to `--help`, the man
+  pages and the exported PRGs automatically. Because `APP_VERSION` is an enum
+  (inlined), the Makefiles rebuild every user via `VERSION_USERS` — add new
+  `APP_VERSION` users to that list. (Top-level `README.md` still states the
+  version in prose; update it by hand on a bump.)
 
 There is no fully-automatic generator for the prose docs — treat the list above
 as the checklist to run through before considering a feature/fix done.
