@@ -3,4 +3,9 @@
 ccutter
 ct2util
 src/c64/player.bin
+*.prg
+*.ct
+!tunes/*.ct
 _backup.ct
+*.app
+*.dmg
