@@ -6,14 +6,18 @@ OBJS= \
 	src/audio/timer.o \
 	src/audio/callback.o \
 	src/audio/visualizer.o \
+	src/audio/ultimate.o \
 	src/ct/purge.o \
 	src/ct/base.o \
+	src/ct/dump.o \
+	src/ct/build.o \
 	src/com/fb.o \
 	src/com/cpu.o \
 	src/com/kbd.o \
 	src/com/session.o \
 	src/com/util.o \
 	src/com/shortcuts.o \
+	src/manpage.o \
 	src/main.o \
 	src/ui/tables.o \
 	src/ui/dialogs.o \
@@ -86,6 +90,15 @@ UTILOBJS = src/ct2util.o \
 C64OBJS = src/c64/player.bin
 
 CTOBJS	=
+
+# The version lives only in the ./Version file; com.util.APP_VERSION is
+# string-imported from it at compile time (build flags include -J.). Because
+# it is an enum, its value is inlined into each user, so all of these objects
+# must rebuild when Version changes. Add new APP_VERSION users here. The
+# matching dependency rule lives in the main Makefiles (placing it here would
+# hijack the default goal, since this file is included first).
+VERSION_USERS = src/com/util.o src/main.o src/manpage.o src/ct/build.o \
+	src/ui/ui.o src/ui/dialogs.o src/ct2util.o
 
 DIST_FILES = \
 	./ChangeLog \

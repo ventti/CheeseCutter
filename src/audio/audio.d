@@ -7,6 +7,7 @@ import derelict.sdl2.sdl;
 import audio.resid.filter;
 import audio.player;
 import audio.callback;
+static import audio.ultimate;
 import std.stdio;
 import core.stdc.stdlib;
 import core.stdc.string;
@@ -140,7 +141,12 @@ extern(C) {
 			(*callback)();
 		}
 
-		memcpy(stream, cast(ubyte*)mixbuf, len);
+		// In Ultimate mode the real C64 is the only sound source; keep
+		// the emulation running (for visualizer/timer) but mute output.
+		if(audio.ultimate.isUltimate())
+			memset(stream, 0, len);
+		else
+			memcpy(stream, cast(ubyte*)mixbuf, len);
 		bufferUsed -= samplesRequested;
 		if(bufferUsed < 0) {
       //			writeln("Audio buffer underrun ", bufferUsed);

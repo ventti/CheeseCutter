@@ -757,8 +757,8 @@ class LoadFileDialog : FileSelectorDialog {
 }
 
 class SaveFileDialog : FileSelectorDialog {
-	this(Rectangle a, CB cb) {
-		super(a, "Save Song", cb);
+	this(Rectangle a, CB cb, string header = "Save Song") {
+		super(a, header, cb);
 		activateWindow(2);
 	}
 

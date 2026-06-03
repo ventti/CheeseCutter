@@ -183,7 +183,7 @@ class VideoStandard : Video {
 			throw new DisplayError("Unable to initialize graphics mode.");
 		}
 
-		SDL_SetWindowTitle(window, "CheeseCutter");
+		SDL_SetWindowTitle(window, com.util.APP_NAME);
 		SDL_StartTextInput();
 		SDL_RaiseWindow(window);
 

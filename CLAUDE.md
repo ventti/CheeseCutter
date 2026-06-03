@@ -1,0 +1,41 @@
+# CheeseCutter-Extended — notes for Claude
+
+## Keep docs in sync with code (in the SAME change)
+
+When you add or change a **feature, fix, CLI option, or keyboard shortcut**,
+update the relevant documentation as part of that same change — never leave the
+docs trailing behind the code. A behavior change with no doc update is
+incomplete.
+
+Doc surfaces — check each that applies:
+
+- **`README.md`** — top-level feature/usage summary and the version line.
+- **`guide/README.md`** — the user guide (rendered through `guide/index.md`).
+  Update the *Global Shortcuts* / *Playback* tables and add or extend a section
+  when you introduce a feature.
+- **`doc/ccutter.1`, `doc/ccutter.{fr,de,sv,fi}.1` and `doc/KEYBOARD.md` are
+  GENERATED — do not hand-edit.** For a CLI flag, add it to `cliOptions()` in
+  `src/main.d` (the single source for `--help` and every man page); also add its
+  translated help to each language table in `src/manpage.d` (English help is the
+  fallback for any missing translation). For a shortcut, add a `com.shortcuts`
+  `register(...)` entry (drives F12 help + the keyboard reference). Then run
+  `make docs` (or `make -f Makefile.mac docs`) to regenerate all of them. The
+  non-English man pages are machine-translated (a `.\"` note says so) — flag a
+  native-speaker review when strings change.
+- **`doc/ct2util.1`** — still hand-maintained; update for ct2util CLI changes.
+- **Version** lives only in the repo-root `Version` file. `com.util.APP_VERSION`
+  string-imports it at compile time (build flags include `-J.`), so bumping the
+  version = editing `Version` then rebuilding; it flows to `--help`, the man
+  pages and the exported PRGs automatically. Because `APP_VERSION` is an enum
+  (inlined), the Makefiles rebuild every user via `VERSION_USERS` — add new
+  `APP_VERSION` users to that list. (Top-level `README.md` still states the
+  version in prose; update it by hand on a bump.)
+
+There is no fully-automatic generator for the prose docs — treat the list above
+as the checklist to run through before considering a feature/fix done.
+
+## Build note
+
+The Makefiles have no inter-module dependency tracking: run `make clean` after
+changing a base class or a string-imported asset (`src/c64/*.acme`,
+`src/c64/player.bin`) so dependents are rebuilt.

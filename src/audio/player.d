@@ -10,6 +10,7 @@ import audio.timer;
 import audio.callback;
 import audio.audio;
 import audio.visualizer;
+static import audio.ultimate;
 import audio.resid.filter;
 import seq.sequencer;
 import ui.ui;
@@ -97,6 +98,11 @@ void playNote(Element emt) {
 	}
 	cpuCall(call,true);
 	playstatus = Status.Keyjam;
+
+	if(audio.ultimate.isUltimate()) {
+		audio.ultimate.ensureLoaded(song);
+		audio.ultimate.cmdKeyjam(song, emt.note.value, v, emt.instr.value);
+	}
 }
 
 void playRow(Voice[] voices) {
@@ -123,6 +129,11 @@ void playRow(Voice[] voices) {
 
 	playstatus = Status.Keyjam;
 
+	if(audio.ultimate.isUltimate()) {
+		audio.ultimate.ensureLoaded(song);
+		audio.ultimate.cmdRestart(song, 0);
+	}
+
 	SDL_PauseAudio(0);
 }
 
@@ -142,6 +153,12 @@ void start(int[] trk, int[] seq) {
 	audio.visualizer.clearPersistentBrightness();
 
 	playstatus = Status.Play;
+
+	if(audio.ultimate.isUltimate()) {
+		audio.ultimate.ensureLoaded(song);
+		audio.ultimate.cmdRestart(song, 0);
+	}
+
 	SDL_PauseAudio(0);
 }
 
@@ -152,6 +169,7 @@ void start() {
 void stop() nothrow {
 	playstatus = Status.Stop;
 	muteSID(1,1,1);
+	if(audio.ultimate.isUltimate()) audio.ultimate.cmdStop();
 }
 
 void toggleVoice(int v) {
@@ -170,6 +188,7 @@ void setVoicon(int[] m) {
 	muted[2] = m[2];
 	muteSID(m[0], m[1], m[2]);
 	song.setVoicon(muted);
+	if(audio.ultimate.isUltimate()) audio.ultimate.pushVoice(song);
 }
 
 void setVoicon(shared int[] m) {
@@ -178,6 +197,7 @@ void setVoicon(shared int[] m) {
 	muted[2] = m[2];
 	muteSID(m[0], m[1], m[2]);
 	song.setVoicon(muted);
+	if(audio.ultimate.isUltimate()) audio.ultimate.pushVoice(song);
 }
 
 void initFP() {

@@ -7,6 +7,7 @@ import derelict.sdl2.sdl;
 import std.conv;
 import main;
 import ct.base;
+import ct.build;
 import com.session;
 import ct.purge;
 import ui.help;
@@ -25,6 +26,7 @@ import std.string;
 import std.file;
 import std.stdio;
 import audio.audio, audio.timer, audio.callback;
+static import audio.ultimate;
 
 enum PAGESTEP = 16;
 enum CONFIRM_TIMEOUT = 90;
@@ -938,7 +940,7 @@ final class UI {
 		//bool printSIDDump = false;
 		int vismode = VisMode.Regs;
 		AboutDialog aboutdialog;
-		FileSelectorDialog loaddialog, savedialog;
+		FileSelectorDialog loaddialog, savedialog, prgdialog;
 	}
 	static Statusline statusline;
 	static Infobar infobar;
@@ -968,6 +970,8 @@ final class UI {
 												  dialog_width), &loadCallback, &importCallback);
 		savedialog = new SaveFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
 												  dialog_width), &saveCallback);
+		prgdialog = new SaveFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
+												  dialog_width), &savePrgCallback, "Save playable .prg");
 
 		int aboutdlg_width = screen.width - 18;
 		int aboutdlg_height = 13;
@@ -985,8 +989,10 @@ final class UI {
 		//if(com.fb.mode > 0)
 		//	state.shortTitles = false;
 		toplevel.activate();
-		activateDialog(aboutdialog);
-		
+		// Don't pop the About dialog on startup: it would swallow the first
+		// Esc, breaking the documented Esc-Esc-y quit chord. About is still
+		// available on F11 (the about_dialog shortcut).
+
 		// Initialize and register keyboard shortcuts
 		registerShortcuts();
 		// Seed the active context from the initially active window (mainui is not
@@ -1053,6 +1059,13 @@ final class UI {
 		sm.register("save_file", Ctx.global, "File",
 					"Open the Save song dialog", SDLK_F10, 0, {
 			activateDialog(savedialog);
+		});
+
+		sm.register("save_prg", Ctx.global, "File",
+					"Save current subtune as a playable .prg", SDLK_F10, KMOD_SHIFT, {
+			prgdialog.setDirectory(getcwd());   // = the loaded .ct's dir
+			prgdialog.setFilename(proposePrgName());
+			activateDialog(prgdialog);
 		});
 
 		sm.register("quick_save", Ctx.global, "File",
@@ -1813,6 +1826,30 @@ final class UI {
 		}
 	}
 
+	// Propose a .prg filename from the current .ct(2) file (or a default).
+	private string proposePrgName() {
+		string fn = state.filename.strip();
+		if(fn.length == 0) return "song.prg";
+		auto dot = fn.lastIndexOf('.');
+		if(dot > 0) fn = fn[0 .. dot];
+		return fn ~ ".prg";
+	}
+
+	private void savePrgCallback(string s) {
+		try {
+			ubyte[] prg = ct.build.buildResidentImage(song, audio.player.ntsc != 0);
+			std.file.write(s, prg);
+		}
+		catch(Exception e) {
+			stderr.writeln(e.toString);
+			statusline.display("Could not write .prg! " ~ e.msg);
+			return;
+		}
+		string fn = s.strip();
+		auto ind = 1 + fn.lastIndexOf(DIR_SEPARATOR);
+		statusline.display(format("Saved playable \"%s\".", fn[ind .. $]));
+	}
+
 	void importCallback(string s) {
 		loadCallback(s, true);
 	}
@@ -1842,6 +1879,10 @@ final class UI {
 			return;
 		}
 
+		// A new song image means the resident C64 Ultimate copy is stale.
+		if(audio.ultimate.isUltimate())
+			audio.ultimate.markReload();
+
 		refresh();
 		// all voices ON
 		audio.player.setVoicon(0,0,0);
@@ -1853,7 +1894,8 @@ final class UI {
 		infobar.refresh();
 
 		// sync save filesel to load filesel in case dir was changed
-		foreach(d; [loaddialog, savedialog]) {
+		// (prgdialog too, so the .prg is offered in the loaded .ct's dir)
+		foreach(d; [loaddialog, savedialog, prgdialog]) {
 			d.setFilename(fn);
 			d.setDirectory(getcwd());
 		}

@@ -105,8 +105,9 @@ int main(string[] args) {
 	speeds.length = 32;
 	masks.length = 32;
 	void printheader() {
-		enum hdr = "CheeseCutter 2 utilities" ~ com.util.versionInfo;
+		enum hdr = com.util.APP_NAME ~ " " ~ com.util.APP_VERSION ~ " utilities" ~ com.util.versionInfo;
 		writefln(hdr);
+		writefln("Based on " ~ com.util.UPSTREAM_NAME ~ " " ~ com.util.UPSTREAM_VERSION ~ ".");
 		writefln("\nUsage: \t%s <command> <options> <infile> <-o outfile>",args[0]);
 		writefln("\t%s import <infile> <infile2> <-o outfile>",args[0]);
 		writefln("\t%s init <binaryfile> <-o outfile>",args[0]);

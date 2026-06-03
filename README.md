@@ -1,6 +1,6 @@
-CheeseCutter 2
+CheeseCutter-Extended 0.1.0
 
-http://theyamo.kapsi.fi/ccutter
+CheeseCutter-Extended is based on CheeseCutter 2.9.
 
 Programmed by abaddon 2009-2017.
 
@@ -24,8 +24,13 @@ Licensed under GNU General Public License (see the file COPYING for details).
 Binary packages are available for some distributions via:
 https://repology.org/metapackage/cheesecutter/versions
 
-NOTE: authors of CheeseCutter take no responsibility of binaries downloaded
+NOTE: authors of CheeseCutter-Extended take no responsibility of binaries downloaded
 from any third party website, including the one above.
+
+## Documentation
+
+The consolidated user guide is in `guide/` and is prepared for GitHub Pages
+deployment. In-app help is available with `F12`.
 
 ## How to build
 
@@ -47,7 +52,7 @@ This script will:
 After running the bootstrap script, you can use:
 
 ```sh
-mise run build        # Build CheeseCutter
+mise run build        # Build CheeseCutter-Extended
 mise run build-utils  # Build ct2util utility
 mise run clean        # Clean build artifacts
 ```

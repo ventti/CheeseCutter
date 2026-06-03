@@ -2,10 +2,10 @@
 
 PREFIX?=/usr
 EXAMPLESDIR?=/usr/share/examples/ccutter
-LIBS=-L-ldl -L-lstdc++
+LIBS=-L-ldl -L-lstdc++ -L-lcurl
 COMFLAGS=-O2
 VERSION=$(shell cat Version)
-DFLAGS=-d-version=DerelictSDL2_Static $(COMFLAGS) -I./src -J./src/c64 -J./src/font
+DFLAGS=-d-version=DerelictSDL2_Static $(COMFLAGS) -I./src -J. -J./src/c64 -J./src/font
 CFLAGS=$(COMFLAGS)
 CXXFLAGS=$(COMFLAGS) -I./src 
 COMPILE.d = $(DC) $(DFLAGS) -c
@@ -16,12 +16,22 @@ OBJ_EXT=.o
 
 include Makefile.objects.mk
 
-.PHONY: install release dist clean dclean tar
+.PHONY: install release dist clean dclean tar docs
 
 all: ct2util ccutter
 
-ccutter: $(C64OBJS) $(OBJS) $(CXX_OBJS)
-	$(DC) $(COMFLAGS) -of=$@ $(OBJS) $(CXX_OBJS) $(LIBS)
+# Regenerate the man page and keyboard reference from the tool itself
+# (single source of truth: src/main.d cliOptions() and the com.shortcuts registry).
+docs: ccutter
+	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./ccutter --dump-man     > doc/ccutter.1
+	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./ccutter --dump-man fr  > doc/ccutter.fr.1
+	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./ccutter --dump-man de  > doc/ccutter.de.1
+	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./ccutter --dump-man sv  > doc/ccutter.sv.1
+	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./ccutter --dump-man fi  > doc/ccutter.fi.1
+	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./ccutter --dump-keys    > doc/KEYBOARD.md
+
+ccutter: $(C64OBJS) $(OBJS) $(CXX_OBJS) $(C_OBJS)
+	$(DC) $(COMFLAGS) -of=$@ $(OBJS) $(CXX_OBJS) $(C_OBJS) $(LIBS)
 
 .cpp.o : $(CXX_SRCS)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -70,6 +80,8 @@ src/c64/player.bin: src/c64/player_v4.acme
 	acme -f cbm --outfile $@ $<
 
 src/ct/base.o: src/c64/player.bin
+src/ct/build.o: src/c64/player_v4.acme src/c64/ultimate_host.acme
+$(VERSION_USERS): Version
 src/ui/ui.o: src/ui/help.o
 
 %.o: %.d

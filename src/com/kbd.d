@@ -20,6 +20,7 @@ void translate(ref Keyinfo key) {
 void translate_super(ref Keyinfo key) {
 	if(key.mods & KMOD_GUI) {
         switch(key.key) {
+        case SDLK_0: key.key = SDLK_KP_0; break;
         case SDLK_1: key.key = SDLK_KP_1; break;
         case SDLK_2: key.key = SDLK_KP_2; break;
         case SDLK_3: key.key = SDLK_KP_3; break;

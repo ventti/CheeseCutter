@@ -14,6 +14,8 @@ import ui.input;
 import audio.player;
 import audio.resid.filter;
 import audio.audio, audio.callback, audio.timer;
+static import audio.ultimate;
+import manpage;
 import std.stdio;
 import std.string;
 import std.conv;
@@ -208,7 +210,41 @@ void mainloop(bool verbose) {
 		}
 		SDL_Delay(40);
 		video.updateFrame();
+
+		// Mirror any edited song data to the C64 Ultimate (no-op when
+		// nothing changed). Re-injects the image if a new song was loaded.
+		if(audio.ultimate.isUltimate()) {
+			audio.ultimate.ensureLoaded(song);
+			audio.ultimate.syncDeltas(song);
+		}
 	}
+}
+
+// Single source of truth for the command-line options. Both --help
+// (printheader) and the localized man pages (--dump-man, see module manpage)
+// are generated from this list, so they can never drift out of sync. Keep new
+// CLI flags here only. (CliOpt is defined in module manpage.)
+CliOpt[] cliOptions() {
+	return [
+		CliOpt("-b", "[value]", format("Set playback buffer size (def=%d)", audio.audio.bufferSize)),
+		CliOpt("-f, --full", "", "Start in fullscreen mode"),
+		CliOpt("-nofp", "", "Do not use resid-fp emulation"),
+		CliOpt("-fpr", "[x]", "Specify filter preset. x = 0..16 for 6581 and 0..1 for 8580"),
+		CliOpt("-i", "", "Disable resid interpolation (use fast mode instead)"),
+		CliOpt("-l", "", "Enable VIC-II badline timing emulation"),
+		CliOpt("-m", "[0|1]", "Specify SID model for reSID (6581/8580) (def=0)"),
+		CliOpt("-n", "", "Enable NTSC mode"),
+		CliOpt("-r", "[value]", "Set playback frequency (def=48000)"),
+		CliOpt("-y", "", "Use YUV video overlay"),
+		CliOpt("-h, --help", "", "Show this help and exit"),
+		CliOpt("--height", "[rows]", format("Set sequencer height in rows (min=%d, max=64); disables autoscale", DEFAULT_ROWS - 10)),
+		CliOpt("--width", "[cols]", format("Set UI width in columns (min=%d, max=200); disables autoscale", DEFAULT_COLUMNS)),
+		CliOpt("--dump-keys", "", "Print the keyboard reference as Markdown and exit"),
+		CliOpt("--dump-man", "", "Print the man page (roff) to stdout and exit"),
+		CliOpt("--ultimate", "[IP]", "Play on a C64 Ultimate (1541U/Ultimate64) at IP over its REST API"),
+		CliOpt("--ultimate-port", "[n]", "REST API port for --ultimate (def=80)"),
+		CliOpt("--verbose", "", "Enable verbose logging"),
+	];
 }
 
 void printheader() {
@@ -220,23 +256,13 @@ void printheader() {
 	stderr.writefln("Usage: ccutter [OPTION]... [FILE]");
 	stderr.writef("\n");
 	stderr.writefln("Options:");
-	stderr.writefln("  -b [value]       Set playback buffer size (def=%d)", audio.audio.bufferSize);
-	stderr.writefln("  -f               Start in fullscreen mode");
-	stderr.writefln("  -nofp            Do not use resid-fp emulation");
-	stderr.writefln("  -fpr [x]         Specify filter preset. x = 0..16 for 6581 and 0..1 for 8580");
-	stderr.writefln("  -i               Disable resid interpolation (use fast mode instead)");
-	stderr.writefln("  -l               Enable VIC-II badline timing emulation");
-	stderr.writefln("  -m [0|1]         Specify SID model for reSID (6581/8580) (def=0)");
-	stderr.writefln("  -n               Enable NTSC mode");
-	stderr.writefln("  -r [value]       Set playback frequency (def=48000)");
-	stderr.writefln("  -y               Use YUV video overlay");
-	stderr.writefln("  -h, --help       Show this help and exit");
-	stderr.writefln("  --height [rows]  Set sequencer height in rows (min=%d, max=64); disables autoscale", DEFAULT_ROWS - 10);
-	stderr.writefln("  --width [cols]   Set UI width in columns (min=%d, max=200); disables autoscale", DEFAULT_COLUMNS);
-	stderr.writefln("  --dump-keys      Print the keyboard reference as Markdown and exit");
-	stderr.writefln("  --verbose        Enable verbose logging");
+	foreach(o; cliOptions()) {
+		string left = o.arg.length ? o.flags ~ " " ~ o.arg : o.flags;
+		stderr.writefln("  %-18s %s", left, o.help);
+	}
 	stderr.writefln("  The UI auto-scales to the screen by default (minimum %dx%d chars);", DEFAULT_COLUMNS, DEFAULT_ROWS);
-	stderr.writefln("  pass --width and/or --height for a fixed size.");
+	stderr.writefln("  pass --width and/or --height for a fixed size. Set");
+	stderr.writefln("  CHEESECUTTER_ULTIMATE_PASSWORD for the C64 Ultimate X-Password header.");
 	stderr.writef("\n");
 }
 
@@ -264,6 +290,9 @@ int main(char[][] args) {
 	int requestedUiWidth = 0; // columns; 0 means use default
 	bool useAutoscale = true; // autoscale by default; --width/--height disables it
 	bool dumpKeys = false;
+	bool ultimateOn = false;
+	string ultimateHost;
+	int ultimatePort = 80;
   // DerelictSDL2.load();
 
 	scope(exit) {
@@ -287,6 +316,17 @@ int main(char[][] args) {
 			case "-h", "-help", "--help", "-?":
 				printheader();
 				return 0;
+			case "--dump-man":
+				{
+					// optional language code: --dump-man [en|fr|de|sv|fi]
+					string lang = "";
+					if(i + 1 < args.length && args[i+1].length && args[i+1][0] != '-') {
+						lang = cast(string)args[i+1].dup;
+						i++;
+					}
+					std.stdio.write(dumpManPage(cliOptions(), lang));
+					return 0;
+				}
 			case "-m":
 				sidtype = to!int(args[i+1]);
 				if(sidtype != 0 && sidtype != 1 && sidtype != 6581 && sidtype != 8580)
@@ -358,6 +398,17 @@ int main(char[][] args) {
 		case "--dump-keys":
 			dumpKeys = true;
 			break;
+		case "--ultimate":
+			if(i + 1 >= args.length || args[i+1][0] == '-')
+				throw new UserException("Option --ultimate requires an IP address.");
+			ultimateHost = cast(string)args[i+1].dup;
+			ultimateOn = true;
+			i++;
+			break;
+		case "--ultimate-port":
+			ultimatePort = intOption(args, i, "--ultimate-port");
+			i++;
+			break;
 		case "--verbose":
 			verbose = true;
 			break;
@@ -392,6 +443,9 @@ int main(char[][] args) {
 		com.fb.mode = 1;
 	}
 
+	if(ultimateOn)
+		audio.ultimate.configure(ultimateHost, ultimatePort, audio.player.ntsc != 0);
+
 	audio.player.init();
 
 	// Initialize video and get the actual sequencer height
@@ -411,9 +465,15 @@ int main(char[][] args) {
 	loadFile(filename);
 	video.updateFrame();
 
+	// Reboot the C64 Ultimate and inject the player + current song image.
+	if(audio.ultimate.isUltimate())
+		audio.ultimate.ensureLoaded(song);
+
 	SDL_PauseAudio(0);
 	log("Started");
 	mainloop(verbose);
+	if(audio.ultimate.isUltimate())
+		audio.ultimate.resetMachine();
 	audio.audio.audio_close();
 	return 0;
 }
