@@ -4,7 +4,12 @@
 LIBSPATH?=/opt/homebrew/lib
 LIBS=${LIBSPATH}/libphobos2-ldc.a ${LIBSPATH}/libdruntime-ldc.a -lstdc++ -L${LIBSPATH} -lsdl2 -lcurl
 FRAMEWORKS=-framework Foundation
-COMFLAGS= -mmacosx-version-min=15.0
+# Target macOS 15 and later. Exported so every compile (clang for C/C++ AND
+# ldc2 for D) stamps the same deployment target as the link; otherwise each
+# object defaults to the host SDK version and ld warns "built for newer macOS".
+MACDEPLOY?=15.0
+export MACOSX_DEPLOYMENT_TARGET=$(MACDEPLOY)
+COMFLAGS= -mmacosx-version-min=$(MACDEPLOY)
 VERSION=$(shell cat Version)
 APPNAME=CheeseCutter-Extended
 DLINK=$(COMFLAGS)
