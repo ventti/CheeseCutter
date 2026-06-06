@@ -75,6 +75,8 @@ private ManLang langFR() {
 		"--dump-man": "Affiche la page de manuel (roff) sur la sortie standard et quitte",
 		"--ultimate": "Jouer sur un C64 Ultimate (1541U/Ultimate64) à l'IP via son API REST",
 		"--ultimate-port": "Port de l'API REST pour --ultimate (déf=80)",
+		"--vice": "Jouer sur un émulateur VICE x64sc (lance x64sc depuis le PATH). --vice=hôte:port pour se connecter à un -binarymonitor en cours, ou --vice=/chemin/x64sc pour lancer ce binaire",
+		"--vice-port": "Port du moniteur binaire pour --vice (déf=6502)",
 		"--verbose": "Active la journalisation détaillée",
 	];
 	return l;
@@ -110,6 +112,8 @@ private ManLang langDE() {
 		"--dump-man": "Die Handbuchseite (roff) auf die Standardausgabe schreiben und beenden",
 		"--ultimate": "Auf einem C64 Ultimate (1541U/Ultimate64) unter IP über dessen REST-API abspielen",
 		"--ultimate-port": "REST-API-Port für --ultimate (Std=80)",
+		"--vice": "Auf einem VICE-x64sc-Emulator abspielen (startet x64sc aus dem PATH). --vice=Host:Port verbindet mit einem laufenden -binarymonitor, --vice=/pfad/x64sc startet diese Binärdatei",
+		"--vice-port": "Binärmonitor-Port für --vice (Std=6502)",
 		"--verbose": "Ausführliche Protokollierung aktivieren",
 	];
 	return l;
@@ -145,6 +149,8 @@ private ManLang langSV() {
 		"--dump-man": "Skriv ut manualsidan (roff) till standard ut och avsluta",
 		"--ultimate": "Spela på en riktig C64 Ultimate (1541U/Ultimate64) på IP via dess REST-API",
 		"--ultimate-port": "REST-API-port för --ultimate (def=80)",
+		"--vice": "Spela på en VICE x64sc-emulator (startar x64sc från PATH). --vice=värd:port ansluter till en körande -binarymonitor, --vice=/sökväg/x64sc startar den binären",
+		"--vice-port": "Binärmonitorport för --vice (def=6502)",
 		"--verbose": "Aktivera utförlig loggning",
 	];
 	return l;
@@ -180,6 +186,8 @@ private ManLang langFI() {
 		"--dump-man": "Tulosta man-sivu (roff) vakiotulosteeseen ja poistu",
 		"--ultimate": "Toista oikealla C64 Ultimatella (1541U/Ultimate64) IP-osoitteessa sen REST-rajapinnan kautta",
 		"--ultimate-port": "REST-rajapinnan portti --ultimate-valitsimelle (olet=80)",
+		"--vice": "Toista VICE x64sc -emulaattorilla (käynnistää x64sc:n PATHista). --vice=osoite:portti yhdistää käynnissä olevaan -binarymonitoriin, --vice=/polku/x64sc käynnistää kyseisen ohjelman",
+		"--vice-port": "Binäärimonitorin portti --vice-valitsimelle (olet=6502)",
 		"--verbose": "Ota käyttöön yksityiskohtainen lokitus",
 	];
 	return l;

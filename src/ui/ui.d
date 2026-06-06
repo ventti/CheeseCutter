@@ -26,7 +26,7 @@ import std.string;
 import std.file;
 import std.stdio;
 import audio.audio, audio.timer, audio.callback;
-static import audio.ultimate;
+static import audio.remote;
 
 enum PAGESTEP = 16;
 enum CONFIRM_TIMEOUT = 90;
@@ -1837,7 +1837,7 @@ final class UI {
 
 	private void savePrgCallback(string s) {
 		try {
-			ubyte[] prg = ct.build.buildResidentImage(song, audio.player.ntsc != 0);
+			ubyte[] prg = ct.build.buildResidentImage(song, audio.player.ntsc != 0, true); // standalone: auto-play
 			std.file.write(s, prg);
 		}
 		catch(Exception e) {
@@ -1879,9 +1879,9 @@ final class UI {
 			return;
 		}
 
-		// A new song image means the resident C64 Ultimate copy is stale.
-		if(audio.ultimate.isUltimate())
-			audio.ultimate.markReload();
+		// A new song image means the resident remote-backend copy is stale.
+		if(audio.remote.isActive())
+			audio.remote.markReload();
 
 		refresh();
 		// all voices ON

@@ -13,6 +13,8 @@ import std.conv;
 import core.stdc.string;
 import core.stdc.stdlib;
 import std.array;
+import std.math : lround;
+import std.algorithm : sort;
 
 extern(C) {
 	extern char* acme_assemble(const char*,int*,char*);
@@ -152,8 +154,17 @@ ubyte[] doBuild(Song song, int address, int zpAddress,
  +/
 enum ULTIMATE_IMG_LO = 0x0e00;   // first address taken verbatim from song.memspace
 enum ULTIMATE_IMG_HI = 0xf840;   // one past the last (covers the player's $f83d end)
-enum ULTIMATE_PAL_CLOCK = 0x4cc7;
-enum ULTIMATE_NTSC_CLOCK = 0x4295;
+// Raster geometry for placing the player-call lines (the shim is raster-IRQ
+// driven). TOTAL = lines per frame; CENTER = visible-screen vertical centre
+// (PAL display ~lines 51-250, NTSC ~41-240) so the green raster meter is centred.
+enum ULTIMATE_PAL_LINES = 312;
+enum ULTIMATE_NTSC_LINES = 263;
+enum ULTIMATE_PAL_CENTER = 150;
+enum ULTIMATE_NTSC_CENTER = 140;
+// Fixed addresses of the raster-line table in ultimate_host.acme (poked here).
+enum ULTIMATE_SN_NUMSLOTS = 0x0816;
+enum ULTIMATE_SN_RASLO = 0x0817;   // 16 bytes: low 8 bits of each line
+enum ULTIMATE_SN_RASHI = 0x0827;   // 16 bytes: bit 8 of each line
 // Fixed addresses of the text-row buffers in ultimate_host.acme (40 bytes each).
 enum ULTIMATE_SN_TITLE = 0x0b00;
 enum ULTIMATE_SN_AUTHOR = 0x0b28;
@@ -171,19 +182,33 @@ private ubyte toScreenCode(ubyte c) {
 	return 0x20; // space for anything unprintable
 }
 
-ubyte[] buildResidentImage(Song song, bool ntsc) {
+ubyte[] buildResidentImage(Song song, bool ntsc, bool autoPlay) {
 	int mult = song.multiplier < 1 ? 1 : song.multiplier;
-	// CIA fires at 50*mult Hz (one frame divided by the multiplier), and the
-	// shim makes exactly one player call per IRQ — play on the frame boundary,
-	// mplay on the in-between subframes. So a 2x song triggers the player at
-	// 100 Hz, evenly spaced (~156 raster lines apart), not back-to-back.
-	int ciaval = (ntsc ? ULTIMATE_NTSC_CLOCK : ULTIMATE_PAL_CLOCK) / mult;
+	if(mult > 16) mult = 16;   // the shim reserves 16 raster slots
+	// The shim is driven by a VIC raster IRQ on `mult` pre-defined lines per
+	// frame (one player call per line). Place them evenly spaced (TOTAL/mult
+	// apart) with the set centred on the visible-screen centre, so the green
+	// raster-time meter sits in the middle: 1x -> one line at centre; 2x -> two
+	// lines equidistant above/below; etc. Sorted ascending so slot 0 (the first
+	// line reached each frame) is the full PLAY tick and the rest are MPLAY.
+	int total = ntsc ? ULTIMATE_NTSC_LINES : ULTIMATE_PAL_LINES;
+	int center = ntsc ? ULTIMATE_NTSC_CENTER : ULTIMATE_PAL_CENTER;
+	int[] rasLines;
+	foreach(i; 0 .. mult) {
+		double pos = center + (i - (mult - 1) / 2.0) * (cast(double)total / mult);
+		int line = cast(int)lround(pos);
+		line = ((line % total) + total) % total;
+		rasLines ~= line;
+	}
+	rasLines.sort();
+
 	bool newKeyjam = song.ver > 7;
 	int subnote = newKeyjam ? song.offsets[Offsets.Subnoteplay] : 0x1009;
 	int submplay = newKeyjam ? song.offsets[Offsets.Submplayplay] : 0x100c;
 	int shtrans = song.offsets[Offsets.SHTRANS];
 
 	// Constants consumed by ultimate_host.acme, prepended before assembly.
+	// (The raster-line table itself is poked into RAM below, not assembled.)
 	string defs =
 		format("INITADDR = $1000\n") ~
 		format("PLAYADDR = $1003\n") ~
@@ -191,10 +216,9 @@ ubyte[] buildResidentImage(Song song, bool ntsc) {
 		format("SUBNOTE = $%04x\n", subnote & 0xffff) ~
 		format("SUBMPLAY = $%04x\n", submplay & 0xffff) ~
 		format("SHTRANSADDR = $%04x\n", shtrans & 0xffff) ~
-		format("CIAVAL = $%04x\n", ciaval & 0xffff) ~
-		format("MULT = %d\n", mult - 1) ~
 		format("NEWKEYJAM = %d\n", newKeyjam ? 1 : 0) ~
-		format("FRAMERATE = %d\n", ntsc ? 60 : 50);
+		format("FRAMERATE = %d\n", ntsc ? 60 : 50) ~
+		format("STARTMODE = %d\n", autoPlay ? 1 : 0);
 
 	ubyte[] shim = cast(ubyte[])assemble(defs ~ ultimateShimSource);
 	if(shim.length < 2)
@@ -226,6 +250,14 @@ ubyte[] buildResidentImage(Song song, bool ntsc) {
 	putText(ULTIMATE_SN_APPVER, APP_NAME ~ " " ~ APP_VERSION);
 	putText(ULTIMATE_SN_PLAYER, "Player: " ~ song.playerID[0 .. 6].idup);
 	putText(ULTIMATE_SN_STATUS, "Time: 00:00 / $00");
+
+	// Poke the raster-line table the shim reads (same fixed-address mechanism).
+	void shimPoke(int addr, int v) { prg[(addr - 0x0801) + 2] = cast(ubyte)v; }
+	shimPoke(ULTIMATE_SN_NUMSLOTS, mult);
+	foreach(i; 0 .. mult) {
+		shimPoke(ULTIMATE_SN_RASLO + i, rasLines[i] & 0xff);
+		shimPoke(ULTIMATE_SN_RASHI + i, (rasLines[i] >> 8) & 1);
+	}
 
 	int imgBase = cast(int)prg.length;           // prg index of address $0e00
 	prg ~= song.memspace[ULTIMATE_IMG_LO .. ULTIMATE_IMG_HI];

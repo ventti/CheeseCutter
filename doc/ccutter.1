@@ -61,6 +61,12 @@ Play on a C64 Ultimate (1541U/Ultimate64) at IP over its REST API
 \fB\-\-ultimate\-port\fR [n]
 REST API port for \-\-ultimate (def=80)
 .TP
+\fB\-\-vice\fR
+Play on a VICE x64sc (launches x64sc from PATH). \-\-vice=host:port attaches to a running \-binarymonitor; \-\-vice=/path/x64sc launches that binary
+.TP
+\fB\-\-vice\-port\fR [n]
+Binary\-monitor port for \-\-vice (def=6502)
+.TP
 \fB\-\-verbose\fR
 Enable verbose logging
 .SH ENVIRONMENT

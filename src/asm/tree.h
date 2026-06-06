@@ -45,6 +45,9 @@ struct node_ra_t {
 
 // Add predefined tree items to given tree.
 extern void	Tree_add_table(node_t** tree, node_t* table_to_add);
+// Freeze the predefined keyword trees after the first init cycle so that a
+// second acme_assemble() does not re-add (and corrupt) the static nodes.
+extern void	Tree_freeze(void);
 // Search for a given ID string in a given tree. Store "Body" component in
 // NodeBody and return TRUE. Return FALSE if no matching item found.
 extern bool	Tree_easy_scan(node_t* tree, void** node_body, struct dynabuf_t* dyna_buf);

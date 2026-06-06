@@ -5,7 +5,7 @@
 ;;; and for the exported standalone .prg (Shift+F10). CheeseCutter's player
 ;;; is normally driven frame-by-frame by the host (the D side calls
 ;;; init/play/mplay in the emulated CPU). On real hardware nobody provides
-;;; that tick, so this small, separate stub installs a CIA timer IRQ and
+;;; that tick, so this small, separate stub installs a VIC raster IRQ and
 ;;; dispatches to the *unmodified* player entry points. It also exposes a
 ;;; tiny control block in RAM that the host pokes over the REST writemem API
 ;;; to start/stop/keyjam.
@@ -29,10 +29,15 @@
 ;;;   INITADDR, PLAYADDR, MPLAYADDR  - player jump table ($1000/$1003/$1006)
 ;;;   SUBNOTE, SUBMPLAY             - keyjam entry points (from song.offsets)
 ;;;   SHTRANSADDR                   - per-voice transpose table base
-;;;   CIAVAL                        - CIA #1 timer A latch (PAL/NTSC * speed)
-;;;   MULT                          - multispeed reload (song.multiplier - 1)
 ;;;   NEWKEYJAM                     - 1 if song.ver > 7 (use SUBNOTE/SUBMPLAY)
 ;;;   FRAMERATE                     - frames per second (50 PAL / 60 NTSC)
+;;;   STARTMODE                     - initial ctrl_mode: 1 auto-play (standalone
+;;;                                   .prg), 0 wait for the host's Play (--vice/--ultimate)
+;;; The player is driven by a VIC raster IRQ on NUMSLOTS pre-defined lines per
+;;; frame (one player call per line: PLAY on the first/lowest line, MPLAY on the
+;;; rest). ct/build.d pokes the line table (numslots/rasline_lo/rasline_hi at
+;;; $0816) with the lines evenly spaced and centred on the screen. This is a
+;;; plain $d012 compare IRQ -- no cycle-stable raster.
 ;;; ----------------------------------------------------------------------
 
 COL_BLACK	= 0
@@ -49,13 +54,13 @@ CELL_RASH	= SCR_ROW7 + 15
 CELL_RASL	= SCR_ROW7 + 16
 
 ;;; ----------------------------------------
-;;; BASIC autostart: "10 SYS 2080". run_prg does a RUN, which jumps here.
+;;; BASIC autostart: "10 SYS 2112". run_prg does a RUN, which jumps here.
 ;;; ----------------------------------------
 		* = $0801
 		!8 $0b,$08		; link to next BASIC line ($080b)
 		!8 $0a,$00		; line number 10
 		!8 $9e			; SYS token
-		!8 $32,$30,$38,$30	; "2080"  -> $0820
+		!8 $32,$31,$31,$32	; "2112"  -> $0840
 		!8 $00			; end of line
 		!8 $00,$00		; end of program
 
@@ -76,9 +81,19 @@ ctrl_kjvoice	!8 0		; keyjam voice (0..2)
 ctrl_kjinstr	!8 0		; keyjam instrument
 
 ;;; ----------------------------------------
-;;; Installer. Entered from BASIC (SYS 2080) with ROM still mapped.
+;;; Raster-line table at a fixed RAM address, poked by ct/build.d. The player
+;;; is called once per raster IRQ on these NUMSLOTS lines (evenly spaced and
+;;; centred on the screen). rasline_lo = $d012 value, rasline_hi = bit 8 (for
+;;; lines > 255). 16 slots reserved (max multiplier).
 ;;; ----------------------------------------
-		* = $0820
+numslots	!8 1		; number of player calls (raster lines) per frame
+rasline_lo	!fill 16, 0	; low 8 bits of each raster compare line
+rasline_hi	!fill 16, 0	; bit 8 of each raster compare line (0/1)
+
+;;; ----------------------------------------
+;;; Installer. Entered from BASIC (SYS 2112) with ROM still mapped.
+;;; ----------------------------------------
+		* = $0840
 install
 		sei
 		lda #$35		; ROM out (BASIC+KERNAL), IO in
@@ -91,13 +106,6 @@ install
 		sta $dd0d		; disable all CIA #2 IRQ/NMI sources
 		lda $dc0d		; ack pending
 		lda $dd0d
-		lda #$00
-		sta $d01a		; disable VIC raster/sprite IRQ
-
-		lda #<CIAVAL		; program CIA #1 timer A latch
-		sta $dc04
-		lda #>CIAVAL
-		sta $dc05
 
 		lda #<irqhandler	; hardware IRQ vector (RAM, KERNAL is out)
 		sta $fffe
@@ -108,22 +116,36 @@ install
 		lda #>nmihandler
 		sta $fffb
 
-		lda #$11		; start timer A, continuous, force latch
-		sta $dc0e
-		lda #$81		; enable timer A underflow IRQ
-		sta $dc0d
-
 		lda #0
-		sta cntr
+		sta rasidx		; start at slot 0 (the PLAY / frame-boundary line)
 		sta fcnt
 		sta secs
 		sta mins
 		sta rasval
 		sta rasacc
+
+		;; program the first raster compare line (slot 0)
+		lda rasline_lo
+		sta $d012
+		lda $d011
+		and #$7f		; clear raster bit 8; keep DEN/RSEL/YSCROLL
+		ldy rasline_hi
+		beq install_nohi
+		ora #$80
+install_nohi
+		sta $d011
+		lda #$01		; enable VIC raster IRQ
+		sta $d01a
+		lda #$ff		; ack any pending VIC IRQ
+		sta $d019
+
 		lda ctrl_subtune
 		jsr INITADDR		; init the player (silent first frame)
-		lda #1
-		sta ctrl_mode		; default to PLAY
+!if STARTMODE = 0 {
+		jsr silence		; host-driven: stay quiet until REQ_RESTART (user Play)
+}
+		lda #STARTMODE
+		sta ctrl_mode		; STARTMODE: 1 = auto-play (standalone .prg), 0 = wait
 		cli
 spin		jmp spin
 
@@ -182,7 +204,8 @@ irqhandler
 		pha
 		tya
 		pha
-		lda $dc0d		; ack CIA #1 timer A
+		lda #$ff		; ack VIC raster IRQ
+		sta $d019
 
 		;; --- handle one-shot host request, if any ---
 		lda ctrl_req
@@ -197,7 +220,7 @@ irqhandler
 
 do_restart
 		lda #0
-		sta cntr
+		sta rasidx		; realign to slot 0 (PLAY) on the next line
 		sta fcnt		; restart the playback clock
 		sta secs
 		sta mins
@@ -234,36 +257,21 @@ clrreq
 		sta ctrl_req
 
 		;; --- run the current mode for this tick ---
+		;; One player call per raster IRQ. We fire on NUMSLOTS pre-defined
+		;; lines per frame (rasline table, evenly spaced and centred): slot 0
+		;; (the lowest line, reached first each frame) is the full PLAY tick;
+		;; the others are sound-only MPLAY. rasidx tracks the current slot.
 dispatch
 		lda ctrl_mode
-		beq irqdone		; 0 = stopped
+		beq nextline		; 0 = stopped (still advance to keep IRQs coming)
 		cmp #2
 		beq kjtick
 
-		;; mode 1 = play. The CIA runs at 50*mult Hz, and we make exactly ONE
-		;; player call per IRQ, so the calls are evenly spaced across the
-		;; frame: a full play tick on the frame boundary, then MULT = mult-1
-		;; sound-only mplay ticks in between (e.g. 2x -> play, mplay, play,
-		;; mplay at 100 Hz, ~156 raster lines apart). cntr counts the
-		;; remaining subframes; it lives in memory because the player call
-		;; clobbers the registers.
-		dec cntr
-		bmi pf_play
-		jsr read_raster		; mplay subframe: time it and add to the frame total
-		stx ras_start_hi
-		sta ras_start
-		lda #COL_GREEN
-		sta $d020
-		jsr MPLAYADDR
-		lda #COL_BLACK
-		sta $d020
-		jsr add_raster
-		jmp irqdone
-pf_play
-		lda #MULT
-		sta cntr
-		lda rasacc		; frame boundary: publish the previous frame's
-		sta rasval		; summed raster time (all play+mplay calls)...
+		;; mode 1 = play
+		lda rasidx
+		bne pf_mplay
+		lda rasacc		; frame boundary (slot 0): publish the previous
+		sta rasval		; frame's summed raster time (all play+mplay)...
 		lda #0
 		sta rasacc		; ...then start accumulating the new frame
 		jsr read_raster
@@ -276,7 +284,18 @@ pf_play
 		sta $d020
 		jsr add_raster
 		jsr update_status	; advance the MM:SS clock once per frame
-		jmp irqdone
+		jmp nextline
+pf_mplay
+		jsr read_raster		; mplay subframe: time it and add to the frame total
+		stx ras_start_hi
+		sta ras_start
+		lda #COL_GREEN
+		sta $d020
+		jsr MPLAYADDR
+		lda #COL_BLACK
+		sta $d020
+		jsr add_raster
+		jmp nextline
 
 kjtick
 		ldx #0
@@ -289,6 +308,26 @@ kjtick
 }
 		lda #COL_BLACK
 		sta $d020
+
+		;; --- advance to the next slot and program its raster compare line ---
+nextline
+		inc rasidx
+		lda rasidx
+		cmp numslots
+		bcc nl_set
+		lda #0
+		sta rasidx
+nl_set
+		ldx rasidx
+		lda rasline_lo,x
+		sta $d012
+		lda $d011
+		and #$7f		; keep DEN/RSEL/YSCROLL; clear raster bit 8
+		ldy rasline_hi,x
+		beq nl_nohi
+		ora #$80
+nl_nohi
+		sta $d011
 
 irqdone
 		pla
@@ -423,7 +462,7 @@ ras_start_hi	!8 0		; raster line bit 8 when the current call started
 d_lo		!8 0		; scratch: lines used by the last call
 rasval		!8 0		; published per-frame raster total (shown as $RR)
 rasacc		!8 0		; raster lines accumulated so far this frame
-cntr		!8 0		; multispeed subframe counter (remaining mplay ticks)
+rasidx		!8 0		; current slot 0..numslots-1 (which rasline we're on)
 
 ;;; ----------------------------------------
 ;;; Text rows in C64 screen codes, filled by ct/build.d (40 bytes each).

@@ -7,7 +7,7 @@ import derelict.sdl2.sdl;
 import audio.resid.filter;
 import audio.player;
 import audio.callback;
-static import audio.ultimate;
+static import audio.remote;
 import std.stdio;
 import core.stdc.stdlib;
 import core.stdc.string;
@@ -141,9 +141,9 @@ extern(C) {
 			(*callback)();
 		}
 
-		// In Ultimate mode the real C64 is the only sound source; keep
-		// the emulation running (for visualizer/timer) but mute output.
-		if(audio.ultimate.isUltimate())
+		// With a remote backend the real/emulated C64 is the only sound
+		// source; keep the emulation running (for visualizer/timer) but mute.
+		if(audio.remote.isActive())
 			memset(stream, 0, len);
 		else
 			memcpy(stream, cast(ubyte*)mixbuf, len);

@@ -14,7 +14,9 @@ import ui.input;
 import audio.player;
 import audio.resid.filter;
 import audio.audio, audio.callback, audio.timer;
+static import audio.remote;
 static import audio.ultimate;
+static import audio.vice;
 import manpage;
 import std.stdio;
 import std.string;
@@ -211,11 +213,11 @@ void mainloop(bool verbose) {
 		SDL_Delay(40);
 		video.updateFrame();
 
-		// Mirror any edited song data to the C64 Ultimate (no-op when
+		// Mirror any edited song data to the remote backend (no-op when
 		// nothing changed). Re-injects the image if a new song was loaded.
-		if(audio.ultimate.isUltimate()) {
-			audio.ultimate.ensureLoaded(song);
-			audio.ultimate.syncDeltas(song);
+		if(audio.remote.isActive()) {
+			audio.remote.ensureLoaded(song);
+			audio.remote.syncDeltas(song);
 		}
 	}
 }
@@ -243,6 +245,8 @@ CliOpt[] cliOptions() {
 		CliOpt("--dump-man", "", "Print the man page (roff) to stdout and exit"),
 		CliOpt("--ultimate", "[IP]", "Play on a C64 Ultimate (1541U/Ultimate64) at IP over its REST API"),
 		CliOpt("--ultimate-port", "[n]", "REST API port for --ultimate (def=80)"),
+		CliOpt("--vice", "", "Play on a VICE x64sc (launches x64sc from PATH). --vice=host:port attaches to a running -binarymonitor; --vice=/path/x64sc launches that binary"),
+		CliOpt("--vice-port", "[n]", "Binary-monitor port for --vice (def=6502)"),
 		CliOpt("--verbose", "", "Enable verbose logging"),
 	];
 }
@@ -293,6 +297,9 @@ int main(char[][] args) {
 	bool ultimateOn = false;
 	string ultimateHost;
 	int ultimatePort = 80;
+	bool viceOn = false;
+	string viceTarget;
+	int vicePort = 0; // 0 => transport default (6502)
   // DerelictSDL2.load();
 
 	scope(exit) {
@@ -409,6 +416,15 @@ int main(char[][] args) {
 			ultimatePort = intOption(args, i, "--ultimate-port");
 			i++;
 			break;
+		case "--vice":
+			// Bare: launch x64sc from PATH. Explicit target via --vice=<target>
+			// (handled in the default case below).
+			viceOn = true;
+			break;
+		case "--vice-port":
+			vicePort = intOption(args, i, "--vice-port");
+			i++;
+			break;
 		case "--verbose":
 			verbose = true;
 			break;
@@ -417,6 +433,11 @@ int main(char[][] args) {
 					if (args[i].length > 3 && args[i][0..4] == "-psn"){
 						break;
 					}
+				}
+				if(args[i].length >= 7 && args[i][0..7] == "--vice=") {
+					viceTarget = cast(string)args[i][7..$].dup;
+					viceOn = true;
+					break;
 				}
 				if(args[i][0] == '-')
 					throw new UserException(format("Unrecognized option %s", args[i]));
@@ -443,8 +464,14 @@ int main(char[][] args) {
 		com.fb.mode = 1;
 	}
 
+	if(ultimateOn && viceOn) {
+		std.stdio.stderr.writeln("Error: --ultimate and --vice are mutually exclusive.");
+		return -1;
+	}
 	if(ultimateOn)
 		audio.ultimate.configure(ultimateHost, ultimatePort, audio.player.ntsc != 0);
+	if(viceOn)
+		audio.vice.configure(viceTarget, vicePort, audio.player.ntsc != 0);
 
 	audio.player.init();
 
@@ -465,15 +492,15 @@ int main(char[][] args) {
 	loadFile(filename);
 	video.updateFrame();
 
-	// Reboot the C64 Ultimate and inject the player + current song image.
-	if(audio.ultimate.isUltimate())
-		audio.ultimate.ensureLoaded(song);
+	// Bring up the remote backend and inject the player + current song image.
+	if(audio.remote.isActive())
+		audio.remote.ensureLoaded(song);
 
 	SDL_PauseAudio(0);
 	log("Started");
 	mainloop(verbose);
-	if(audio.ultimate.isUltimate())
-		audio.ultimate.resetMachine();
+	if(audio.remote.isActive())
+		audio.remote.shutdown();
 	audio.audio.audio_close();
 	return 0;
 }

@@ -6,7 +6,9 @@ OBJS= \
 	src/audio/timer.o \
 	src/audio/callback.o \
 	src/audio/visualizer.o \
+	src/audio/remote.o \
 	src/audio/ultimate.o \
+	src/audio/vice.o \
 	src/ct/purge.o \
 	src/ct/base.o \
 	src/ct/dump.o \
