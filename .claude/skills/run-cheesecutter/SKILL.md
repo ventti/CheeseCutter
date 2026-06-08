@@ -51,19 +51,40 @@ drivers:
 SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./ccdriver \
   load:tunes/vent-arkijuusto.ct key:F2 ff:30 shot:/tmp/cc.bmp state
 ```
-Commands (in order, repeatable):
+Run `./ccdriver -h` for the full, authoritative command list. Commands (in
+order, repeatable):
 - `load:<file.ct>` — load a song
 - `key:<spec>` — inject a keypress; `spec = [Ctrl-][Alt-][Shift-]NAME`, where
   NAME is `F1`..`F12`, `ESC`, `RET`, `SPACE`, `TAB`, `UP`/`DOWN`/`LEFT`/`RIGHT`,
-  `HOME`/`END`/`PGUP`/`PGDN`, or a single char (`a`, `2`, `y`). Useful keys:
-  `F2` play-from-start, `F3` play-from-cursor, `F4` stop, `Esc Esc y` quit,
-  `Shift-F10` save playable `.prg`, `F12` help.
+  `HOME`/`END`/`PGUP`/`PGDN`, `INS`, `DEL`, `BACKSPACE`, `SCRLOCK`, keypad
+  `KP0`..`KP9` / `KP_PLUS` / `KP_MINUS` / `KP_MUL` / `KP_DIV` / `KP_PERIOD` /
+  `KP_ENTER`, or a single char (`a`, `2`, `+`). Useful keys: `F2` play-from-start,
+  `F3` play-from-cursor, `F4` stop, `Esc Esc y` quit, `Shift-F10` save playable
+  `.prg`, `F12` help, `Alt-KP_PLUS`/`Alt-KP_MINUS` multispeed up/down.
+- `play` — start playback (`player.start`); `mult:<n>` — set multispeed (1..16)
 - `ff:<n>` — advance playback by `n*16` frames deterministically (calls the
   player directly; no audio device needed — that's how SID state changes here)
-- `frames:<n>` — render n UI frames
+- `frames:<n>` — render n UI frames; `sleep:<ms>` — pause
 - `shot:<file.bmp>` — write a screenshot (BMP)
-- `state` — print title/author/seqs/playing/octave/speed + the first SID
+- `state` — print title/author/seqs/playing/octave/speed/mult + the first SID
   registers to stderr
+- Remote-backend (`--vice`/`--ultimate`) testing: `vice:[target]` (empty=launch
+  x64sc from PATH, `host:port`=attach, `/path/x64sc`=launch that binary),
+  `ensure` (inject/mirror), `vcheck` (report if the remote player is advancing),
+  `killemu` (kill the launched emulator — recovery test).
+
+### Persistent session (`serve`)
+
+Add `serve` (or `-`) as an argument to keep the editor + loaded song **alive**
+after the argv commands and read one command per line from **stdin** (`quit` to
+exit). This is a true stateful session — feed `key:`/`shot:`/`state` step by
+step with no per-step reload or UI rebuild, and a command that errors won't kill
+the session. Drive it from a background process / FIFO:
+
+```sh
+SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./ccdriver load:tunes/abaddon-starfish.ct serve
+# then on stdin: key:DOWN ⏎  shot:/tmp/a.bmp ⏎  state ⏎  quit ⏎
+```
 
 The screenshot is a BMP; convert and view it:
 
