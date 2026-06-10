@@ -47,6 +47,12 @@ SDL_Color[] PALETTE = [
 
 immutable FONT_X = 8, FONT_Y = 14;
 __gshared ubyte[] font;
+
+// Splash artwork: raw 320x200 array of PALETTE indices (see tools/mk-splash.py),
+// shown by Video.drawSplash() in place of the text grid while splashActive.
+immutable SPLASH_W = 320, SPLASH_H = 200, SPLASH_SCALE = 2;
+immutable ubyte[] splashData = cast(immutable(ubyte)[])import("splash.dat");
+
 int mode; // 0 = compact (default), >0 = wide
 immutable int border = 1;
 private bool isDirty = false;
@@ -158,6 +164,12 @@ abstract class Video {
 		SDL_FreeSurface(surface);
 	}
 
+	// When set, updateFrame() blits the splash image instead of the text grid.
+	// Toggled by AboutDialog (ui.dialogs). Declared as a trailing field and with
+	// no new virtual method so the class layout/vtable stays compatible with
+	// objects compiled before this change (the repo has no dep tracking).
+	bool splashActive;
+
 	abstract void updateFrame();
 }
 
@@ -196,9 +208,41 @@ class VideoStandard : Video {
 	override void clearVisualizer() {
 	}
 
+	private SDL_Texture* splashTexture;
+
+	// Not an override: kept off the base Video vtable so stale objects keep
+	// calling updateFrame() at the right slot (no dep tracking in this repo).
+	void drawSplash() {
+		// Lazily upload the 320x200 indexed artwork into an ARGB texture, then
+		// blit it centered at SPLASH_SCALE with a black margin.
+		if(splashTexture is null) {
+			splashTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
+											  SDL_TEXTUREACCESS_STATIC, SPLASH_W, SPLASH_H);
+			auto buf = new Uint32[SPLASH_W * SPLASH_H];
+			foreach(i, idx; splashData) {
+				auto col = PALETTE[idx];
+				buf[i] = (0xff << 24) | (col.r << 16) | (col.g << 8) | col.b;
+			}
+			SDL_UpdateTexture(splashTexture, null, buf.ptr,
+							  SPLASH_W * cast(int)Uint32.sizeof);
+		}
+		SDL_Rect dst;
+		dst.w = SPLASH_W * SPLASH_SCALE;
+		dst.h = SPLASH_H * SPLASH_SCALE;
+		dst.x = (width - dst.w) / 2;
+		dst.y = (height - dst.h) / 2;
+		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+		SDL_RenderClear(renderer);
+		SDL_RenderCopy(renderer, splashTexture, null, &dst);
+		SDL_RenderPresent(renderer);
+	}
+
 	override void updateFrame() {
 		int x, y;
 		int a,b,c;
+
+		if(splashActive) { drawSplash(); return; }
+
 		Uint32* bptr = &screen.data[0];
 		Uint32* cptr = &screen.olddata[0];
 		// Uint32* sptr = cast(Uint32 *)surface.pixels;

@@ -9,9 +9,9 @@ _Generated from the shortcut registry (com.shortcuts)._
 | Shortcut | Action |
 |---|---|
 | `F12` | Open context help |
-| `F11` | Open the About dialog |
 | `Esc` | Quit program (press twice) |
 | `Ctrl-F12` | Save screenshot |
+| `F11` | Show the splash / about screen |
 | `Alt-Return` | Toggle fullscreen |
 
 ### Display

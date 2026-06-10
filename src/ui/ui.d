@@ -942,6 +942,7 @@ final class UI {
 		AboutDialog aboutdialog;
 		FileSelectorDialog loaddialog, savedialog, prgdialog;
 	}
+	enum SPLASH_DURATION_MS = 2500;
 	static Statusline statusline;
 	static Infobar infobar;
 	static Toplevel toplevel;
@@ -950,6 +951,11 @@ final class UI {
 	// `= new` field initializer is evaluated with CTFE and baked into shared
 	// .init memory, which corrupts the manager's associative arrays at runtime.
 	ShortcutManager sm;
+	// Wall-clock deadline (SDL ticks) for auto-dismissing the startup splash;
+	// 0 once dismissed. Keeps the Esc-Esc-y quit chord usable. Declared as the
+	// trailing instance field so earlier field offsets stay binary-compatible
+	// with objects compiled before this change (no dep tracking in this repo).
+	uint splashDeadlineMs;
 
 	this() {
 		sm = new ShortcutManager();
@@ -989,9 +995,6 @@ final class UI {
 		//if(com.fb.mode > 0)
 		//	state.shortTitles = false;
 		toplevel.activate();
-		// Don't pop the About dialog on startup: it would swallow the first
-		// Esc, breaking the documented Esc-Esc-y quit chord. About is still
-		// available on F11 (the about_dialog shortcut).
 
 		// Initialize and register keyboard shortcuts
 		registerShortcuts();
@@ -1001,6 +1004,11 @@ final class UI {
 		// Generate the F12 help pages from the now-populated registry.
 		ui.help.HELPMAIN = genMainHelp(sm);
 		ui.help.HELPSEQUENCER = genSequencerHelp(sm);
+
+		// Pop the splash on startup; it auto-dismisses after SPLASH_DURATION_MS
+		// (see timerEvent) so it doesn't eat the first Esc of the quit chord.
+		activateDialog(aboutdialog);
+		splashDeadlineMs = SDL_GetTicks() + SPLASH_DURATION_MS;
 
 		update();
 	}
@@ -1351,7 +1359,7 @@ final class UI {
 
 		// Dialogs
 		sm.register("about_dialog", Ctx.global, "Application",
-					"Open the About dialog", SDLK_F11, 0, {
+					"Show the splash / about screen", SDLK_F11, 0, {
 			activateDialog(aboutdialog);
 		});
 
@@ -1632,6 +1640,11 @@ final class UI {
 	}
 
 	void timerEvent(int n) {
+		// Auto-dismiss the startup splash once its deadline passes.
+		if(splashDeadlineMs != 0 && SDL_GetTicks() >= splashDeadlineMs) {
+			splashDeadlineMs = 0;
+			if(dialog is aboutdialog) closeDialog();
+		}
 		Exception e = audio.callback.getException();
 		if(e !is null) {
 			writeln("error" ~ e.toString());

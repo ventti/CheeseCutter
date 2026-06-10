@@ -228,47 +228,35 @@ class DebugDialog : Window {
 	}
 }
 
+// The splash / about screen. Rendering is owned by Video.drawSplash(); this
+// dialog just toggles video.splashActive while it is the active dialog. The
+// artwork (CheeseCutterEXT.png -> src/font/splash.dat) already carries the
+// credits, so there is no text to draw here.
 class AboutDialog : Window {
-	string LOGO =
-"           ___                                    ___   ___                   
-   ______/  /____________________________________\\  \\__\\  \\_______________ 
-  /  ___/     /  -__/  -__/__ --/  -__|  ___\\  \\  \\   __\\   __\\  -__\\    _\\
- /_____/__/__/_____/_____/_____/______|______\\_____\\_____\\_____\\_____\\___\\/
-\\_____\\__\\__\\_____\\_____\\_____\\______|______/_____/_____/_____/_____/___/
-
-";
-
 	this(Rectangle a) {
 		super(a);
 	}
-  
-	override void update() {
-		string[] logo = std.string.splitLines(LOGO);
-		int y;
 
-		drawFrame(area);
-		y = area.y + 1;
-		foreach(line; logo) {
-
-			screen.cprint(area.x + 1, y, 1, 0, 
-						  std.array.replicate(" ", area.width-2));
-
-			screen.fprint(area.x + 1, y, "`01" ~ line.center(area.width-2));
-			y++;
-		}
-		screen.cprint(area.x + 1, y++,15, 0,(com.util.APP_NAME ~ " " ~ com.util.APP_VERSION).center(area.width-2));
-		screen.cprint(area.x + 1, y++,15, 0,("Based on " ~ com.util.UPSTREAM_NAME ~ " " ~ com.util.UPSTREAM_VERSION).center(area.width-2));
-		screen.cprint(area.x + 1, y++,15, 0,"(C) 2009-17 Abaddon + contributors, 2026 Vent + minions".center(area.width-2));
-		screen.cprint(area.x + 1, y++,15, 0,"reSID engine by Dag Lem".center(area.width-2));
-		screen.cprint(area.x + 1, y++,15, 0,"Released under GNU GPL".center(area.width-2));
+	override void activate() {
+		video.splashActive = true;
 	}
-  
+
+	override void deactivate() {
+		video.splashActive = false;
+		screen.refresh(); // force a full cell redraw so the editor reappears
+	}
+
+	override void update() {
+		// no-op: Video.drawSplash() renders the image every frame while active.
+	}
+
+	override void clickedAt(int scrx, int scry, int button, int clicks = 1) {
+		mainui.closeDialog();
+	}
+
 	override int keypress(Keyinfo key) {
 		if(key.mods) return OK;
-		if(key.unicode == SDLK_ESCAPE ||
-			key.unicode == SDLK_SPACE ||
-			key.unicode == SDLK_RETURN) return RETURN;
-		return OK;
+		return RETURN; // any unmodified key dismisses the splash
 	}
 }
 
