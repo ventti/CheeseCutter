@@ -11,7 +11,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `F12` | Open context help |
 | `Esc` | Quit program (press twice) |
 | `Ctrl-F12` | Save screenshot |
-| `F11` | Show the splash / about screen |
+| `Alt-S` / `F11` | Show the splash / about screen |
 | `Alt-Return` | Toggle fullscreen |
 
 ### Display

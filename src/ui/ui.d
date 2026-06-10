@@ -1362,6 +1362,9 @@ final class UI {
 					"Show the splash / about screen", SDLK_F11, 0, {
 			activateDialog(aboutdialog);
 		});
+		// macOS reserves bare F11 (Show Desktop); Alt-S is a Mac-safe alias
+		// (Option+letter isn't intercepted, matching the window-nav aliases).
+		sm.bindAlias("about_dialog", SDLK_s, KMOD_ALT);
 
 		// Context-specific command shortcuts (sequencer, tables, ...)
 		registerContextShortcuts();
