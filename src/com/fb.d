@@ -45,7 +45,7 @@ SDL_Color[] PALETTE = [
 	{ 0x00, 0x00, 0x00 }   // 31: Darkest (step 0/15) - black
 ];
 
-immutable FONT_X = 8, FONT_Y = 14;
+immutable FONT_X = 8, FONT_Y = 8;
 __gshared ubyte[] font;
 
 // Splash artwork: raw 320x200 array of PALETTE indices (see tools/mk-splash.py),
@@ -67,7 +67,7 @@ static this() {
 	// realign font data
 	immutable rawfont = import("font.psf");
 	for(int i=0;i<256;i++) {
-		font[i*16..i*16+14] = cast(ubyte[])rawfont[i*FONT_Y+4..i*FONT_Y+4+FONT_Y];
+		font[i*16..i*16+FONT_Y] = cast(ubyte[])rawfont[i*FONT_Y+4..i*FONT_Y+4+FONT_Y];
 	}
 }
 
@@ -274,7 +274,7 @@ class VideoStandard : Video {
 				topbar.x = 0;
 				topbar.y = 0;
 				topbar.w = width;
-				topbar.h = 14; // one text row height
+				topbar.h = FONT_Y; // one text row height
 				SDL_RenderFillRect(renderer, &topbar);
 			}
 		for(y = 0;y < screen.height; y++) {
@@ -292,8 +292,8 @@ class VideoStandard : Video {
                      bgcolor = getColor(surface, ubg);
                      +/
                     rect.x = x * 8;
-                    rect.y = y * 14;
-                    rect.h = 14;
+                    rect.y = y * FONT_Y;
+                    rect.h = FONT_Y;
                     rect.w = 8;
                     SDL_SetRenderDrawColor(renderer, PALETTE[ubg].r,
                                            PALETTE[ubg].g,
@@ -303,8 +303,8 @@ class VideoStandard : Video {
                     SDL_SetRenderDrawColor(renderer, PALETTE[ufg].r,
                                            PALETTE[ufg].g,
                                            PALETTE[ufg].b, 255);
-                    int yy = y * 14;
-					for(c = 4; c < 18; c++, bp++) {
+                    int yy = y * FONT_Y;
+					for(c = 4; c < 4 + FONT_Y; c++, bp++) {
                         int xx = x * 8;
 						b = *bp;
 						if(b & 0x80) {
@@ -488,7 +488,7 @@ private class Oscilloscope : Visualizer {
 	private SDL_Surface* surface;
 	private short* samples;
 	private const short xconst, yconst;
-	enum width = 960/4, height = 3*14;
+	enum width = 960/4, height = 3*FONT_Y;
 
 	this(SDL_Surface* surface, short xpos, short ypos) {
 		this.surface = surface;
