@@ -45,7 +45,7 @@ SDL_Color[] PALETTE = [
 	{ 0x00, 0x00, 0x00 }   // 31: Darkest (step 0/15) - black
 ];
 
-immutable FONT_X = 8, FONT_Y = 8;
+immutable FONT_X = 8, FONT_Y = 14;
 __gshared ubyte[] font;
 
 // Splash artwork: raw 320x200 array of PALETTE indices (see tools/mk-splash.py),
