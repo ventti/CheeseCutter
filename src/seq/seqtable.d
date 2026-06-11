@@ -360,6 +360,19 @@ class SequenceTable : VoiceTable, Undoable {
 		// Block-selection commands (copy/cut/paste/merge/paste-new/markers) get
 		// first refusal; if consumed, don't fall through to editing.
 		if(handleSelectionKey(key)) return OK;
+		// With an active selection, the transpose keys apply to the whole block
+		// rather than the active voice's cursor-to-end default.
+		if(sel.active && (key.mods & KMOD_CTRL)) {
+			int n;
+			switch(key.raw) {
+			case SDLK_q: n = 1; break;
+			case SDLK_a: n = -1; break;
+			case SDLK_w: n = 12; break;
+			case SDLK_s: n = -12; break;
+			default: n = 0; break;
+			}
+			if(n != 0) { transposeSelection(n); return OK; }
+		}
 		// globals
 		super.keypress(key);
 		if(!key.mods) {
@@ -490,6 +503,21 @@ class SequenceTable : VoiceTable, Undoable {
 			pos += rows;
 		}
 		return false;
+	}
+
+	// Transpose every note in the active block selection by n semitones (each
+	// selected voice over the selected row span). Used when a selection is
+	// active; otherwise the per-voice handler transposes cursor-to-end.
+	private void transposeSelection(int n) {
+		saveSelState();
+		foreach(col; sel.loCol .. sel.hiCol + 1) {
+			Voice v = voices[col];
+			for(int absRow = sel.loRow; absRow <= sel.hiRow; absRow++) {
+				int t, s;
+				if(locate(v, absRow, t, s))
+					song.seqs[v.tracks[t].number].transposeRange(s, s, n);
+			}
+		}
 	}
 
 	// Confine the selection to the sequence the anchor sits in: a block can't
