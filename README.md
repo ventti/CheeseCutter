@@ -1,6 +1,12 @@
-CheeseCutter-Extended 0.2.0
+CheeseCutter-Extended 0.3.0
 
 CheeseCutter-Extended is based on CheeseCutter 2.9.
+
+New in 0.3.0: rectangular block selection in the sequencer — drag with the mouse
+(or set start/end markers with Ctrl-B / Ctrl-Shift-B) to select a range of rows
+across one or more voices, then copy / cut / paste / merge / "paste as new
+track(s)". Works in both the note column (F6) and the track column (F5). See the
+Block Selection section of the guide.
 
 Programmed by abaddon 2009-2017.
 

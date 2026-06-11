@@ -100,7 +100,9 @@ button-up finalize semantics, code review of the mouse plumbing.
 ## Phase 3 — track column (F5) hooks + no-selection fallback
 Stopping condition: builds; F5 select/copy/cut/paste/merge/paste-new work; no-selection
 Ctrl+C/Ctrl+V keep the legacy number-prompt behavior; verifier clean.
-- status: **author self-check passed; awaiting independent verifier** · iterations: 1
+- status: **VERIFIED** (independent verifier: PHASE 3 PASS, all 12 conditions, no blocking findings) · iterations: 1
+  Verifier also confirmed: full-tracklist undo fix correct (reverts above-cursor edits), no F6
+  regression from the renderSelection refactor, F7 trackmap inert, multi-voice drag routing clean.
 
 Implemented (tracktable.d): BaseTrackTable selection hooks (cells = 2-byte Track entries by
 trkOffset); handleSelectionKey first in keypress (legacy number-prompt Ctrl+C/V fall through when
@@ -122,7 +124,19 @@ undo→9); cut (blank→a000, len unchanged, undo restores all 3); merge (fills 
 skips non-empty); F5 mouse-drag 1-track copy/paste correct; legacy no-selection Ctrl+C opens the
 number-prompt dialog; F5 highlight covers selected tracks in the correct voice only.
 
-## Phase 4 — shortcuts registry + docs + version
+## Phase 4 — shortcuts registry + docs + version  [author-done; final verify pending]
+Implemented: 8 selection actions registered under Ctx.sequencer (shared by note+track columns
+via contextParent) in ui.d registerContextShortcuts — sel_mark_begin (Ctrl+B), sel_mark_end
+(Ctrl+Shift+B), sel_clear (Ctrl+D), sel_copy (Ctrl+C), sel_cut (Ctrl+X), sel_paste (Ctrl+V),
+sel_merge (Ctrl+Shift+V), sel_paste_new (Ctrl+Shift+N); callbacks invokeKey-re-dispatch to the
+widget (selection-aware, legacy track copy/paste shadow C/V in trackColumn). `make docs`
+regenerated doc/KEYBOARD.md (new "Selection" section) + man pages (version only). Version 0.2.0→0.3.0
+(flows to --help + all man pages; translated pages differ by version number only → no native review).
+README.md version line + feature blurb; guide/README.md new "Block Selection" section + shortcut table.
+Author self-check: copy/paste byte-correct via the registry dispatch path (note + track); --dump-keys
+lists all 8; legacy no-selection Ctrl+C dialog intact.
+
+### original Phase 4 plan
 Stopping condition: `make docs` regenerates man pages/`doc/KEYBOARD.md` with new keys;
 F12 help lists them; guide/README.md + README.md + Version updated; verifier confirms docs match code.
 - status: **open** · iterations: 0
