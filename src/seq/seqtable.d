@@ -279,9 +279,7 @@ class SequenceTable : VoiceTable, Undoable {
 
 		// NOTE: Visualization colors are now applied in renderVisualization()
 		// which is called from UI layer after all updates complete
-
-		// Tint selected rows on top of the freshly drawn voices.
-		renderSelection();
+		// (selection tint is applied by the base VoiceTable.update).
 	}
 
 	// Called from UI layer AFTER all window updates are complete
