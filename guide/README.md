@@ -206,6 +206,12 @@ would overflow is dropped. **Merge** only fills rows that are currently empty.
 **Paste new** instead inserts brand-new track(s)/sequence(s) at the cursor,
 sized to hold the block.
 
+While a note-column selection is active, the transpose keys
+(<kbd>Ctrl</kbd>-<kbd>Q</kbd>/<kbd>A</kbd> semitone,
+<kbd>Ctrl</kbd>-<kbd>W</kbd>/<kbd>S</kbd> octave) apply to every selected note
+instead of the default (which transposes from the cursor to the end of the
+sequence).
+
 | Shortcut | Action |
 | --- | --- |
 | Left-drag | Select a block (single or multiple voice columns) |

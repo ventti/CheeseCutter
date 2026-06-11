@@ -597,7 +597,15 @@ class Sequence {
 	}
 
 	void transpose(int r, int n) {
-		for(int i = r; i < rows;i++) {
+		transposeRange(r, rows - 1, n);
+	}
+
+	// Transpose the notes in rows [r0, r1] (inclusive) by n semitones, clamped
+	// to the valid range. Special values (---, ===, +++) are left untouched.
+	void transposeRange(int r0, int r1, int n) {
+		if(r0 < 0) r0 = 0;
+		if(r1 > rows - 1) r1 = rows - 1;
+		for(int i = r0; i <= r1; i++) {
 			Note note = data[i].note;
 			int v = note.value;
 			if(v < 3) continue;
@@ -606,7 +614,7 @@ class Sequence {
 			if(n < 0 && (v+n) >= 3) v += n;
 			note = cast(ubyte) v;
 		}
-	}	
+	}
 
 	void insert(int pos) {
 		int p1 = pos * 4;
