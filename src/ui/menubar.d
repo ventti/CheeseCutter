@@ -39,6 +39,8 @@ final class MenuBar {
 		string label;
 		string keys;
 		bool enabled;
+		bool toggle;   // boolean toggle -> draw a checkbox
+		bool on;       // toggle current state
 	}
 	struct DMenu {
 		string title;
@@ -49,6 +51,15 @@ final class MenuBar {
 
 	// Geometry of the currently drawn dropdown box (for mouse hit-testing).
 	int boxX, boxY, boxW, boxH;
+
+	// Save-under buffer: the screen cells beneath the dropdown, so the menu can
+	// be erased without a full screen clear (which would blink the SID register
+	// readout on the right). Only ever covers the dropdown's own rectangle.
+	Uint32[] under;
+	int uX, uY, uW, uH;
+	bool hasUnder;
+	int lastX, lastY, lastW, lastH;   // last drawn box (detect move/resize)
+	bool drawn;
 
 	public:
 
@@ -68,15 +79,16 @@ final class MenuBar {
 		rebuild();
 		_active = true;
 		clampIndices();
-		// Clean slate so the dropdown overlays a freshly painted screen.
-		if(mainui !is null) mainui.refresh();
+		// No screen clear: drawDropdown captures the cells it covers (save-under)
+		// and restores them on move/close, so the rest of the screen — notably
+		// the SID register readout on the right — is never touched.
 	}
 
 	void close() {
 		if(!_active) return;
 		_active = false;
-		// Repaint everything underneath so the dropdown leaves no artifacts.
-		if(mainui !is null) mainui.refresh();
+		if(hasUnder) restoreUnder();   // erase the dropdown, no full-screen clear
+		drawn = false;
 	}
 
 	// --- Drawing -------------------------------------------------------------
@@ -105,21 +117,36 @@ final class MenuBar {
 		}
 	}
 
-	/// The condensed dropdown box under the active title.
-	void drawDropdown() {
-		boxW = 0;
-		if(!_active || menuIndex >= cast(int)menus.length) return;
-		auto m = menus[menuIndex];
-		if(m.items.length == 0) return;
+	// The right-hand cluster of an item: optional [x]/[ ] checkbox + shortcut.
+	static string rightText(Item it) {
+		string box = it.toggle ? (it.on ? "[x] " : "[ ] ") : "";
+		return box ~ it.keys;
+	}
 
-		int labelW = 0, keyW = 0;
+	/// The condensed dropdown box under the active title. Uses a save-under
+	/// buffer so it can be erased without clearing (and blinking) the rest of
+	/// the screen — notably the SID register readout on the right.
+	void drawDropdown() {
+		if(!_active || menuIndex >= cast(int)menus.length
+		   || menus[menuIndex].items.length == 0) {
+			if(hasUnder) restoreUnder();
+			drawn = false;
+			boxW = 0;
+			return;
+		}
+		auto m = menus[menuIndex];
+
+		// One space of padding inside each border; >=2 spaces between the label
+		// and the right cluster.
+		enum PAD = 1, GAP = 2;
+		int labelW = 0, rightW = 0;
 		foreach(it; m.items) {
 			if(it.sep) continue;
 			labelW = max(labelW, cast(int)it.label.length);
-			keyW = max(keyW, cast(int)it.keys.length);
+			rightW = max(rightW, cast(int)rightText(it).length);
 		}
-		int inner = labelW + (keyW > 0 ? 2 + keyW : 0);
-		int w = inner + 2;                      // + left/right border
+		int inner = labelW + (rightW > 0 ? GAP + rightW : 0);
+		int w = inner + 2 * PAD + 2;            // padding + left/right border
 		if(w < cast(int)m.title.length + 2) w = cast(int)m.title.length + 2;
 		int h = cast(int)m.items.length + 2;    // + top/bottom border
 		int bx = (menuIndex < cast(int)titleX.length) ? titleX[menuIndex] : 2;
@@ -128,24 +155,59 @@ final class MenuBar {
 		int by = 1;
 		boxX = bx; boxY = by; boxW = w; boxH = h;
 
+		// Save-under: snapshot the covered cells on first show / move / resize.
+		if(!drawn || bx != lastX || by != lastY || w != lastW || h != lastH) {
+			if(hasUnder) restoreUnder();
+			captureUnder(bx, by, w, h);
+			lastX = bx; lastY = by; lastW = w; lastH = h;
+			drawn = true;
+		}
+
 		frame(bx, by, h, w);
+		int labelX = bx + 1 + PAD;
 		foreach(i, it; m.items) {
 			int ry = by + 1 + cast(int)i;
 			if(it.sep) {
+				// A faint inset rule, not the bright green frame colour.
 				foreach(cx; bx + 1 .. bx + w - 1)
-					screen.setChar(cx, ry, 0x0500 | 192);
+					screen.setChar(cx, ry, cast(Uint32)(0x20));        // clear pad
+				foreach(cx; labelX .. bx + w - 1 - PAD)
+					screen.setChar(cx, ry, 0x0b00 | 192);              // colour 11
 				continue;
 			}
 			bool hl = cast(int)i == itemIndex;
-			int rbg = hl ? 11 : 0;
-			int lfg = it.enabled ? (hl ? 1 : 15) : 8;
+			int rbg = hl ? 4 : 0;                                      // purple bar
 			foreach(cx; bx + 1 .. bx + w - 1)
 				screen.setChar(cx, ry, cast(Uint32)(0x20 | (rbg << 16)));
-			screen.cprint(bx + 1, ry, lfg, rbg, it.label);
-			if(it.keys.length)
-				screen.cprint(bx + w - 1 - cast(int)it.keys.length, ry,
-							  it.enabled ? (hl ? 15 : 12) : 8, rbg, it.keys);
+			int lfg = hl ? 1 : (it.enabled ? 15 : 8);
+			screen.cprint(labelX, ry, lfg, rbg, it.label);
+			string rt = rightText(it);
+			if(rt.length) {
+				int rfg = hl ? 1 : (it.enabled ? 12 : 8);
+				screen.cprint(bx + w - 1 - PAD - cast(int)rt.length, ry,
+							  rfg, rbg, rt);
+			}
 		}
+	}
+
+	// Save / restore the screen cells beneath the dropdown rectangle.
+	void captureUnder(int x, int y, int w, int h) {
+		under.length = w * h;
+		int k = 0;
+		foreach(yy; y .. y + h)
+			foreach(xx; x .. x + w)
+				under[k++] = screen.getChar(xx, yy);
+		uX = x; uY = y; uW = w; uH = h;
+		hasUnder = true;
+	}
+
+	void restoreUnder() {
+		if(!hasUnder) return;
+		int k = 0;
+		foreach(yy; uY .. uY + uH)
+			foreach(xx; uX .. uX + uW)
+				screen.setChar(xx, yy, under[k++]);
+		hasUnder = false;
 	}
 
 	// --- Input ---------------------------------------------------------------
@@ -234,8 +296,10 @@ final class MenuBar {
 
 	Item makeItem(ActionDef def) {
 		bool en = def.enabled is null || def.enabled();
+		bool tog = def.checked !is null;
+		bool on = tog && def.checked();
 		return Item(def.actionId, false, def.label(),
-					formatShortcuts(sm.getShortcuts(def.actionId)), en);
+					formatShortcuts(sm.getShortcuts(def.actionId)), en, tog, on);
 	}
 
 	// Append the items of `categories` (in order) from one context, separating
@@ -249,7 +313,7 @@ final class MenuBar {
 				if(def.category == cat)
 					group ~= makeItem(def);
 			if(group.length) {
-				if(!first) items ~= Item("", true, "", "", false);
+				if(!first) items ~= Item("", true, "", "", false, false, false);
 				items ~= group;
 				first = false;
 			}
@@ -295,8 +359,8 @@ final class MenuBar {
 		if(n == 0) return;
 		menuIndex = ((menuIndex + dir) % n + n) % n;
 		itemIndex = firstSelectable(menuIndex);
-		// The dropdown moves/resizes; repaint underneath to clear the old box.
-		if(mainui !is null) mainui.refresh();
+		// The box moves/resizes; drawDropdown notices and restores the old box's
+		// save-under before drawing the new one (no full-screen clear).
 	}
 
 	void moveItem(int dir) {

@@ -78,6 +78,9 @@ and contents follow whatever you are editing — **Note** / **Track** /
 in the wave/pulse/filter/command/chord tables. The bar remembers the last menu and
 item you used, so re-opening with <kbd>Esc</kbd> returns you to the same place.
 
+On/off commands (voices, interpolation, keyjam, help texts, fullscreen, tracking)
+show their current state with a `[x]` / `[ ]` checkbox next to the shortcut.
+
 The menus are generated from the same shortcut registry that drives the
 <kbd>F12</kbd> help and `doc/KEYBOARD.md`, so a command, its label and its shortcut
 are defined in exactly one place and can never disagree between them.

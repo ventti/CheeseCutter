@@ -115,6 +115,8 @@ abstract class Video {
 		enableFullscreen(useFullscreen);
 	}
 
+	bool isFullscreen() { return useFullscreen; }
+
 	void scalePosition(ref int x, ref int y) {
 		x -= rect.x;
 		y -= rect.y;

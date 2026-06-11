@@ -118,6 +118,8 @@ private void usage(File f) {
 "  mult:<n>         set the multispeed multiplier (1..16)\n" ~
 "  ff:<n>           advance playback n*16 frames (synchronous; no audio device)\n" ~
 "  frames:<n>       render n UI frames\n" ~
+"  tick:[n]         drive the 50Hz timerEvent n times (default 2) for\n" ~
+"                   timerEvent-only rendering (e.g. SID regs while playing)\n" ~
 "  shot:<file.bmp>  write a screenshot (BMP) of the current screen\n" ~
 "  sleep:<ms>       sleep this many milliseconds\n" ~
 "  state            print editor state to stderr (title/seqs/playing/SID regs)\n" ~
@@ -168,6 +170,13 @@ private bool processCommand(string arg) {
 			break;
 		case "frames":
 			foreach(i; 0 .. to!int(val)) { mainui.update(); video.updateFrame(); }
+			break;
+		case "tick":
+			// Drive the 50Hz timer N times (default 2 = one UPDATE_RATE cycle), so
+			// timerEvent-only rendering (e.g. the SID register readout shown while
+			// playing) is produced. Lets headless shots capture it.
+			foreach(i; 0 .. (val.length ? to!int(val) : 2)) mainui.timerEvent(1);
+			video.updateFrame();
 			break;
 		case "shot":
 			mainui.update(); video.updateFrame();
