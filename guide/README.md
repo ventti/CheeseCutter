@@ -71,15 +71,20 @@ keyboard shortcut shown on the right of each item.
 | <kbd>Enter</kbd> | Run the highlighted command |
 | Mouse | Click a title to open it, click an item to run it, click elsewhere to close |
 
-The fixed menus are **File**, **Edit**, **View**, **Playback**, **Window** and
-**Help**. Between **Window** and **Help** a **context menu** appears whose title
-and contents follow whatever you are editing — **Note** / **Track** /
-**Sequence** in the sequencer, **Instrument** in the instrument list, **Tables**
-in the wave/pulse/filter/command/chord tables. The bar remembers the last menu and
-item you used, so re-opening with <kbd>Esc</kbd> returns you to the same place.
+The menu bar is shown from startup. The fixed menus are **File**, **Edit**,
+**View**, **Playback**, **Navigate** (jump between the sequencer, tables and song
+info) and **Help**. Before **Help**, context menus appear that follow whatever you
+are editing: the F6 note column shows **Note** (note-level commands) and
+**Sequence** (sequence-level commands plus the shared sequencer commands); the F5
+track column shows **Track** + **Sequence**; the instrument list shows
+**Instrument**; the wave/pulse/filter/command/chord tables show **Tables**. The
+bar remembers the last menu and item you used, so re-opening with <kbd>Esc</kbd>
+returns you to the same place. Hovering an item for a second shows its full
+description as a tooltip.
 
 On/off commands (voices, interpolation, keyjam, help texts, fullscreen, tracking)
-show their current state with a `[x]` / `[ ]` checkbox next to the shortcut.
+show their current state with a `[x]` / `[ ]` checkbox in an aligned column; each
+item's keyboard shortcut is shown on the right.
 
 The menus are generated from the same shortcut registry that drives the
 <kbd>F12</kbd> help and `doc/KEYBOARD.md`, so a command, its label and its shortcut

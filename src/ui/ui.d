@@ -1451,8 +1451,6 @@ final class UI {
 			setMenuLabel("seq_append", "Insert SEQ...");
 			setMenuLabel("seq_prev_subtune", "Previous subtune");
 			setMenuLabel("seq_next_subtune", "Next subtune");
-			setMenuLabel("seq_height_inc", "Taller sequencer");
-			setMenuLabel("seq_height_dec", "Shorter sequencer");
 			setMenuLabel("seq_enter_track_col", "Track column");
 			setMenuLabel("seq_enter_note_col", "Note column");
 			setMenuLabel("seq_overview", "Overview mode");
@@ -1507,6 +1505,30 @@ final class UI {
 			setMenuLabel("table_row_bottom", "To last row");
 			setMenuLabel("table_insert_row", "Insert row");
 			setMenuLabel("table_delete_row", "Delete row");
+
+			// Split the F6 note-column commands into note-level ("Note") and
+			// sequence-level ("Sequence") groups, so the menu bar can show a
+			// focused Note menu and a Sequence menu (which also gathers the
+			// shared sequencer commands). "sequence" is CC's term for the note
+			// pattern; a note is an individual pitch like C-4.
+			setCategory("note_trans_semi_up", "Note");
+			setCategory("note_trans_semi_down", "Note");
+			setCategory("note_trans_oct_up", "Note");
+			setCategory("note_trans_oct_down", "Note");
+			setCategory("note_tie", "Note");
+			setCategory("note_grab_instr", "Note");
+			setCategory("note_autoinsert", "Note");
+			setCategory("note_octave_dec", "Note");
+			setCategory("note_octave_inc", "Note");
+			setCategory("note_play_row", "Sequence");
+			setCategory("note_split", "Sequence");
+			setCategory("note_seq_start", "Sequence");
+			setCategory("note_seq_end", "Sequence");
+			setCategory("note_expand_quick", "Sequence");
+			setCategory("note_insert_row", "Sequence");
+			setCategory("note_delete_row", "Sequence");
+			setCategory("note_expand", "Sequence");
+			setCategory("note_shrink", "Sequence");
 		}
 	}
 
@@ -1582,14 +1604,6 @@ final class UI {
 		sm.register("seq_next_subtune", C.sequencer, "Sequence operations",
 					"Activate next subtune", SDLK_RIGHT, KMOD_ALT,
 					{ invokeKey(SDLK_RIGHT, KMOD_ALT); });
-		sm.register("seq_height_inc", C.sequencer, "Sequence operations",
-					"Increase sequencer height", SDLK_EQUALS, KMOD_CTRL,
-					{ invokeKey(SDLK_EQUALS, KMOD_CTRL); });
-		sm.bindAlias("seq_height_inc", SDLK_KP_PLUS, KMOD_CTRL);
-		sm.register("seq_height_dec", C.sequencer, "Sequence operations",
-					"Decrease sequencer height", SDLK_MINUS, KMOD_CTRL,
-					{ invokeKey(SDLK_MINUS, KMOD_CTRL); });
-		sm.bindAlias("seq_height_dec", SDLK_KP_MINUS, KMOD_CTRL);
 		sm.register("seq_enter_track_col", C.sequencer, "Sequence operations",
 					"Enter the track column / toggle tracklist display", SDLK_F5, 0,
 					{ invokeKey(SDLK_F5, 0); });
@@ -1804,6 +1818,10 @@ final class UI {
 		tickcounter1 += n;
 		if(tickcounter1 >= UPDATE_RATE) {
 			infobar.update();
+			// Draw the menu bar every timer cycle (not only while playing), so it
+			// is visible as soon as the splash clears — no keypress needed — and
+			// the hover-tooltip timer can fire while the editor sits idle.
+			drawMenu();
 			if(dialog) dialog.update();
 			tickcounter1 = 0;
 			toplevel.timerEvent();

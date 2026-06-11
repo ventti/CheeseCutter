@@ -147,24 +147,32 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Alt-Left` | Activate previous subtune |
 | `Alt-C` | Ask for a SEQ number and copy contents over current SEQ |
 | `Alt-A` | Ask for a SEQ number and insert contents to cursor pos |
-| `Ctrl--` / `Ctrl-Keypad -` | Decrease sequencer height |
 | `F6` | Enter the note column |
 | `F5` | Enter the track column / toggle tracklist display |
-| `Ctrl-=` / `Ctrl-Keypad +` | Increase sequencer height |
 | `F7` | Toggle tracklist overview mode |
 
 ## Sequencer: note column (F6)
 
-### Note column
+### Note
 
 | Shortcut | Action |
 |---|---|
 | `,` | Change the note in current row to a tie note |
 | `<` | Decrease base octave |
-| `Shift-Delete` | Delete a row (with sequence shrink) |
-| `Ctrl-Insert` | Expand the sequence |
 | `Return` | Grab the instrument value in the current row |
 | `>` | Increase base octave |
+| `;` | Toggle automatic instrument value insert |
+| `Ctrl-S` | Transpose octave down |
+| `Ctrl-W` | Transpose octave up |
+| `Ctrl-A` | Transpose semitone down |
+| `Ctrl-Q` | Transpose semitone up |
+
+### Sequence
+
+| Shortcut | Action |
+|---|---|
+| `Shift-Delete` | Delete a row (with sequence shrink) |
+| `Ctrl-Insert` | Expand the sequence |
 | `Shift-Insert` | Insert a row (with sequence expand) |
 | `End` | Move cursor to SEQ end (or screen bottom) |
 | `Home` | Move cursor to SEQ start (or screen top) |
@@ -172,11 +180,6 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Shift-Return` | Quick expand sequence (by highlight value * 4) |
 | `Ctrl-Delete` | Shrink the sequence |
 | `Ctrl-P` | Split current sequence into two from cursor pos |
-| `;` | Toggle automatic instrument value insert |
-| `Ctrl-S` | Transpose octave down |
-| `Ctrl-W` | Transpose octave up |
-| `Ctrl-A` | Transpose semitone down |
-| `Ctrl-Q` | Transpose semitone up |
 
 ## Sequencer: track column (F5)
 

@@ -111,6 +111,8 @@ struct ActionDef {
 	ActionCallback callback;
 	EnabledPredicate enabled;  // optional; null = always enabled
 	CheckedPredicate checked;  // optional; non-null = boolean toggle (menu checkbox)
+	int order;                 // registration order, for stable menu ordering
+	Shortcut primary;          // the binding from register() (not aliases); 0 = none
 
 	string label() const {
 		return menuLabel.length ? menuLabel : description;
@@ -143,6 +145,10 @@ class ShortcutManager {
 		// this chain (then global) so e.g. a note-column keypress can resolve a
 		// command registered on the shared "sequencer" context.
 		string[string] contextParent;
+
+		// Incrementing counter stamped onto each action as it is registered, so
+		// menus can present commands in deliberate registration order.
+		int orderCounter;
 	}
 
 	this() {
@@ -170,9 +176,9 @@ class ShortcutManager {
 	void register(string actionId, string context, string category,
 				  string description, int key, int mods, ActionCallback cb,
 				  string menuLabel = "", EnabledPredicate enabled = null) {
-		actions[actionId] = ActionDef(actionId, context, category, description,
-									  menuLabel, cb, enabled);
 		auto sc = Shortcut(key, mods);
+		actions[actionId] = ActionDef(actionId, context, category, description,
+									  menuLabel, cb, enabled, null, orderCounter++, sc);
 		if(context == Ctx.global)
 			bindings[sc] = actionId;
 		else
@@ -191,7 +197,8 @@ class ShortcutManager {
 						   string description, ActionCallback cb,
 						   string menuLabel = "", EnabledPredicate enabled = null) {
 		actions[actionId] = ActionDef(actionId, context, category, description,
-									  menuLabel, cb, enabled);
+									  menuLabel, cb, enabled, null, orderCounter++,
+									  Shortcut(0, 0));
 	}
 
 	/**
@@ -215,6 +222,16 @@ class ShortcutManager {
 	void setMenuLabel(string actionId, string label) {
 		assert(actionId in actions, "setMenuLabel: unknown action " ~ actionId);
 		actions[actionId].menuLabel = label;
+	}
+
+	/**
+	 * Reassigns an action's category (the help/menu grouping label). Used to
+	 * split a coarse category (e.g. "Note column") into finer menu groups
+	 * ("Note" vs "Sequence") without editing every registration in place.
+	 */
+	void setCategory(string actionId, string category) {
+		assert(actionId in actions, "setCategory: unknown action " ~ actionId);
+		actions[actionId].category = category;
 	}
 
 	void bindAlias(string actionId, int key, int mods) {
