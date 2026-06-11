@@ -12,9 +12,20 @@ every iteration. Plan: `~/.claude/plans/stateful-gathering-lovelace.md`.
 - **Build gate:** `make -f Makefile.mac LIBSPATH=/opt/homebrew/lib` (run `clean` first after base-class/asset change).
 - **Iteration budget:** 6 per phase; escalate to user after ~2 unproductive iterations on a sub-task.
 
-## Final done condition
-All four phases `verified`; final full build + end-to-end ccdriver verify pass;
-docs regenerated; PR opened; human review requested.
+## Final done condition — MET (pending landing decision)
+All four phases VERIFIED by independent verifiers; FINAL verifier verdict: **FEATURE PASS**
+(clean build of both binaries; note+track copy/cut/paste/merge/paste-new + undo byte-correct
+via seqdump/tracks; mouse drag; F7 inert; docs/version in sync; no blocking code-review findings).
+5 commits on feat/selection (base 0d31149).
+
+LANDING ACTION ITEM: develop has since advanced to b93fea9 (feat/menu-polish merge). This branch
+must be rebased/merged onto current develop before landing — expect a conflict in
+`ui.d registerContextShortcuts` (menu-polish + the selection registration touch that region);
+re-build + `make docs` after resolving. NOT yet rebased/pushed/PR'd — awaiting user decision.
+
+Human should eyeball (can't assert headlessly): selectionBarColor=5 legibility vs playback/wrap
+bars; live drag rubber-banding + multi-voice rectangle; no auto-scroll past screen edge (by design);
+F12/menu labels for the Selection group.
 
 ---
 
