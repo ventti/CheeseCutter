@@ -8,16 +8,14 @@ _Generated from the shortcut registry (com.shortcuts)._
 
 | Shortcut | Action |
 |---|---|
-| `F12` | Open context help |
-| `Esc` | Quit program (press twice) |
-| `Ctrl-F12` | Save screenshot |
-| `Alt-S` / `F11` | Show the splash / about screen |
-| `Alt-Return` | Toggle fullscreen |
+|  | Quit program |
 
 ### Display
 
 | Shortcut | Action |
 |---|---|
+| `Ctrl-F12` | Save screenshot |
+| `Alt-Return` | Toggle fullscreen |
 | `Alt-H` | Toggle help texts |
 
 ### Edit
@@ -35,6 +33,13 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `F10` | Open the Save song dialog |
 | `Ctrl-F10` | Quick save song (doesn't ask a filename) |
 | `Shift-F10` | Save current subtune as a playable .prg |
+
+### Help
+
+| Shortcut | Action |
+|---|---|
+| `F12` | Open context help |
+| `Alt-S` / `F11` | Show the splash / about screen |
 
 ### Keyjam
 

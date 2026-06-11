@@ -59,8 +59,12 @@ order, repeatable):
   `HOME`/`END`/`PGUP`/`PGDN`, `INS`, `DEL`, `BACKSPACE`, `SCRLOCK`, keypad
   `KP0`..`KP9` / `KP_PLUS` / `KP_MINUS` / `KP_MUL` / `KP_DIV` / `KP_PERIOD` /
   `KP_ENTER`, or a single char (`a`, `2`, `+`). Useful keys: `F2` play-from-start,
-  `F3` play-from-cursor, `F4` stop, `Esc Esc y` quit, `Shift-F10` save playable
-  `.prg`, `F12` help, `Alt-KP_PLUS`/`Alt-KP_MINUS` multispeed up/down.
+  `F3` play-from-cursor, `F4` stop, `ESC` open the menu bar (then arrows + `RET`;
+  quit is **File → Quit**), `Shift-F10` save playable `.prg`, `F12` help,
+  `Alt-KP_PLUS`/`Alt-KP_MINUS` multispeed up/down.
+- `click:<cx>,<cy>[,<button>[,<clicks>]]` — inject a mouse click at character-cell
+  coords (like the editor's own handler). Use it to drive the menu bar: e.g.
+  `click:3,0` opens the File menu, then `click:3,2` runs the first item.
 - `play` — start playback (`player.start`); `mult:<n>` — set multispeed (1..16)
 - `ff:<n>` — advance playback by `n*16` frames deterministically (calls the
   player directly; no audio device needed — that's how SID state changes here)

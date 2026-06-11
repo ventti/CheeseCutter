@@ -23,6 +23,7 @@ OBJS= \
 	src/main.o \
 	src/ui/tables.o \
 	src/ui/dialogs.o \
+	src/ui/menubar.o \
 	src/ui/ui.o \
 	src/ui/input.o \
 	src/ui/help.o \
@@ -100,7 +101,7 @@ CTOBJS	=
 # matching dependency rule lives in the main Makefiles (placing it here would
 # hijack the default goal, since this file is included first).
 VERSION_USERS = src/com/util.o src/main.o src/manpage.o src/ct/build.o \
-	src/ui/ui.o src/ui/dialogs.o src/ct2util.o
+	src/ui/ui.o src/ui/dialogs.o src/ui/menubar.o src/ct2util.o
 
 DIST_FILES = \
 	./ChangeLog \

@@ -57,11 +57,36 @@ ct2util import base.ct other.ct -o merged.ct
 ct2util init player.bin -o new.ct
 ```
 
+## Menus
+
+The top row is a menu bar. Press <kbd>Esc</kbd> to open it; every command in the
+editor (everything except live note entry) is reachable from a dropdown, with its
+keyboard shortcut shown on the right of each item.
+
+| Key | Action |
+| --- | --- |
+| <kbd>Esc</kbd> | Open the menu bar (or close it again) |
+| <kbd>←</kbd> / <kbd>→</kbd> | Switch between top-level menus |
+| <kbd>↑</kbd> / <kbd>↓</kbd> | Move between items (separators and disabled items are skipped) |
+| <kbd>Enter</kbd> | Run the highlighted command |
+| Mouse | Click a title to open it, click an item to run it, click elsewhere to close |
+
+The fixed menus are **File**, **Edit**, **View**, **Playback**, **Window** and
+**Help**. Between **Window** and **Help** a **context menu** appears whose title
+and contents follow whatever you are editing — **Note** / **Track** /
+**Sequence** in the sequencer, **Instrument** in the instrument list, **Tables**
+in the wave/pulse/filter/command/chord tables. The bar remembers the last menu and
+item you used, so re-opening with <kbd>Esc</kbd> returns you to the same place.
+
+The menus are generated from the same shortcut registry that drives the
+<kbd>F12</kbd> help and `doc/KEYBOARD.md`, so a command, its label and its shortcut
+are defined in exactly one place and can never disagree between them.
+
 ## Global Shortcuts
 
 | Shortcut | Action |
 | --- | --- |
-| <kbd>Esc</kbd> twice | Quit |
+| <kbd>Esc</kbd> | Open the menu bar (see [Menus](#menus)) |
 | <kbd>Alt</kbd>-<kbd>Return</kbd> | Toggle fullscreen |
 | <kbd>F9</kbd> | Load song |
 | <kbd>F10</kbd> | Save song |
@@ -72,6 +97,10 @@ ct2util init player.bin -o new.ct
 | <kbd>F12</kbd> again in context help | Global help |
 | <kbd>Ctrl</kbd>-<kbd>F12</kbd> | Screenshot |
 | <kbd>Alt</kbd>-<kbd>H</kbd> | Toggle table byte help |
+| <kbd>Esc</kbd> → File → Quit | Quit (asks for confirmation) |
+
+Quit no longer has a hotkey — open the menu bar with <kbd>Esc</kbd> and choose
+**File → Quit**.
 
 ## Playback
 

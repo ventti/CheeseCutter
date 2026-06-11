@@ -112,6 +112,8 @@ private void usage(File f) {
 "                   HOME, END, PGUP, PGDN, INS, DEL, BACKSPACE, SCRLOCK,\n" ~
 "                   KP0..KP9, KP_PLUS/KP_MINUS/KP_MUL/KP_DIV/KP_PERIOD/KP_ENTER,\n" ~
 "                   or a single char (a, 2, +, ...)\n" ~
+"  click:cx,cy[,b[,n]]  inject a mouse click at char-cell coords (b=button,\n" ~
+"                   n=clicks); e.g. click:3,0 opens the File menu\n" ~
 "  play             start playback (player.start)\n" ~
 "  mult:<n>         set the multispeed multiplier (1..16)\n" ~
 "  ff:<n>           advance playback n*16 frames (synchronous; no audio device)\n" ~
@@ -149,6 +151,18 @@ private bool processCommand(string arg) {
 			press(val);
 			stderr.writefln("key %s", val);
 			break;
+		case "click": {
+			// click:CX,CY[,BUTTON[,CLICKS]] — coords in character cells, like
+			// main.d's mouse handler (it passes x/FONT_X, y/FONT_Y to clickedAt).
+			auto parts = val.split(",");
+			int cx = to!int(parts[0]), cy = to!int(parts[1]);
+			int button = parts.length > 2 ? to!int(parts[2]) : 1;
+			int clicks = parts.length > 3 ? to!int(parts[3]) : 1;
+			mainui.clickedAt(cx, cy, button, clicks);
+			mainui.update();
+			stderr.writefln("click %d,%d b%d x%d", cx, cy, button, clicks);
+			break;
+		}
 		case "ff":
 			audio.player.fastForward(to!int(val));   // val*16 frames
 			break;
