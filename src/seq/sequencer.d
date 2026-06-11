@@ -881,11 +881,31 @@ abstract class VoiceTable : Window {
 		dragMoved = false;
 	}
 
+	/// Anchor a drag at the current cursor cell. Used on mouse-down: the click
+	/// has already positioned the cursor, so anchoring here keeps the anchor and
+	/// the drag-motion mapping in the same (post-click) scroll frame.
+	void beginDragAtCursor() {
+		beginDrag(activeVoiceNum, activeRowAbs());
+	}
+
 	void dragTo(int voiceIdx, int absRow) {
 		if(!dragging || absRow == int.min) return;
 		sel.setEnd(voiceIdx, absRow);
 		if(voiceIdx != sel.anchorCol || absRow != sel.anchorRow)
 			dragMoved = true;
+	}
+
+	/// Extend only the row of the drag end (pointer left the voice columns).
+	void dragToRow(int absRow) {
+		if(!dragging || absRow == int.min) return;
+		sel.setEnd(sel.endCol, absRow);
+		if(absRow != sel.anchorRow) dragMoved = true;
+	}
+
+	/// Public screen->absolute-row mapping for the mouse path (screenY in
+	/// screen char-cells; converts to the view-local Y rowAtScreenY expects).
+	int screenRowToAbs(int voiceIdx, int screenY) {
+		return rowAtScreenY(voiceIdx, screenY - area.y);
 	}
 
 	void endDrag() {
@@ -1229,8 +1249,29 @@ final class Sequencer : Window, Undoable {
 			if(v.area.overlaps(x, y)) {
 				activateVoice(cast(int)idx);
 				activeView.clickedAt(x - area.x, y - area.y, button, clicks);
+				// Left button starts a drag-select anchored at the cursor the
+				// click just positioned (same scroll frame as drag motion).
+				if(button == 1)
+					activeView.beginDragAtCursor();
 			}
 		}
+	}
+
+	override void draggedTo(int x, int y) {
+		// Extend the selection to the column/row under the pointer. If the
+		// pointer is outside all voice columns, keep the last column.
+		foreach(idx, Voice v; activeView.voices) {
+			if(v.area.overlaps(x, y)) {
+				activeView.dragTo(cast(int)idx,
+								  activeView.screenRowToAbs(cast(int)idx, y));
+				return;
+			}
+		}
+		activeView.dragToRow(activeView.screenRowToAbs(activeVoiceNum, y));
+	}
+
+	override void releasedAt(int x, int y) {
+		activeView.endDrag();
 	}
 
 	void seekPatternOffset(int offset) {

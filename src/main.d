@@ -190,7 +190,23 @@ void mainloop(bool verbose) {
 					}
 				}
 				break;
+			case SDL_MOUSEBUTTONUP:
+				if(evt.button.button == 1) {
+					int x, y;
+					SDL_GetMouseState(&x, &y);
+					video.scalePosition(x, y);
+					mainui.releasedAt(x / FONT_X, y / FONT_Y);
+					mainui.update();
+				}
+				break;
 			case SDL_MOUSEMOTION:
+				// Drag = motion with the left button held.
+				if(evt.motion.state & SDL_BUTTON_LMASK) {
+					int x = evt.motion.x, y = evt.motion.y;
+					video.scalePosition(x, y);
+					mainui.draggedTo(x / FONT_X, y / FONT_Y);
+					mainui.update();
+				}
 				break;
         //			case SDL_ACTIVEEVENT:
 				//break;

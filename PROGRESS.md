@@ -71,8 +71,31 @@ GOTCHAS for verifier:
 ## Phase 2 — mouse drag plumbing
 Stopping condition: builds; left-drag (single + multi-voice) builds same selection as
 keyboard markers; plain left-click clears + positions; button-up finalizes; verifier clean.
-(May require adding a `drag:`/button-up command to `.claude/skills/run-cheesecutter/driver.d` to verify motion.)
-- status: **open** · iterations: 0
+- status: **VERIFIED** (independent verifier: PHASE 2 PASS, all 7 conditions, no blocking findings) · iterations: 1
+
+Verifier confirmed: build clean; single + multi-voice drag select rectangles; drag-select payload
+byte-identical to keyboard-marker path; multi-voice paste routes each column to its own sequence
+(no cross-contamination); plain click clears selection + positions cursor; button-up finalizes;
+keyboard Phase-1 flows regression-free; F5/trackmap drag is a safe no-op. Non-blocking only:
+MOUSEMOTION uses evt.motion vs SDL_GetMouseState elsewhere (equivalent); theoretical dialog-opens-
+mid-drag leaves dragging=true (unreachable without a mid-drag key event).
+
+Implemented: Window base gained no-op `draggedTo`/`releasedAt` (ui.d); UI.draggedTo/releasedAt
+route to toplevel (guard dialog/menubar); WindowSwitcher forwards to activeWindow; Sequencer
+clickedAt now `beginDragAtCursor()` on left button, plus draggedTo/releasedAt overrides;
+VoiceTable gained beginDragAtCursor/dragToRow/screenRowToAbs; main.d handles SDL_MOUSEBUTTONUP
+and SDL_MOUSEMOTION(LMASK held). Driver: added `drag:x1,y1,x2,y2`; `click:` now also sends
+button-up (full gesture).
+
+Author self-check: drag 8,26→8,29 highlights voice0 rows 1-4; drag 8,26→34,29 highlights
+rows 1-4 across all 3 voices (rectangular). Drag-select rows1-4 → copy → paste at row20 gave
+seq0x11 rows 20-23 == the dragged block (byte-perfect, matches keyboard path).
+
+KEY DESIGN NOTE: drag anchor = cursor position the click just set (`beginDragAtCursor`/activeRowAbs),
+so anchor + drag-motion share one scroll frame (an earlier attempt anchored via stale post-scroll
+screen-y and selected rows above the data). No auto-scroll while dragging past screen edges (clamped).
+Not yet independently verified: plain-click clears selection, multi-voice PASTE routing via mouse,
+button-up finalize semantics, code review of the mouse plumbing.
 
 ## Phase 3 — track column (F5) hooks + no-selection fallback
 Stopping condition: builds; F5 select/copy/cut/paste/merge/paste-new work; no-selection

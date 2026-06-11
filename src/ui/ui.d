@@ -77,6 +77,10 @@ abstract class Window {
 	void deactivate() {}
 	void activate() { refresh(); }
 	void clickedAt(int scrx, int scry, int button, int clicks = 1) {}
+	/// Mouse moved with the left button held (drag), and left button released.
+	/// Coords are screen char-cells, as for clickedAt. No-op by default.
+	void draggedTo(int scrx, int scry) {}
+	void releasedAt(int scrx, int scry) {}
 
 	/// Identifies the keyboard-shortcut context this window provides. The active
 	/// window's contextId is pushed into the ShortcutManager so context-specific
@@ -599,6 +603,16 @@ final private class Toplevel : WindowSwitcher, Undoable {
 			if(spot.area.overlaps(x, y))
 				spot.callback(b);
 		}
+	}
+
+	// A drag belongs to the window where it began, i.e. the active window
+	// (clickedAt activated it on button-down). Route there directly.
+	override void draggedTo(int x, int y) {
+		activeWindow.draggedTo(x, y);
+	}
+
+	override void releasedAt(int x, int y) {
+		activeWindow.releasedAt(x, y);
 	}
 
 	override int keypress(Keyinfo key) {
@@ -1844,6 +1858,18 @@ final class UI {
 		if(dialog)
 			dialog.clickedAt(x, y, b, clicks);
 		else toplevel.clickedAt(x, y, b, clicks);
+	}
+
+	// Drag + release route to the toplevel (the active window owns the drag);
+	// never to a dialog or the menu bar.
+	void draggedTo(int x, int y) {
+		if(dialog || menubar.active) return;
+		toplevel.draggedTo(x, y);
+	}
+
+	void releasedAt(int x, int y) {
+		if(dialog || menubar.active) return;
+		toplevel.releasedAt(x, y);
 	}
 
 	private void saveCallback(string s) {
