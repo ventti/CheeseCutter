@@ -69,6 +69,9 @@ order, repeatable):
 - `ff:<n>` — advance playback by `n*16` frames deterministically (calls the
   player directly; no audio device needed — that's how SID state changes here)
 - `frames:<n>` — render n UI frames; `sleep:<ms>` — pause
+- `tick:[n]` — drive the 50Hz `timerEvent` n times (default 2), producing
+  `timerEvent`-only rendering (e.g. the SID register readout shown while playing)
+  for the next `shot`
 - `shot:<file.bmp>` — write a screenshot (BMP)
 - `state` — print title/author/seqs/playing/octave/speed/mult + the first SID
   registers to stderr

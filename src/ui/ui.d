@@ -1364,8 +1364,150 @@ final class UI {
 		// (Option+letter isn't intercepted, matching the window-nav aliases).
 		sm.bindAlias("about_dialog", SDLK_s, KMOD_ALT);
 
+		// Boolean toggles: report current on/off state so menus draw an [x]/[ ]
+		// checkbox. (SID model and visualization are A/B / multi-state, not here.)
+		sm.setChecked("toggle_voice_1", () => audio.player.muted[0] == 0);
+		sm.setChecked("toggle_voice_2", () => audio.player.muted[1] == 0);
+		sm.setChecked("toggle_voice_3", () => audio.player.muted[2] == 0);
+		sm.setChecked("toggle_interpolation", () => audio.player.interpolate != 0);
+		sm.setChecked("toggle_keyjam", () => state.keyjamStatus);
+		sm.setChecked("toggle_help_text", () => state.displayHelp);
+		sm.setChecked("toggle_fullscreen", () => video.isFullscreen());
+		sm.setChecked("toggle_follow_mode", () => toplevel.fplayEnabled());
+
 		// Context-specific command shortcuts (sequencer, tables, ...)
 		registerContextShortcuts();
+
+		// Concise menu labels. The verbose `description` stays for F12 help and
+		// KEYBOARD.md; menus use these via ActionDef.label() — still one source.
+		// Set after all actions (incl. context) are registered. (ASCII only: the
+		// editor font is a CP437-style 8-bit charset.)
+		with(sm) {
+			// File / Edit / View / Help
+			setMenuLabel("load_file", "Load song...");
+			setMenuLabel("save_file", "Save song...");
+			setMenuLabel("save_prg", "Export .prg...");
+			setMenuLabel("quick_save", "Quick save");
+			setMenuLabel("optimize_song", "Optimize song");
+			setMenuLabel("clear_sequences", "Clear sequences");
+			setMenuLabel("increase_speed", "Speed +");
+			setMenuLabel("decrease_speed", "Speed -");
+			setMenuLabel("increase_multiplier_alt", "Multiplier +");
+			setMenuLabel("decrease_multiplier_alt", "Multiplier -");
+			setMenuLabel("toggle_fullscreen", "Fullscreen");
+			setMenuLabel("toggle_help_text", "Help texts");
+			setMenuLabel("screenshot", "Screenshot");
+			setMenuLabel("cycle_visualization", "Visualization");
+			setMenuLabel("dump_frame", "Dump SID frame");
+			setMenuLabel("help_dialog", "Keyboard help");
+			setMenuLabel("about_dialog", "About...");
+			// Playback
+			setMenuLabel("play_from_mark", "Play from mark");
+			setMenuLabel("play_from_mark_follow", "Play from mark (track)");
+			setMenuLabel("play_from_beginning", "Play from start");
+			setMenuLabel("play_from_beginning_follow", "Play from start (track)");
+			setMenuLabel("play_from_cursor", "Play from cursor");
+			setMenuLabel("stop_playback", "Stop");
+			setMenuLabel("toggle_follow_mode", "Tracking");
+			setMenuLabel("fast_forward_5", "Fast forward");
+			setMenuLabel("fast_forward_25", "Fast forward (more)");
+			setMenuLabel("next_filter_preset", "Next filter preset");
+			setMenuLabel("prev_filter_preset", "Prev filter preset");
+			setMenuLabel("toggle_interpolation", "Interpolation");
+			setMenuLabel("toggle_sid_model", "SID model");
+			setMenuLabel("toggle_voice_1", "Voice 1");
+			setMenuLabel("toggle_voice_2", "Voice 2");
+			setMenuLabel("toggle_voice_3", "Voice 3");
+			setMenuLabel("toggle_keyjam", "Keyjam");
+			// Window
+			setMenuLabel("next_window", "Next sub-window");
+			setMenuLabel("prev_window", "Previous sub-window");
+			setMenuLabel("cycle_window", "Next window");
+			setMenuLabel("cycle_window_reverse", "Previous window");
+			setMenuLabel("window_voice1", "Voice 1");
+			setMenuLabel("window_voice2", "Voice 2");
+			setMenuLabel("window_voice3", "Voice 3");
+			setMenuLabel("window_sequence", "Sequencer");
+			setMenuLabel("window_instrument", "Instrument table");
+			setMenuLabel("window_wave", "Wave table");
+			setMenuLabel("window_pulse", "Pulse table");
+			setMenuLabel("window_filter", "Filter table");
+			setMenuLabel("window_command", "Command table");
+			setMenuLabel("window_chord", "Chord table");
+			setMenuLabel("window_song_info", "Song info");
+			// Sequencer context
+			setMenuLabel("seq_song_start", "To song start");
+			setMenuLabel("seq_song_end", "To song end");
+			setMenuLabel("seq_jump_mark", "Jump to mark");
+			setMenuLabel("seq_centralize", "Center cursor");
+			setMenuLabel("seq_set_mark", "Set play mark");
+			setMenuLabel("seq_wrap_mark", "Set loop mark");
+			setMenuLabel("seq_highlight_inc", "Highlight +");
+			setMenuLabel("seq_highlight_dec", "Highlight -");
+			setMenuLabel("seq_highlight_reset", "Reset highlight");
+			setMenuLabel("seq_rowcounter", "Row counters");
+			setMenuLabel("seq_relative_notes", "Relative notes");
+			setMenuLabel("seq_copy", "Copy over SEQ...");
+			setMenuLabel("seq_append", "Insert SEQ...");
+			setMenuLabel("seq_prev_subtune", "Previous subtune");
+			setMenuLabel("seq_next_subtune", "Next subtune");
+			setMenuLabel("seq_height_inc", "Taller sequencer");
+			setMenuLabel("seq_height_dec", "Shorter sequencer");
+			setMenuLabel("seq_enter_track_col", "Track column");
+			setMenuLabel("seq_enter_note_col", "Note column");
+			setMenuLabel("seq_overview", "Overview mode");
+			// Note column
+			setMenuLabel("note_play_row", "Play row");
+			setMenuLabel("note_split", "Split sequence");
+			setMenuLabel("note_seq_start", "To SEQ start");
+			setMenuLabel("note_seq_end", "To SEQ end");
+			setMenuLabel("note_expand_quick", "Quick expand");
+			setMenuLabel("note_insert_row", "Insert row");
+			setMenuLabel("note_delete_row", "Delete row");
+			setMenuLabel("note_expand", "Expand sequence");
+			setMenuLabel("note_shrink", "Shrink sequence");
+			setMenuLabel("note_trans_semi_up", "Semitone up");
+			setMenuLabel("note_trans_semi_down", "Semitone down");
+			setMenuLabel("note_trans_oct_up", "Octave up");
+			setMenuLabel("note_trans_oct_down", "Octave down");
+			setMenuLabel("note_grab_instr", "Grab instrument");
+			setMenuLabel("note_tie", "Tie note");
+			setMenuLabel("note_autoinsert", "Auto instrument");
+			setMenuLabel("note_octave_dec", "Base octave -");
+			setMenuLabel("note_octave_inc", "Base octave +");
+			// Track column
+			setMenuLabel("trk_insert", "Insert track");
+			setMenuLabel("trk_delete", "Delete track");
+			setMenuLabel("trk_insert_end", "Insert track at end");
+			setMenuLabel("trk_delete_end", "Delete track to end");
+			setMenuLabel("trk_insert_all", "Insert track (all voices)");
+			setMenuLabel("trk_delete_all", "Delete track (all voices)");
+			setMenuLabel("trk_trans_up", "Transpose up");
+			setMenuLabel("trk_trans_down", "Transpose down");
+			setMenuLabel("trk_copy", "Copy tracks...");
+			setMenuLabel("trk_paste", "Paste tracks");
+			setMenuLabel("trk_paste_insert", "Paste as insert");
+			setMenuLabel("trk_paste_overwrite", "Paste as overwrite");
+			setMenuLabel("trk_swap_v1", "Swap with voice 1");
+			setMenuLabel("trk_swap_v2", "Swap with voice 2");
+			setMenuLabel("trk_swap_v3", "Swap with voice 3");
+			setMenuLabel("trk_find_unused", "Find unused seq");
+			setMenuLabel("trk_prev_seq", "Previous sequence");
+			setMenuLabel("trk_next_seq", "Next sequence");
+			// Instrument table
+			setMenuLabel("ins_load", "Load instrument...");
+			setMenuLabel("ins_save", "Save instrument...");
+			setMenuLabel("ins_delete", "Delete instrument");
+			setMenuLabel("ins_copy", "Copy instrument");
+			setMenuLabel("ins_paste", "Paste instrument");
+			// Sub-tables
+			setMenuLabel("wave_goto_instr", "Go to instr wave");
+			setMenuLabel("wave_clear_row", "Clear row");
+			setMenuLabel("table_row_top", "To first row");
+			setMenuLabel("table_row_bottom", "To last row");
+			setMenuLabel("table_insert_row", "Insert row");
+			setMenuLabel("table_delete_row", "Delete row");
+		}
 	}
 
 	/**

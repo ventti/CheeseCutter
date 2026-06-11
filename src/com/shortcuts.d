@@ -82,6 +82,12 @@ alias ActionCallback = void delegate();
  */
 alias EnabledPredicate = bool delegate();
 
+/**
+ * Optional predicate marking an action as a boolean toggle and reporting its
+ * current state (true = on). When set, menus draw an [x]/[ ] checkbox.
+ */
+alias CheckedPredicate = bool delegate();
+
 /// Context identifiers. "global" is the fallback consulted for every keypress.
 enum Ctx {
 	global         = "global",
@@ -104,6 +110,7 @@ struct ActionDef {
 	string menuLabel;    // optional; "" -> fall back to description
 	ActionCallback callback;
 	EnabledPredicate enabled;  // optional; null = always enabled
+	CheckedPredicate checked;  // optional; non-null = boolean toggle (menu checkbox)
 
 	string label() const {
 		return menuLabel.length ? menuLabel : description;
@@ -191,6 +198,25 @@ class ShortcutManager {
 	 * Registers a second key binding for an already-registered action.
 	 * Useful for alternate keys (e.g. Alt-4 and Alt-I both jump to instruments).
 	 */
+	/**
+	 * Marks an already-registered action as a boolean toggle and supplies the
+	 * predicate that reports its current state. Menus then show an [x]/[ ] box.
+	 */
+	void setChecked(string actionId, CheckedPredicate p) {
+		assert(actionId in actions, "setChecked: unknown action " ~ actionId);
+		actions[actionId].checked = p;
+	}
+
+	/**
+	 * Sets a concise menu label for an action (used by menus via label()); the
+	 * full `description` is kept for the F12 help and KEYBOARD.md. Lets the verbose
+	 * registrations stay readable while menus show short text — still one source.
+	 */
+	void setMenuLabel(string actionId, string label) {
+		assert(actionId in actions, "setMenuLabel: unknown action " ~ actionId);
+		actions[actionId].menuLabel = label;
+	}
+
 	void bindAlias(string actionId, int key, int mods) {
 		assert(actionId in actions, "bindAlias: unknown action " ~ actionId);
 		auto sc = Shortcut(key, mods);
