@@ -471,10 +471,10 @@ void registerContextShortcuts(UI ui) {
 				{ invokeKey(SDLK_t, KMOD_CTRL); });
 
 	sm.register("seq_copy", C.sequencer, "Sequence operations",
-				"Ask for a SEQ number and copy contents over current SEQ", SDLK_c, KMOD_ALT,
+				"Ask for a sequence number and copy contents over current sequence", SDLK_c, KMOD_ALT,
 				{ invokeKey(SDLK_c, KMOD_ALT); });
 	sm.register("seq_append", C.sequencer, "Sequence operations",
-				"Ask for a SEQ number and insert contents to cursor pos", SDLK_a, KMOD_ALT,
+				"Ask for a sequence number and insert contents to cursor pos", SDLK_a, KMOD_ALT,
 				{ invokeKey(SDLK_a, KMOD_ALT); });
 	sm.register("seq_prev_subtune", C.sequencer, "Sequence operations",
 				"Activate previous subtune", SDLK_LEFT, KMOD_ALT,
@@ -529,10 +529,10 @@ void registerContextShortcuts(UI ui) {
 				"Split current sequence into two from cursor pos", SDLK_p, KMOD_CTRL,
 				{ invokeKey(SDLK_p, KMOD_CTRL); });
 	sm.register("note_seq_start", C.noteColumn, "Note column",
-				"Move cursor to SEQ start (or screen top)", SDLK_HOME, 0,
+				"Move cursor to sequence start (or screen top)", SDLK_HOME, 0,
 				{ invokeKey(SDLK_HOME, 0); });
 	sm.register("note_seq_end", C.noteColumn, "Note column",
-				"Move cursor to SEQ end (or screen bottom)", SDLK_END, 0,
+				"Move cursor to sequence end (or screen bottom)", SDLK_END, 0,
 				{ invokeKey(SDLK_END, 0); });
 	sm.register("note_expand_quick", C.noteColumn, "Note column",
 				"Quick expand sequence (by highlight value * 4)", SDLK_RETURN, KMOD_SHIFT,
@@ -744,8 +744,8 @@ void applyMenuLabels(UI ui) {
 		setMenuLabel("seq_highlight_reset", "Reset highlight");
 		setMenuLabel("seq_rowcounter", "Row counters");
 		setMenuLabel("seq_relative_notes", "Relative notes");
-		setMenuLabel("seq_copy", "Copy over SEQ...");
-		setMenuLabel("seq_append", "Insert SEQ...");
+		setMenuLabel("seq_copy", "Copy over sequence...");
+		setMenuLabel("seq_append", "Insert sequence...");
 		setMenuLabel("seq_prev_subtune", "Previous subtune");
 		setMenuLabel("seq_next_subtune", "Next subtune");
 		setMenuLabel("seq_enter_track_col", "Track column");
@@ -754,8 +754,8 @@ void applyMenuLabels(UI ui) {
 		// Note column
 		setMenuLabel("note_play_row", "Play row");
 		setMenuLabel("note_split", "Split sequence");
-		setMenuLabel("note_seq_start", "To SEQ start");
-		setMenuLabel("note_seq_end", "To SEQ end");
+		setMenuLabel("note_seq_start", "To sequence start");
+		setMenuLabel("note_seq_end", "To sequence end");
 		setMenuLabel("note_expand_quick", "Quick expand");
 		setMenuLabel("note_insert_row", "Insert row");
 		setMenuLabel("note_delete_row", "Delete row");
