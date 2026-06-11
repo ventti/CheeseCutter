@@ -81,7 +81,7 @@ final class MenuBar {
 
 	// --- Drawing -------------------------------------------------------------
 
-	/// Row 0: top-level titles on the left, a CC version/date tag on the right.
+	/// Row 0: top-level titles on the left, a program/version/date tag on the right.
 	void drawBar() {
 		rebuild();
 		int bg = state.keyjamStatus ? 14 : 12;
@@ -96,9 +96,13 @@ final class MenuBar {
 			screen.cprint(x, 0, fg, tbg, m.title);
 			x += cast(int)m.title.length + 2;
 		}
-		string tag = "CC " ~ APP_VERSION ~ versionInfo();
-		int tx = screen.width - cast(int)tag.length - 1;
-		if(tx > x) screen.cprint(tx, 0, 1, bg, tag);
+		// Right-aligned program/version tag: use the fullest name that still
+		// clears the menu titles, shrinking the prefix as space runs out.
+		string ver = APP_VERSION ~ versionInfo();
+		foreach(tag; ["CheeseCutter Extended " ~ ver, "CC Ext " ~ ver, "CC " ~ ver]) {
+			int tx = screen.width - cast(int)tag.length - 1;
+			if(tx > x) { screen.cprint(tx, 0, 1, bg, tag); break; }
+		}
 	}
 
 	/// The condensed dropdown box under the active title.
