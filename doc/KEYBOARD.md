@@ -139,6 +139,19 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Ctrl-Backspace` | Set loop (wrap) mark to current position |
 | `Backspace` | Set playback start mark to current position |
 
+### Selection
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl-D` | Clear the block selection |
+| `Ctrl-C` | Copy the selected block to the clipboard |
+| `Ctrl-X` | Cut the selected block (blank rows, keep length) |
+| `Ctrl-Shift-B` | Mark block selection end at the cursor |
+| `Ctrl-B` | Mark block selection start at the cursor |
+| `Ctrl-Shift-V` | Merge the block into empty rows only from the cursor |
+| `Ctrl-Shift-N` | Paste the block as new track(s)/sequence(s) at the cursor |
+| `Ctrl-V` | Paste the block over rows from the cursor (overflow dropped) |
+
 ### Sequence operations
 
 | Shortcut | Action |

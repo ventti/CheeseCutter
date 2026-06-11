@@ -191,6 +191,36 @@ Use <kbd>F5</kbd>, <kbd>F6</kbd>, and <kbd>F7</kbd> to switch sequencer views:
 | <kbd>Ctrl</kbd>-<kbd>T</kbd> | Toggle relative notes |
 | <kbd>Ctrl</kbd>-<kbd>Space</kbd> | Toggle keyjam |
 
+### Block Selection (copy / cut / paste / merge)
+
+Select a rectangular block — a range of rows across one or more voice columns —
+and move it around. It works in both the <kbd>F6</kbd> note column (the block is
+note data) and the <kbd>F5</kbd> track column (the block is track-list entries),
+and is designed to extend to the player tables later.
+
+Make a selection by **left-dragging** with the mouse, or with the keyboard
+markers below. A plain left-click clears the selection and just positions the
+cursor. **Paste** and **merge** write into the currently active voice(s) from
+the cursor down and are clipped to the current sequence/track end — anything that
+would overflow is dropped. **Merge** only fills rows that are currently empty.
+**Paste new** instead inserts brand-new track(s)/sequence(s) at the cursor,
+sized to hold the block.
+
+| Shortcut | Action |
+| --- | --- |
+| Left-drag | Select a block (single or multiple voice columns) |
+| <kbd>Ctrl</kbd>-<kbd>B</kbd> | Mark selection start at the cursor |
+| <kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>B</kbd> | Mark selection end at the cursor |
+| <kbd>Ctrl</kbd>-<kbd>D</kbd> | Clear the selection |
+| <kbd>Ctrl</kbd>-<kbd>C</kbd> | Copy the selected block |
+| <kbd>Ctrl</kbd>-<kbd>X</kbd> | Cut (blank the rows, keep the length) |
+| <kbd>Ctrl</kbd>-<kbd>V</kbd> | Paste over rows from the cursor (overflow dropped) |
+| <kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>V</kbd> | Merge into empty rows only |
+| <kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>N</kbd> | Paste as new track(s)/sequence(s) |
+
+In the <kbd>F5</kbd> track column, <kbd>Ctrl</kbd>-<kbd>C</kbd>/<kbd>Ctrl</kbd>-<kbd>V</kbd>
+fall back to the older count-prompt track copy/paste when no block is selected.
+
 ### Track Column
 
 These shortcuts apply in the <kbd>F5</kbd> track column.

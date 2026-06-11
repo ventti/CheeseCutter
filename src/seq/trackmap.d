@@ -105,8 +105,13 @@ class TrackmapTable : BaseTrackTable {
 			voices[v] = new TrackmapVoice(VoiceInitParams(song.tracks[v],
 														  na, pi.pos[v], this));
 		}
-		super(a, pi); 
+		super(a, pi);
 	}
+
+	// The overview uses a compressed per-row layout (TrackmapVoice.update), so
+	// the inherited track-column row<->screen mapping doesn't apply. Keep block
+	// selection scoped to the F5 track table for now.
+	override bool selectionEnabled() { return false; }
 
 	override void activate() {
 		super.activate();

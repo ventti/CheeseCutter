@@ -114,6 +114,7 @@ private void usage(File f) {
 "                   or a single char (a, 2, +, ...)\n" ~
 "  click:cx,cy[,b[,n]]  inject a mouse click at char-cell coords (b=button,\n" ~
 "                   n=clicks); e.g. click:3,0 opens the File menu\n" ~
+"  drag:x1,y1,x2,y2 left-drag from (x1,y1) to (x2,y2) (press, move, release)\n" ~
 "  play             start playback (player.start)\n" ~
 "  mult:<n>         set the multispeed multiplier (1..16)\n" ~
 "  ff:<n>           advance playback n*16 frames (synchronous; no audio device)\n" ~
@@ -123,6 +124,8 @@ private void usage(File f) {
 "  shot:<file.bmp>  write a screenshot (BMP) of the current screen\n" ~
 "  sleep:<ms>       sleep this many milliseconds\n" ~
 "  state            print editor state to stderr (title/seqs/playing/SID regs)\n" ~
+"  seqdump:<n>      dump sequence n's rows as hex (read-only edit oracle)\n" ~
+"  tracks           dump each voice's tracklist entries (trans,number)\n" ~
 "\n" ~
 "Remote backend (--vice/--ultimate) testing:\n" ~
 "  vice:[target]    enable the VICE backend: empty = launch x64sc from PATH,\n" ~
@@ -161,8 +164,26 @@ private bool processCommand(string arg) {
 			int button = parts.length > 2 ? to!int(parts[2]) : 1;
 			int clicks = parts.length > 3 ? to!int(parts[3]) : 1;
 			mainui.clickedAt(cx, cy, button, clicks);
+			// Complete the gesture (button-up) so a click is a full press+release
+			// — matches real input and clears a freshly-anchored selection.
+			if(button == 1) mainui.releasedAt(cx, cy);
 			mainui.update();
 			stderr.writefln("click %d,%d b%d x%d", cx, cy, button, clicks);
+			break;
+		}
+		case "drag": {
+			// drag:CX1,CY1,CX2,CY2 — left-button press at (1), motion to (2)
+			// with the button held, then release. Simulates a drag-select.
+			auto p = val.split(",");
+			int x1 = to!int(p[0]), y1 = to!int(p[1]);
+			int x2 = to!int(p[2]), y2 = to!int(p[3]);
+			mainui.clickedAt(x1, y1, 1, 1); mainui.update();
+			// a couple of intermediate motions, like a real drag
+			int mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+			mainui.draggedTo(mx, my); mainui.update();
+			mainui.draggedTo(x2, y2); mainui.update();
+			mainui.releasedAt(x2, y2); mainui.update();
+			stderr.writefln("drag %d,%d -> %d,%d", x1, y1, x2, y2);
 			break;
 		}
 		case "ff":
@@ -215,6 +236,31 @@ private bool processCommand(string arg) {
 		case "state":
 			dumpState();
 			break;
+		case "seqdump": {
+			// seqdump:<n> — dump sequence n's rows as hex (4 bytes/row). A
+			// read-only oracle for verifying block copy/paste/merge/cut edits.
+			int n = val.startsWith("0x") || val.startsWith("0X")
+				? to!int(val[2..$], 16) : to!int(val);
+			Sequence s = song.seqs[n];
+			stderr.writef("seq %02X rows=%d:", n, s.rows);
+			foreach(r; 0 .. s.rows)
+				stderr.writef(" %02x%02x%02x%02x", s.data.raw[r*4], s.data.raw[r*4+1],
+							  s.data.raw[r*4+2], s.data.raw[r*4+3]);
+			stderr.writeln();
+			break;
+		}
+		case "tracks": {
+			// dump each voice's tracklist entries (trans,number) up to the end
+			// mark — for verifying paste-new track insertion.
+			foreach(v; 0 .. 3) {
+				auto tl = song.tracks[v];
+				stderr.writef("trk v%d:", v);
+				for(int i = 0; i < tl.trackLength; i++)
+					stderr.writef(" %02x%02x", tl[i].trans, tl[i].number);
+				stderr.writeln();
+			}
+			break;
+		}
 		default:
 			stderr.writefln("unknown cmd: %s (try --help)", arg);
 			return false;

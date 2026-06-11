@@ -77,6 +77,10 @@ abstract class Window {
 	void deactivate() {}
 	void activate() { refresh(); }
 	void clickedAt(int scrx, int scry, int button, int clicks = 1) {}
+	/// Mouse moved with the left button held (drag), and left button released.
+	/// Coords are screen char-cells, as for clickedAt. No-op by default.
+	void draggedTo(int scrx, int scry) {}
+	void releasedAt(int scrx, int scry) {}
 
 	/// Identifies the keyboard-shortcut context this window provides. The active
 	/// window's contextId is pushed into the ShortcutManager so context-specific
@@ -599,6 +603,16 @@ final private class Toplevel : WindowSwitcher, Undoable {
 			if(spot.area.overlaps(x, y))
 				spot.callback(b);
 		}
+	}
+
+	// A drag belongs to the window where it began, i.e. the active window
+	// (clickedAt activated it on button-down). Route there directly.
+	override void draggedTo(int x, int y) {
+		activeWindow.draggedTo(x, y);
+	}
+
+	override void releasedAt(int x, int y) {
+		activeWindow.releasedAt(x, y);
 	}
 
 	override int keypress(Keyinfo key) {
@@ -1614,6 +1628,33 @@ final class UI {
 					"Toggle tracklist overview mode", SDLK_F7, 0,
 					{ invokeKey(SDLK_F7, 0); });
 
+		// --- Block selection (note + track columns; resolved via the shared
+		// sequencer context). Also drivable by left-drag with the mouse. ---
+		sm.register("sel_mark_begin", C.sequencer, "Selection",
+					"Mark block selection start at the cursor", SDLK_b, KMOD_CTRL,
+					{ invokeKey(SDLK_b, KMOD_CTRL); });
+		sm.register("sel_mark_end", C.sequencer, "Selection",
+					"Mark block selection end at the cursor", SDLK_b, KMOD_CTRL | KMOD_SHIFT,
+					{ invokeKey(SDLK_b, KMOD_CTRL | KMOD_SHIFT); });
+		sm.register("sel_clear", C.sequencer, "Selection",
+					"Clear the block selection", SDLK_d, KMOD_CTRL,
+					{ invokeKey(SDLK_d, KMOD_CTRL); });
+		sm.register("sel_copy", C.sequencer, "Selection",
+					"Copy the selected block to the clipboard", SDLK_c, KMOD_CTRL,
+					{ invokeKey(SDLK_c, KMOD_CTRL); });
+		sm.register("sel_cut", C.sequencer, "Selection",
+					"Cut the selected block (blank rows, keep length)", SDLK_x, KMOD_CTRL,
+					{ invokeKey(SDLK_x, KMOD_CTRL); });
+		sm.register("sel_paste", C.sequencer, "Selection",
+					"Paste the block over rows from the cursor (overflow dropped)", SDLK_v, KMOD_CTRL,
+					{ invokeKey(SDLK_v, KMOD_CTRL); });
+		sm.register("sel_merge", C.sequencer, "Selection",
+					"Merge the block into empty rows only from the cursor", SDLK_v, KMOD_CTRL | KMOD_SHIFT,
+					{ invokeKey(SDLK_v, KMOD_CTRL | KMOD_SHIFT); });
+		sm.register("sel_paste_new", C.sequencer, "Selection",
+					"Paste the block as new track(s)/sequence(s) at the cursor", SDLK_n, KMOD_CTRL | KMOD_SHIFT,
+					{ invokeKey(SDLK_n, KMOD_CTRL | KMOD_SHIFT); });
+
 		// --- Note column (F6) ---
 		sm.register("note_play_row", C.noteColumn, "Note column",
 					"Play notes for all voices in current row", SDLK_KP_0, 0,
@@ -2004,6 +2045,18 @@ final class UI {
 		if(dialog)
 			dialog.clickedAt(x, y, b, clicks);
 		else toplevel.clickedAt(x, y, b, clicks);
+	}
+
+	// Drag + release route to the toplevel (the active window owns the drag);
+	// never to a dialog or the menu bar.
+	void draggedTo(int x, int y) {
+		if(dialog || menubar.active) return;
+		toplevel.draggedTo(x, y);
+	}
+
+	void releasedAt(int x, int y) {
+		if(dialog || menubar.active) return;
+		toplevel.releasedAt(x, y);
 	}
 
 	private void saveCallback(string s) {
