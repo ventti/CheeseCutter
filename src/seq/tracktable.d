@@ -501,6 +501,15 @@ abstract class BaseTrackTable : VoiceTable, Undoable {
 		return trackAtSongRow(voices[voiceIdx], songRow);
 	}
 
+	// Keep the selection within the valid track range (no spilling above the
+	// first track or past the end mark).
+	protected override int clampSelRow(int col, int row) {
+		int last = voices[col].tracks.trackLength - 1;
+		if(row < 0) row = 0;
+		if(row > last) row = last;
+		return row;
+	}
+
 	private int trackAtSongRow(Voice v, int songRow) {
 		if(songRow < 0) return int.min;
 		int pos = 0;

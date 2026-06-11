@@ -492,6 +492,22 @@ class SequenceTable : VoiceTable, Undoable {
 		return false;
 	}
 
+	// Confine the selection to the sequence the anchor sits in: a block can't
+	// extend past that sequence's first/last row (no spilling into the empty
+	// area above the song or into an adjacent sequence).
+	protected override int clampSelRow(int col, int row) {
+		int t, s;
+		Voice av = voices[sel.anchorCol];
+		if(locate(av, sel.anchorRow, t, s)) {
+			Sequence seq = song.seqs[av.tracks[t].number];
+			int lo = sel.anchorRow - s;
+			int hi = lo + seq.rows - 1;
+			if(row < lo) row = lo;
+			if(row > hi) row = hi;
+		}
+		return row;
+	}
+
 	protected override ubyte[] readCellBytes(int voiceIdx, int absRow) {
 		int t, s;
 		Voice v = voices[voiceIdx];

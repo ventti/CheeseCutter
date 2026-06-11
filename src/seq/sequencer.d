@@ -792,6 +792,10 @@ abstract class VoiceTable : Window {
 	protected void saveSelState() {}
 	/// Re-sync inputs / cursor after a mutation.
 	protected void afterMutate() { refresh(); step(0); }
+	/// Clamp a candidate selection-end row so the selection can't extend past
+	/// the boundaries of the anchor's sequence (note column) / the valid track
+	/// range (track column). Default: no clamp.
+	protected int clampSelRow(int col, int row) { return row; }
 
 	// --- Verbs (called from keypress + mouse) ---
 
@@ -807,7 +811,7 @@ abstract class VoiceTable : Window {
 	void setSelEnd() {
 		if(!selectionEnabled) return;
 		if(!sel.active) sel.setBegin(activeVoiceNum, activeRowAbs());
-		sel.setEnd(activeVoiceNum, activeRowAbs());
+		sel.setEnd(activeVoiceNum, clampSelRow(activeVoiceNum, activeRowAbs()));
 		sel.active = true;
 		UI.statusline.display(format("Selection: %d row(s), %d voice(s).",
 									 sel.rows, sel.cols));
@@ -892,13 +896,13 @@ abstract class VoiceTable : Window {
 
 	void dragTo(int voiceIdx, int absRow) {
 		if(!dragging || absRow == int.min) return;
-		sel.setEnd(voiceIdx, absRow);
+		sel.setEnd(voiceIdx, clampSelRow(voiceIdx, absRow));
 	}
 
 	/// Extend only the row of the drag end (pointer left the voice columns).
 	void dragToRow(int absRow) {
 		if(!dragging || absRow == int.min) return;
-		sel.setEnd(sel.endCol, absRow);
+		sel.setEnd(sel.endCol, clampSelRow(sel.endCol, absRow));
 	}
 
 	/// The pointer moved to a different screen cell during the drag — so this is
