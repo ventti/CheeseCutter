@@ -19,7 +19,7 @@ registry; none of them redefine a shortcut.
 module ui.menubar;
 
 import derelict.sdl2.sdl;
-import std.algorithm : max;
+import std.algorithm : max, sort;
 import com.session;      // screen, mainui, state
 import com.shortcuts;
 import com.util;         // APP_VERSION, versionInfo
@@ -37,10 +37,12 @@ final class MenuBar {
 		string actionId;
 		bool sep;
 		string label;
-		string keys;
+		Shortcut primary;    // primary binding (rendered with dim separators)
 		bool enabled;
-		bool toggle;   // boolean toggle -> draw a checkbox
-		bool on;       // toggle current state
+		bool toggle;         // boolean toggle -> draw a checkbox
+		bool on;             // toggle current state
+		int order;           // registration order, for stable sorting
+		string description;  // full help sentence, shown as a hover tooltip
 	}
 	struct DMenu {
 		string title;
@@ -61,6 +63,16 @@ final class MenuBar {
 	int lastX, lastY, lastW, lastH;   // last drawn box (detect move/resize)
 	bool drawn;
 
+	// Hover tooltip: after the selection has been steady for ~1s, the focused
+	// item's full description is shown to the right of the menu, with its own
+	// save-under buffer (disjoint from the dropdown's, so neither disturbs the
+	// SID register readout on the right).
+	enum uint TOOLTIP_DELAY_MS = 1000;
+	uint tipDeadline;
+	Uint32[] tipUnder;
+	int tpX, tpY, tpW, tpH;
+	bool hasTip;
+
 	public:
 
 	this(ShortcutManager mgr) {
@@ -79,6 +91,7 @@ final class MenuBar {
 		rebuild();
 		_active = true;
 		clampIndices();
+		resetTip();
 		// No screen clear: drawDropdown captures the cells it covers (save-under)
 		// and restores them on move/close, so the rest of the screen — notably
 		// the SID register readout on the right — is never touched.
@@ -87,8 +100,16 @@ final class MenuBar {
 	void close() {
 		if(!_active) return;
 		_active = false;
+		if(hasTip) restoreTip();
 		if(hasUnder) restoreUnder();   // erase the dropdown, no full-screen clear
 		drawn = false;
+	}
+
+	// Restart the hover timer and hide any visible tooltip (call on every
+	// selection change so the tooltip only appears after ~1s of dwell).
+	private void resetTip() {
+		tipDeadline = SDL_GetTicks() + TOOLTIP_DELAY_MS;
+		if(hasTip) restoreTip();
 	}
 
 	// --- Drawing -------------------------------------------------------------
@@ -117,10 +138,24 @@ final class MenuBar {
 		}
 	}
 
-	// The right-hand cluster of an item: optional [x]/[ ] checkbox + shortcut.
-	static string rightText(Item it) {
-		string box = it.toggle ? (it.on ? "[x] " : "[ ] ") : "";
-		return box ~ it.keys;
+	static int shortcutWidth(Shortcut sc) {
+		return sc.isValid ? cast(int)formatShortcut(sc).length : 0;
+	}
+
+	// Render a shortcut at (x,y): modifier/key names in keyFg, the joining
+	// hyphens in a subtler sepFg (built from the Shortcut's mods+key, so the
+	// literal '-' key is never confused with a separator). Layout matches
+	// formatShortcut(), so its width == shortcutWidth(sc).
+	void drawShortcut(int x, int y, Shortcut sc, int keyFg, int sepFg, int bg) {
+		int cx = x;
+		void seg(string s, int fg) { screen.cprint(cx, y, fg, bg, s); cx += cast(int)s.length; }
+		bool need = false;
+		if(sc.mods & KMOD_CTRL)  { seg("Ctrl", keyFg); need = true; }
+		if(sc.mods & KMOD_ALT)   { if(need) seg("-", sepFg); seg("Alt", keyFg); need = true; }
+		if(sc.mods & KMOD_SHIFT) { if(need) seg("-", sepFg); seg("Shift", keyFg); need = true; }
+		if(sc.mods & KMOD_GUI)   { if(need) seg("-", sepFg); seg("Cmd", keyFg); need = true; }
+		if(need) seg("-", sepFg);
+		seg(keyName(sc.key), keyFg);
 	}
 
 	/// The condensed dropdown box under the active title. Uses a save-under
@@ -129,6 +164,7 @@ final class MenuBar {
 	void drawDropdown() {
 		if(!_active || menuIndex >= cast(int)menus.length
 		   || menus[menuIndex].items.length == 0) {
+			if(hasTip) restoreTip();
 			if(hasUnder) restoreUnder();
 			drawn = false;
 			boxW = 0;
@@ -136,17 +172,21 @@ final class MenuBar {
 		}
 		auto m = menus[menuIndex];
 
-		// One space of padding inside each border; >=2 spaces between the label
-		// and the right cluster.
-		enum PAD = 1, GAP = 2;
-		int labelW = 0, rightW = 0;
+		// One space of padding inside each border; >=2 spaces between columns.
+		// Toggles get their own aligned checkbox column.
+		enum PAD = 1, GAP = 2, CB = 3;
+		int labelW = 0, shortW = 0;
+		bool hasToggle = false;
 		foreach(it; m.items) {
 			if(it.sep) continue;
 			labelW = max(labelW, cast(int)it.label.length);
-			rightW = max(rightW, cast(int)rightText(it).length);
+			shortW = max(shortW, shortcutWidth(it.primary));
+			if(it.toggle) hasToggle = true;
 		}
-		int inner = labelW + (rightW > 0 ? GAP + rightW : 0);
-		int w = inner + 2 * PAD + 2;            // padding + left/right border
+		int content = labelW;
+		if(hasToggle) content += GAP + CB;
+		if(shortW > 0) content += GAP + shortW;
+		int w = content + 2 * PAD + 2;          // padding + left/right border
 		if(w < cast(int)m.title.length + 2) w = cast(int)m.title.length + 2;
 		int h = cast(int)m.items.length + 2;    // + top/bottom border
 		int bx = (menuIndex < cast(int)titleX.length) ? titleX[menuIndex] : 2;
@@ -157,6 +197,7 @@ final class MenuBar {
 
 		// Save-under: snapshot the covered cells on first show / move / resize.
 		if(!drawn || bx != lastX || by != lastY || w != lastW || h != lastH) {
+			if(hasTip) restoreTip();
 			if(hasUnder) restoreUnder();
 			captureUnder(bx, by, w, h);
 			lastX = bx; lastY = by; lastW = w; lastH = h;
@@ -165,6 +206,7 @@ final class MenuBar {
 
 		frame(bx, by, h, w);
 		int labelX = bx + 1 + PAD;
+		int cbX = labelX + labelW + GAP;        // fixed, aligned checkbox column
 		foreach(i, it; m.items) {
 			int ry = by + 1 + cast(int)i;
 			if(it.sep) {
@@ -181,13 +223,57 @@ final class MenuBar {
 				screen.setChar(cx, ry, cast(Uint32)(0x20 | (rbg << 16)));
 			int lfg = hl ? 1 : (it.enabled ? 15 : 8);
 			screen.cprint(labelX, ry, lfg, rbg, it.label);
-			string rt = rightText(it);
-			if(rt.length) {
-				int rfg = hl ? 1 : (it.enabled ? 12 : 8);
-				screen.cprint(bx + w - 1 - PAD - cast(int)rt.length, ry,
-							  rfg, rbg, rt);
+			if(it.toggle)
+				screen.cprint(cbX, ry, hl ? 1 : (it.on ? 13 : 8), rbg,
+							  it.on ? "[x]" : "[ ]");
+			if(it.primary.isValid) {
+				int sw = shortcutWidth(it.primary);
+				int sx = bx + w - 1 - PAD - sw;       // right-aligned
+				drawShortcut(sx, ry, it.primary,
+							 hl ? 1 : (it.enabled ? 12 : 8),   // key colour
+							 hl ? 15 : 11,                     // separator colour
+							 rbg);
 			}
 		}
+
+		drawTooltip(bx, by, w, m);
+	}
+
+	// After the selection has dwelt ~1s, show the focused item's full
+	// description as a single-row tooltip to the right of the box. Own
+	// save-under; clamped left of the SID register column on rows 1..3.
+	void drawTooltip(int bx, int by, int w, DMenu m) {
+		bool show = _active && SDL_GetTicks() >= tipDeadline
+			&& itemIndex >= 0 && itemIndex < cast(int)m.items.length
+			&& !m.items[itemIndex].sep && m.items[itemIndex].description.length > 0;
+		if(!show) { if(hasTip) restoreTip(); return; }
+		int ry = by + 1 + itemIndex;
+		int regX = screen.width - 42;
+		int limit = (ry >= 1 && ry <= 3) ? regX - 1 : screen.width - 1;
+		int tipX = bx + w;                       // immediately right of the box
+		string text = " " ~ m.items[itemIndex].description ~ " ";
+		int avail = limit - tipX + 1;
+		if(avail < 6) { if(hasTip) restoreTip(); return; }
+		if(cast(int)text.length > avail) text = text[0 .. avail];
+		int tw = cast(int)text.length;
+		if(!hasTip || tpX != tipX || tpY != ry || tpW != tw) {
+			if(hasTip) restoreTip();
+			captureTip(tipX, ry, tw);
+		}
+		screen.cprint(tipX, ry, 0, 15, text);    // black on light grey
+	}
+
+	void captureTip(int x, int y, int w) {
+		tipUnder.length = w;
+		foreach(k; 0 .. w) tipUnder[k] = screen.getChar(x + k, y);
+		tpX = x; tpY = y; tpW = w; tpH = 1;
+		hasTip = true;
+	}
+
+	void restoreTip() {
+		if(!hasTip) return;
+		foreach(k; 0 .. tpW) screen.setChar(tpX + k, tpY, tipUnder[k]);
+		hasTip = false;
 	}
 
 	// Save / restore the screen cells beneath the dropdown rectangle.
@@ -256,6 +342,7 @@ final class MenuBar {
 					menuIndex = cast(int)i;
 					_active = true;
 					itemIndex = firstSelectable(menuIndex);
+					resetTip();
 					return;
 				}
 			}
@@ -288,8 +375,8 @@ final class MenuBar {
 		addGlobalMenu("View", ["Display"]);
 		addGlobalMenu("Playback", ["Playback", "Playback options",
 								   "Voice control", "Keyjam"]);
-		addGlobalMenu("Window", ["Window navigation"]);
-		addContextMenu();
+		addGlobalMenu("Navigate", ["Window navigation"]);
+		addContextMenus();
 		addGlobalMenu("Help", ["Help"]);
 		clampIndices();
 	}
@@ -298,12 +385,13 @@ final class MenuBar {
 		bool en = def.enabled is null || def.enabled();
 		bool tog = def.checked !is null;
 		bool on = tog && def.checked();
-		return Item(def.actionId, false, def.label(),
-					formatShortcuts(sm.getShortcuts(def.actionId)), en, tog, on);
+		return Item(def.actionId, false, def.label(), def.primary, en, tog, on,
+					def.order, def.description);
 	}
 
 	// Append the items of `categories` (in order) from one context, separating
-	// non-empty groups with a ruler. Returns the gathered items.
+	// non-empty groups with a ruler. Items within a group are shown in
+	// registration order (not alphabetical), e.g. Undo before Redo.
 	Item[] gather(string context, string[] categories, bool leadSep) {
 		Item[] items;
 		bool first = !leadSep;
@@ -313,7 +401,9 @@ final class MenuBar {
 				if(def.category == cat)
 					group ~= makeItem(def);
 			if(group.length) {
-				if(!first) items ~= Item("", true, "", "", false, false, false);
+				group.sort!((a, b) => a.order < b.order);
+				if(!first) items ~= Item("", true, "", Shortcut(0, 0), false,
+										 false, false, 0, "");
 				items ~= group;
 				first = false;
 			}
@@ -325,23 +415,50 @@ final class MenuBar {
 		menus ~= DMenu(title, gather(cast(string)Ctx.global, categories, false));
 	}
 
-	void addContextMenu() {
-		string ctx = sm.getActiveContext();
-		string title;
-		string[] contexts;
-		if(ctx == Ctx.sequencer)            { title = "Sequence";   contexts = [cast(string)Ctx.sequencer]; }
-		else if(ctx == Ctx.noteColumn)      { title = "Note";       contexts = [cast(string)Ctx.noteColumn, cast(string)Ctx.sequencer]; }
-		else if(ctx == Ctx.trackColumn)     { title = "Track";      contexts = [cast(string)Ctx.trackColumn, cast(string)Ctx.sequencer]; }
-		else if(ctx == Ctx.instrumentTable) { title = "Instrument"; contexts = [cast(string)Ctx.instrumentTable]; }
-		else if(ctx == Ctx.subtable)        { title = "Tables";     contexts = [cast(string)Ctx.subtable]; }
-		else if(ctx == Ctx.songInfo)        { title = "Song";       contexts = [cast(string)Ctx.songInfo]; }
-		else return;   // global -> no context menu
+	// The shared sequencer commands (F5/F6/F7 columns) grouped as one "Sequence"
+	// menu. Used by the note, track and overview contexts.
+	private void addSequenceMenu() {
+		auto items = gather(cast(string)Ctx.sequencer,
+							sm.categoriesForContext(cast(string)Ctx.sequencer), false);
+		if(items.length) menus ~= DMenu("Sequence", items);
+	}
 
-		Item[] items;
-		foreach(c; contexts)
-			items ~= gather(c, sm.categoriesForContext(c), items.length > 0);
-		if(items.length)
-			menus ~= DMenu(title, items);
+	// Emit the context-specific top-level menus (inserted before Help). The F6
+	// note column splits into a note-level "Note" menu and a "Sequence" menu;
+	// the F5 track column shows "Track" + "Sequence"; the F7 overview shows just
+	// "Sequence"; the instrument list and sub-tables get their own single menu.
+	void addContextMenus() {
+		string ctx = sm.getActiveContext();
+		if(ctx == Ctx.noteColumn) {
+			auto note = gather(cast(string)Ctx.noteColumn, ["Note"], false);
+			if(note.length) menus ~= DMenu("Note", note);
+			// "Sequence" = the note column's sequence-level commands + the shared
+			// sequencer commands.
+			auto seq = gather(cast(string)Ctx.noteColumn, ["Sequence"], false);
+			seq ~= gather(cast(string)Ctx.sequencer,
+						  sm.categoriesForContext(cast(string)Ctx.sequencer),
+						  seq.length > 0);
+			if(seq.length) menus ~= DMenu("Sequence", seq);
+		}
+		else if(ctx == Ctx.trackColumn) {
+			auto trk = gather(cast(string)Ctx.trackColumn,
+							  sm.categoriesForContext(cast(string)Ctx.trackColumn), false);
+			if(trk.length) menus ~= DMenu("Track", trk);
+			addSequenceMenu();
+		}
+		else if(ctx == Ctx.sequencer) {
+			addSequenceMenu();
+		}
+		else if(ctx == Ctx.instrumentTable) {
+			auto ins = gather(cast(string)Ctx.instrumentTable,
+							  sm.categoriesForContext(cast(string)Ctx.instrumentTable), false);
+			if(ins.length) menus ~= DMenu("Instrument", ins);
+		}
+		else if(ctx == Ctx.subtable) {
+			auto tbl = gather(cast(string)Ctx.subtable,
+							  sm.categoriesForContext(cast(string)Ctx.subtable), false);
+			if(tbl.length) menus ~= DMenu("Tables", tbl);
+		}
 	}
 
 	// --- Navigation helpers --------------------------------------------------
@@ -359,6 +476,7 @@ final class MenuBar {
 		if(n == 0) return;
 		menuIndex = ((menuIndex + dir) % n + n) % n;
 		itemIndex = firstSelectable(menuIndex);
+		resetTip();
 		// The box moves/resizes; drawDropdown notices and restores the old box's
 		// save-under before drawing the new one (no full-screen clear).
 	}
@@ -373,6 +491,7 @@ final class MenuBar {
 			i = ((i + dir) % n + n) % n;
 			if(!items[i].sep && items[i].enabled) {
 				itemIndex = i;
+				resetTip();
 				return;
 			}
 		}
