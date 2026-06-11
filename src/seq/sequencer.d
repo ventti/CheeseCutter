@@ -9,6 +9,7 @@ import ui.ui, ui.help;
 import ct.base;
 import com.session;
 import com.util;
+import com.selection;
 import ui.input;
 import ui.dialogs;
 import seq.fplay;
@@ -26,6 +27,7 @@ enum Jump { toBeginning = 0, toMark = -1, toEnd = -2, toWrapMark = -3 };
 
 enum playbackBarColor = 6;
 enum wrapBarColor = 4;
+enum selectionBarColor = 5;
 
 bool displaySequenceRowcounter = true;
 int stepValue = 1;
@@ -744,6 +746,215 @@ abstract class VoiceTable : Window {
 	// helper for trackcopy/paste
 	Tracklist getTracklist(Voice v) {
 		return v.tracks[v.activeRow.trkOffset .. v.tracks.length];
+	}
+
+	// ----------------------------------------------------------------
+	// Rectangular selection + block copy/cut/paste/merge/paste-new.
+	//
+	// The engine lives here on the shared base so every column view (note,
+	// track, later the sub-tables) gets the same verbs. Surface-specific cell
+	// access is delegated to the hooks below, which default to inert so a view
+	// that hasn't opted in simply has no selection behaviour.
+	// ----------------------------------------------------------------
+
+	Selection sel;
+	protected bool dragging;
+	protected bool dragMoved;
+
+	/// A view enables selection by overriding this to true and implementing the
+	/// cell hooks. Default-off keeps trackmap / fplay inert.
+	bool selectionEnabled() { return false; }
+
+	// --- Surface hooks (safe no-op defaults) ---
+
+	/// Clipboard kind so a note block can't be pasted onto tracks, etc.
+	protected ClipKind cellKind() { return ClipKind.none; }
+	/// Bytes per cell (note Element = 4, Track = 2).
+	protected int cellSize() { return 0; }
+	/// Absolute row (natural units) of the cursor in the active voice.
+	protected int activeRowAbs() { return 0; }
+	/// Map a click's view-local screen Y to an absolute row in `voiceIdx`.
+	protected int rowAtScreenY(int voiceIdx, int localY) { return int.min; }
+	/// Read one cell's bytes by absolute row, or null if past the data end.
+	protected ubyte[] readCellBytes(int voiceIdx, int absRow) { return null; }
+	/// Clear one cell (cut). No length change.
+	protected void blankCellAt(int voiceIdx, int absRow) {}
+	/// Paste clipboard column `clipCol` into voice `voiceIdx` from the cursor
+	/// down, bounded by the current sequence/track end (overflow dropped). When
+	/// `mergeOnly`, write only into currently-empty target cells.
+	protected void pasteColumn(int voiceIdx, int clipCol, bool mergeOnly) {}
+	/// Paste-new: insert fresh track(s)/sequence(s) at the cursor sized to hold
+	/// clipboard column `clipCol`, then write its rows.
+	protected void pasteNewColumn(int voiceIdx, int clipCol) {}
+	/// Undo checkpoint before a mutating verb.
+	protected void saveSelState() {}
+	/// Re-sync inputs / cursor after a mutation.
+	protected void afterMutate() { refresh(); step(0); }
+
+	// --- Verbs (called from keypress + mouse) ---
+
+	void clearSel() { sel.clear(); }
+
+	void setSelBegin() {
+		if(!selectionEnabled) return;
+		sel.setBegin(activeVoiceNum, activeRowAbs());
+		sel.active = true;
+		UI.statusline.display("Selection start set.");
+	}
+
+	void setSelEnd() {
+		if(!selectionEnabled) return;
+		if(!sel.active) sel.setBegin(activeVoiceNum, activeRowAbs());
+		sel.setEnd(activeVoiceNum, activeRowAbs());
+		sel.active = true;
+		UI.statusline.display(format("Selection: %d row(s), %d voice(s).",
+									 sel.rows, sel.cols));
+	}
+
+	void copySel() {
+		if(!selectionEnabled || !sel.active) return;
+		int csz = cellSize();
+		rowClip.reset(cellKind(), sel.cols, sel.rows, csz);
+		for(int c = 0; c < sel.cols; c++) {
+			for(int r = 0; r < sel.rows; r++) {
+				ubyte[] b = readCellBytes(sel.loCol + c, sel.loRow + r);
+				if(b !is null)
+					rowClip.cell(c, r)[] = b[0 .. csz];
+			}
+		}
+		UI.statusline.display(format("Copied %d x %d block.", sel.cols, sel.rows));
+	}
+
+	void cutSel() {
+		if(!selectionEnabled || !sel.active) return;
+		saveSelState();
+		copySel();
+		for(int c = 0; c < sel.cols; c++)
+			for(int r = 0; r < sel.rows; r++)
+				blankCellAt(sel.loCol + c, sel.loRow + r);
+		afterMutate();
+		UI.statusline.display("Cut block (rows blanked).");
+	}
+
+	private void pasteCommon(bool mergeOnly) {
+		if(!selectionEnabled || rowClip.empty || rowClip.kind != cellKind())
+			return;
+		saveSelState();
+		for(int c = 0; c < rowClip.cols; c++) {
+			int tcol = activeVoiceNum + c;
+			if(tcol > 2) break;
+			pasteColumn(tcol, c, mergeOnly);
+		}
+		afterMutate();
+	}
+
+	void pasteOver() {
+		pasteCommon(false);
+		UI.statusline.display("Pasted (overwrite).");
+	}
+
+	void mergeFill() {
+		pasteCommon(true);
+		UI.statusline.display("Merged (filled empty rows).");
+	}
+
+	void pasteNew() {
+		if(!selectionEnabled || rowClip.empty || rowClip.kind != cellKind())
+			return;
+		saveSelState();
+		for(int c = 0; c < rowClip.cols; c++) {
+			int tcol = activeVoiceNum + c;
+			if(tcol > 2) break;
+			pasteNewColumn(tcol, c);
+		}
+		afterMutate();
+		UI.statusline.display("Pasted as new track(s).");
+	}
+
+	// --- Mouse drag ---
+
+	void beginDrag(int voiceIdx, int absRow) {
+		if(!selectionEnabled || absRow == int.min) return;
+		sel.setBegin(voiceIdx, absRow);
+		sel.active = true;
+		dragging = true;
+		dragMoved = false;
+	}
+
+	void dragTo(int voiceIdx, int absRow) {
+		if(!dragging || absRow == int.min) return;
+		sel.setEnd(voiceIdx, absRow);
+		if(voiceIdx != sel.anchorCol || absRow != sel.anchorRow)
+			dragMoved = true;
+	}
+
+	void endDrag() {
+		if(!dragging) return;
+		dragging = false;
+		// A plain click (no drag motion) clears the selection and just
+		// positions the cursor, preserving the old click behaviour.
+		if(!dragMoved) sel.clear();
+	}
+
+	// --- Keyboard entry point (subclasses call this first in keypress) ---
+
+	/// Returns true if the key was a selection command and was consumed.
+	bool handleSelectionKey(Keyinfo key) {
+		if(!selectionEnabled) return false;
+		bool ctrl = (key.mods & KMOD_CTRL) != 0;
+		bool shift = (key.mods & KMOD_SHIFT) != 0;
+		bool alt = (key.mods & KMOD_ALT) != 0;
+		if(!ctrl || alt) return false;
+		switch(key.raw) {
+		case SDLK_b:
+			if(shift) setSelEnd(); else setSelBegin();
+			return true;
+		case SDLK_d:
+			if(shift) return false;
+			clearSel();
+			UI.statusline.display("Selection cleared.");
+			return true;
+		case SDLK_c:
+			if(shift) return false;
+			if(!sel.active) return false; // let other Ctrl-C handlers (track col) run
+			copySel();
+			return true;
+		case SDLK_x:
+			if(shift) return false;
+			if(!sel.active) return false;
+			cutSel();
+			return true;
+		case SDLK_v:
+			// Both paste and merge fall through (don't swallow the key) when the
+			// clipboard is empty or holds a different cell kind.
+			if(rowClip.empty || rowClip.kind != cellKind()) return false;
+			if(shift) mergeFill(); else pasteOver();
+			return true;
+		case SDLK_n:
+			if(!shift) return false;
+			if(rowClip.empty || rowClip.kind != cellKind()) return false;
+			pasteNew();
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	/// Tint the background of selected cells. Called from a view's update()
+	/// after the rows are drawn. Mirrors the playback/wrap-bar tinting.
+	protected void renderSelection() {
+		if(!selectionEnabled || !sel.active) return;
+		for(int i = 0; i < 3; i++) {
+			if(i < sel.loCol || i > sel.hiCol) continue;
+			Voice v = voices[i];
+			for(int rowIdx = 0; rowIdx < area.height; rowIdx++) {
+				int absRow = v.pos.rowCounter + rowIdx - anchor;
+				if(!sel.contains(i, absRow)) continue;
+				int y = 1 + area.y + rowIdx;
+				for(int x = v.area.x; x < v.area.x + v.area.width; x++)
+					screen.setbg(x, y, selectionBarColor);
+			}
+		}
 	}
 }
 

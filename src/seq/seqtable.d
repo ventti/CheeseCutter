@@ -9,6 +9,7 @@ import com.fb;
 import com.util;
 import seq.sequencer;
 import com.session;
+import com.selection;
 import ct.base;
 import ui.input;
 import derelict.sdl2.sdl;
@@ -235,7 +236,7 @@ protected:
 	}
 }
 
-class SequenceTable : VoiceTable {
+class SequenceTable : VoiceTable, Undoable {
 	this(Rectangle a, PosDataTable pi) {
 		int x = 5 + com.fb.border + a.x;
 		for(int v=0;v<3;v++) {
@@ -279,6 +280,8 @@ class SequenceTable : VoiceTable {
 		// NOTE: Visualization colors are now applied in renderVisualization()
 		// which is called from UI layer after all updates complete
 
+		// Tint selected rows on top of the freshly drawn voices.
+		renderSelection();
 	}
 
 	// Called from UI layer AFTER all window updates are complete
@@ -356,6 +359,9 @@ class SequenceTable : VoiceTable {
 	}
 
 	override int keypress(Keyinfo key) {
+		// Block-selection commands (copy/cut/paste/merge/paste-new/markers) get
+		// first refusal; if consumed, don't fall through to editing.
+		if(handleSelectionKey(key)) return OK;
 		// globals
 		super.keypress(key);
 		if(!key.mods) {
@@ -449,5 +455,136 @@ class SequenceTable : VoiceTable {
 			}
 		}
 		return OK;
+	}
+
+	// ----------------------------------------------------------------
+	// Block-selection surface hooks (note/data column). Cells are 4-byte
+	// note Elements addressed by absolute song row (rowCounter).
+	// ----------------------------------------------------------------
+
+	override bool selectionEnabled() { return true; }
+	protected override ClipKind cellKind() { return ClipKind.note; }
+	protected override int cellSize() { return 4; }
+
+	protected override int activeRowAbs() {
+		return activeVoice.pos.rowCounter + posTable.pointerOffset;
+	}
+
+	protected override int rowAtScreenY(int voiceIdx, int localY) {
+		int rowIdx = localY - 1;
+		if(rowIdx < 0 || rowIdx >= area.height) return int.min;
+		return voices[voiceIdx].pos.rowCounter + rowIdx - anchor;
+	}
+
+	// Resolve absolute song row `absRow` in voice v to (trkOffset, seqOffset).
+	// false if before song start or past the last track's data.
+	private bool locate(Voice v, int absRow, out int trkOffset, out int seqOffset) {
+		if(absRow < 0) return false;
+		int pos = 0;
+		int last = v.tracks.trackLength - 1;
+		for(int ti = 0; ti <= last; ti++) {
+			int rows = song.sequence(v.tracks[ti]).rows;
+			if(absRow < pos + rows) {
+				trkOffset = ti;
+				seqOffset = absRow - pos;
+				return true;
+			}
+			pos += rows;
+		}
+		return false;
+	}
+
+	protected override ubyte[] readCellBytes(int voiceIdx, int absRow) {
+		int t, s;
+		Voice v = voices[voiceIdx];
+		if(!locate(v, absRow, t, s)) return null;
+		Sequence seq = song.seqs[v.tracks[t].number];
+		return seq.data.raw[s * 4 .. s * 4 + 4].dup;
+	}
+
+	protected override void blankCellAt(int voiceIdx, int absRow) {
+		int t, s;
+		Voice v = voices[voiceIdx];
+		if(!locate(v, absRow, t, s)) return;
+		Sequence seq = song.seqs[v.tracks[t].number];
+		seq.data.raw[s * 4 .. s * 4 + 4] = cast(ubyte[])CLEAR;
+	}
+
+	// Paste from the per-voice cursor down, clipped to the current sequence's
+	// end (overflow dropped). mergeOnly: write only into empty target rows.
+	protected override void pasteColumn(int voiceIdx, int clipCol, bool mergeOnly) {
+		Voice v = voices[voiceIdx];
+		RowData rd = v.activeRow;
+		Sequence seq = rd.seq;
+		int start = rd.seqOffset;
+		for(int r = 0; r < rowClip.rows; r++) {
+			int dst = start + r;
+			if(dst >= seq.rows) break;          // stop at current sequence end
+			int off = dst * 4;
+			if(mergeOnly && seq.data.raw[off .. off + 4] != cast(ubyte[])CLEAR)
+				continue;
+			seq.data.raw[off .. off + 4] = rowClip.cell(clipCol, r)[0 .. 4];
+		}
+	}
+
+	// Allocate a free sequence, size it to the clip, fill it, and insert a
+	// track entry referencing it at the cursor.
+	protected override void pasteNewColumn(int voiceIdx, int clipCol) {
+		Voice v = voices[voiceIdx];
+		int n = song.getFreeSequence(1);
+		if(n <= 0) {
+			UI.statusline.display("No free sequence for paste-new.");
+			return;
+		}
+		Sequence seq = song.seqs[n];
+		seq.clear();                 // leaves 1 row + end mark
+		int need = rowClip.rows;
+		if(need > 1) seq.expand(0, need - 1, false);
+		for(int r = 0; r < need; r++)
+			seq.data.raw[r * 4 .. r * 4 + 4] = rowClip.cell(clipCol, r)[0 .. 4];
+		// rows/end-mark already set by clear()+expand(); don't refresh() (a note
+		// data byte could collide with SEQ_END_MARK on a rescan).
+		v.tracks.insertAt(v.activeRow.trkOffset);
+		v.tracks[v.activeRow.trkOffset].setValue(0xa0, n);
+	}
+
+	// ---- Block undo: snapshot all sequences + tracklists (correct over
+	// minimal; block edits are user-initiated and infrequent). ----
+
+	protected override void saveSelState() {
+		com.session.insertUndo(this, createSelState());
+	}
+
+	private UndoValue createSelState() {
+		UndoValue v;
+		foreach(s; song.seqs) {
+			v.seqSources ~= s;
+			v.seqData ~= s.data.raw.dup;
+		}
+		for(int i = 0; i < 3; i++) {
+			auto tl = song.tracks[i];
+			v.trackLists ~= TracklistStore(tl.deepcopy, tl);
+		}
+		v.posTable = posTable.dup();
+		v.subtuneNum = song.subtune;
+		return v;
+	}
+
+	override void undo(UndoValue v) {
+		if(v.subtuneNum != song.subtune) return;
+		foreach(t; v.trackLists)
+			t.source.overwriteFrom(t.store);
+		foreach(i, s; v.seqSources) {
+			s.data.raw[] = v.seqData[i][];
+			s.refresh();
+		}
+		if(v.posTable !is null)
+			posTable.copyFrom(v.posTable);
+		refresh();
+		step(0);
+	}
+
+	override UndoValue createRedoState(UndoValue value) {
+		return createSelState();
 	}
 }

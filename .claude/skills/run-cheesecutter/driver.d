@@ -121,6 +121,8 @@ private void usage(File f) {
 "  shot:<file.bmp>  write a screenshot (BMP) of the current screen\n" ~
 "  sleep:<ms>       sleep this many milliseconds\n" ~
 "  state            print editor state to stderr (title/seqs/playing/SID regs)\n" ~
+"  seqdump:<n>      dump sequence n's rows as hex (read-only edit oracle)\n" ~
+"  tracks           dump each voice's tracklist entries (trans,number)\n" ~
 "\n" ~
 "Remote backend (--vice/--ultimate) testing:\n" ~
 "  vice:[target]    enable the VICE backend: empty = launch x64sc from PATH,\n" ~
@@ -206,6 +208,31 @@ private bool processCommand(string arg) {
 		case "state":
 			dumpState();
 			break;
+		case "seqdump": {
+			// seqdump:<n> — dump sequence n's rows as hex (4 bytes/row). A
+			// read-only oracle for verifying block copy/paste/merge/cut edits.
+			int n = val.startsWith("0x") || val.startsWith("0X")
+				? to!int(val[2..$], 16) : to!int(val);
+			Sequence s = song.seqs[n];
+			stderr.writef("seq %02X rows=%d:", n, s.rows);
+			foreach(r; 0 .. s.rows)
+				stderr.writef(" %02x%02x%02x%02x", s.data.raw[r*4], s.data.raw[r*4+1],
+							  s.data.raw[r*4+2], s.data.raw[r*4+3]);
+			stderr.writeln();
+			break;
+		}
+		case "tracks": {
+			// dump each voice's tracklist entries (trans,number) up to the end
+			// mark — for verifying paste-new track insertion.
+			foreach(v; 0 .. 3) {
+				auto tl = song.tracks[v];
+				stderr.writef("trk v%d:", v);
+				for(int i = 0; i < tl.trackLength; i++)
+					stderr.writef(" %02x%02x", tl[i].trans, tl[i].number);
+				stderr.writeln();
+			}
+			break;
+		}
 		default:
 			stderr.writefln("unknown cmd: %s (try --help)", arg);
 			return false;
