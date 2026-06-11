@@ -555,6 +555,8 @@ abstract class VoiceTable : Window {
 			screen.cprint(area.x, area.y + y + 1, 12, 0, s);
 		}
 
+		// Tint selected cells on top of the freshly drawn rows (both columns).
+		renderSelection();
 	}
 
 	void setPositionMark() {
@@ -891,16 +893,19 @@ abstract class VoiceTable : Window {
 	void dragTo(int voiceIdx, int absRow) {
 		if(!dragging || absRow == int.min) return;
 		sel.setEnd(voiceIdx, absRow);
-		if(voiceIdx != sel.anchorCol || absRow != sel.anchorRow)
-			dragMoved = true;
 	}
 
 	/// Extend only the row of the drag end (pointer left the voice columns).
 	void dragToRow(int absRow) {
 		if(!dragging || absRow == int.min) return;
 		sel.setEnd(sel.endCol, absRow);
-		if(absRow != sel.anchorRow) dragMoved = true;
 	}
+
+	/// The pointer moved to a different screen cell during the drag — so this is
+	/// a real drag, not a plain click. Decided at the screen level (by the
+	/// Sequencer) because a selection unit may span many screen rows (a track
+	/// covers many note rows, so abs-row equality can't detect motion).
+	void markDragMoved() { if(dragging) dragMoved = true; }
 
 	/// Public screen->absolute-row mapping for the mouse path (screenY in
 	/// screen char-cells; converts to the view-local Y rowAtScreenY expects).
@@ -968,8 +973,10 @@ abstract class VoiceTable : Window {
 			if(i < sel.loCol || i > sel.hiCol) continue;
 			Voice v = voices[i];
 			for(int rowIdx = 0; rowIdx < area.height; rowIdx++) {
-				int absRow = v.pos.rowCounter + rowIdx - anchor;
-				if(!sel.contains(i, absRow)) continue;
+				// Map each screen row to its absolute row via the surface hook,
+				// so this works for both the note column and the track column.
+				int absRow = rowAtScreenY(i, rowIdx + 1);
+				if(absRow == int.min || !sel.contains(i, absRow)) continue;
 				int y = 1 + area.y + rowIdx;
 				for(int x = v.area.x; x < v.area.x + v.area.width; x++)
 					screen.setbg(x, y, selectionBarColor);
@@ -1244,6 +1251,8 @@ final class Sequencer : Window, Undoable {
 		return OK;
 	}
 
+	private int pressCx, pressCy;   // screen cell where the left button went down
+
 	override void clickedAt(int x, int y, int button, int clicks = 1) {
 		foreach(idx, Voice v; activeView.voices) {
 			if(v.area.overlaps(x, y)) {
@@ -1251,13 +1260,20 @@ final class Sequencer : Window, Undoable {
 				activeView.clickedAt(x - area.x, y - area.y, button, clicks);
 				// Left button starts a drag-select anchored at the cursor the
 				// click just positioned (same scroll frame as drag motion).
-				if(button == 1)
+				if(button == 1) {
+					pressCx = x; pressCy = y;
 					activeView.beginDragAtCursor();
+				}
 			}
 		}
 	}
 
 	override void draggedTo(int x, int y) {
+		// Any move to a different screen cell makes this a real drag (not a
+		// click) — decided here at the screen level because one selection unit
+		// (a track) can cover many screen rows.
+		if(x != pressCx || y != pressCy)
+			activeView.markDragMoved();
 		// Extend the selection to the column/row under the pointer. If the
 		// pointer is outside all voice columns, keep the last column.
 		foreach(idx, Voice v; activeView.voices) {

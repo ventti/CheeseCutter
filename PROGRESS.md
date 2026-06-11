@@ -100,7 +100,27 @@ button-up finalize semantics, code review of the mouse plumbing.
 ## Phase 3 — track column (F5) hooks + no-selection fallback
 Stopping condition: builds; F5 select/copy/cut/paste/merge/paste-new work; no-selection
 Ctrl+C/Ctrl+V keep the legacy number-prompt behavior; verifier clean.
-- status: **open** · iterations: 0
+- status: **author self-check passed; awaiting independent verifier** · iterations: 1
+
+Implemented (tracktable.d): BaseTrackTable selection hooks (cells = 2-byte Track entries by
+trkOffset); handleSelectionKey first in keypress (legacy number-prompt Ctrl+C/V fall through when
+no selection / empty clip). trackmap.d: TrackmapTable selectionEnabled=false (compressed overview).
+sequencer.d: renderSelection now goes through the rowAtScreenY hook and is called from base
+VoiceTable.update (removed explicit call in SequenceTable.update).
+
+Three non-obvious fixes this phase:
+1. F5 shows the NOTE grid (one screen row per song row) but selects whole TRACKS, so track
+   rowAtScreenY maps a screen song-row to the track containing it (trackAtSongRow) — highlight
+   covers all rows of a selected track, mouse-drag picks the track under the pointer.
+2. drag-vs-click now decided by SCREEN-CELL movement (Sequencer stores press cell + markDragMoved),
+   since a track spans many screen rows so abs-row equality couldn't detect motion.
+3. all-voices track undo now snapshots the FULL tracklist (was a cursor-relative slice that lost
+   selected/inserted tracks above the cursor on undo).
+
+Author self-check (byte-level): copy/paste-over (tracks0-2→5-7); paste-new insert (len 9→12,
+undo→9); cut (blank→a000, len unchanged, undo restores all 3); merge (fills empty tracks only,
+skips non-empty); F5 mouse-drag 1-track copy/paste correct; legacy no-selection Ctrl+C opens the
+number-prompt dialog; F5 highlight covers selected tracks in the correct voice only.
 
 ## Phase 4 — shortcuts registry + docs + version
 Stopping condition: `make docs` regenerates man pages/`doc/KEYBOARD.md` with new keys;
