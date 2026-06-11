@@ -173,6 +173,21 @@ class ShortcutManager {
 	}
 
 	/**
+	 * Registers an action that has NO keyboard binding: it carries the same
+	 * metadata (context, category, description, callback) so it shows up in the
+	 * menus and help, but is reachable only by activating it from a menu. Unlike
+	 * register(), it does not add a Shortcut, so several no-key actions cannot
+	 * collide on Shortcut(0,0) in the bindings map. getShortcuts() returns empty
+	 * for it, so the shortcut column is blank in menus and KEYBOARD.md.
+	 */
+	void registerMenuOnly(string actionId, string context, string category,
+						   string description, ActionCallback cb,
+						   string menuLabel = "", EnabledPredicate enabled = null) {
+		actions[actionId] = ActionDef(actionId, context, category, description,
+									  menuLabel, cb, enabled);
+	}
+
+	/**
 	 * Registers a second key binding for an already-registered action.
 	 * Useful for alternate keys (e.g. Alt-4 and Alt-I both jump to instruments).
 	 */

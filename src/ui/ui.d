@@ -20,6 +20,7 @@ import com.fb;
 import com.util;
 import com.shortcuts;
 import ui.shorthelp;
+import ui.menubar;
 import seq.sequencer;
 import audio.audio;
 import std.string;
@@ -252,14 +253,8 @@ class Infobar : Window, Undoable {
 	}
 
 	override void update() {
-		int headerColor = state.keyjamStatus ? 14 : 12;
-		if(escapecounter) headerColor = 7;
-
-		screen.clrtoeol(0, headerColor);
-
-		enum hdr = com.util.APP_NAME ~ " " ~ com.util.APP_VERSION ~ com.util.versionInfo;
-		screen.cprint(4, 0, 1, headerColor, hdr);
-		screen.cprint(screen.width - 14, 0, 1, headerColor, "F12 = Help");
+		// Row 0 (the title/menu bar) is now owned by MenuBar (UI.drawMenu);
+		// the Infobar only paints the song-info area at the bottom.
 		int c1 = audio.player.isPlaying ? 13 : 12;
 		screen.fprint(x1,area.y,format("`05Time: `0%x%02d:%02d / $%02x",
 									   c1,audio.timer.min, audio.timer.sec,
@@ -946,6 +941,7 @@ final class UI {
 	static Statusline statusline;
 	static Infobar infobar;
 	static Toplevel toplevel;
+	MenuBar menubar;
 	bool exitRequested = false;
 	// Constructed at runtime in the ctor (NOT via a field initializer): a
 	// `= new` field initializer is evaluated with CTFE and baked into shared
@@ -1005,8 +1001,12 @@ final class UI {
 		ui.help.HELPMAIN = genMainHelp(sm);
 		ui.help.HELPSEQUENCER = genSequencerHelp(sm);
 
+		// Build the top-bar menu (also from the now-populated registry); its ctor
+		// asserts every global command category is reachable from a menu.
+		menubar = new MenuBar(sm);
+
 		// Pop the splash on startup; it auto-dismisses after SPLASH_DURATION_MS
-		// (see timerEvent) so it doesn't eat the first Esc of the quit chord.
+		// (see timerEvent) and any key also clears it.
 		activateDialog(aboutdialog);
 		splashDeadlineMs = SDL_GetTicks() + SPLASH_DURATION_MS;
 
@@ -1019,27 +1019,25 @@ final class UI {
 	 * text and doc/KEYBOARD.md are generated from these registrations.
 	 */
 	private void registerShortcuts() {
-		// Application Control
-		sm.register("exit_app", Ctx.global, "Application",
-					"Quit program (press twice)", SDLK_ESCAPE, 0, {
-			if(dialog || activeWindow == infobar)
-				return;
-			if(++escapecounter > 1) {
-				activateDialog(new ConfirmationDialog("Really exit (y/n)? ", (int param) {
-					if(param != 0) return;
-					audio.player.stop();
-					exitRequested = true;
-				}));
-			}
-			tickcounter3 = 0;
-		});
+		// Application Control. Quit has no hotkey anymore (Esc opens the menu
+		// bar); it is reached via File > Quit, so it is registered menu-only.
+		// Its own "Application" category places it in a trailing group of the
+		// File menu (separated from the load/save items, Quit last).
+		sm.registerMenuOnly("exit_app", Ctx.global, "Application",
+					"Quit program", {
+			activateDialog(new ConfirmationDialog("Really exit (y/n)? ", (int param) {
+				if(param != 0) return;
+				audio.player.stop();
+				exitRequested = true;
+			}));
+		}, "Quit");
 
-		sm.register("toggle_fullscreen", Ctx.global, "Application",
+		sm.register("toggle_fullscreen", Ctx.global, "Display",
 					"Toggle fullscreen", SDLK_RETURN, KMOD_ALT, {
 			video.toggleFullscreen();
 		});
 
-		sm.register("help_dialog", Ctx.global, "Application",
+		sm.register("help_dialog", Ctx.global, "Help",
 					"Open context help", SDLK_F12, 0, {
 			int helpdlg_width = screen.width - 10;
 			int helpdlg_height = 36;
@@ -1052,7 +1050,7 @@ final class UI {
 			activateDialog(helpdialog);
 		});
 
-		sm.register("screenshot", Ctx.global, "Application",
+		sm.register("screenshot", Ctx.global, "Display",
 					"Save screenshot", SDLK_F12, KMOD_CTRL, {
 			// Handled in main.d before translation
 			// This action registered for consistency but won't be triggered here
@@ -1358,7 +1356,7 @@ final class UI {
 		});
 
 		// Dialogs
-		sm.register("about_dialog", Ctx.global, "Application",
+		sm.register("about_dialog", Ctx.global, "Help",
 					"Show the splash / about screen", SDLK_F11, 0, {
 			activateDialog(aboutdialog);
 		});
@@ -1657,6 +1655,7 @@ final class UI {
 		if((tickcounter3 >= 0) && ++tickcounter3 > 20) {
 			clearcounter = optimizecounter = escapecounter = restartcounter = 0;
 			infobar.update();
+			drawMenu();
 			tickcounter3 = -1;
 		}
 		statusline.timerEvent();
@@ -1706,8 +1705,18 @@ final class UI {
 	void update() {
 		infobar.update();
 		toplevel.update();
+		drawMenu();
 		if(dialog)
 			dialog.update();
+	}
+
+	// Draws the top-bar menu (row 0) and, when focused, its dropdown. Called
+	// after every header/content repaint so the periodic infobar refresh never
+	// erases the bar. The dropdown is drawn last so it overlays the tables.
+	private void drawMenu() {
+		if(menubar is null) return;
+		menubar.drawBar();
+		menubar.drawDropdown();
 	}
 
 	private void F1orF2(Keyinfo key, bool fromStart) {
@@ -1763,7 +1772,22 @@ final class UI {
 		}
 		else+/
 		bool skip_imm_keypress = false; //workaround for F11 - crapchars in savedialog
-		
+
+		// The top-bar menu, when focused, gets every key first (it is not a
+		// dialog, so it never goes through the dialog/closeDialog path — a menu
+		// item callback may itself open a dialog and must not be torn down).
+		if(menubar.active) {
+			menubar.keypress(key);
+			return OK;
+		}
+		// Esc opens the menu bar (it no longer quits; quit is File > Quit). Not
+		// while a dialog is up, and not while editing the song-info fields.
+		if(!dialog && key.raw == SDLK_ESCAPE && key.mods == 0
+		   && activeWindow != infobar) {
+			menubar.openMenu();
+			return OK;
+		}
+
 		// Check if shortcut manager handles this keypress
 		// But only if there's no active input field or dialog that needs to handle it first
 		if(!dialog) { // if(activeInput is null && !dialog) {
@@ -1812,6 +1836,11 @@ final class UI {
 	void clickedAt(int x, int y, int b, int clicks = 1) {
 		if(activeInput !is null && activeInput.cursor !is null)
 			activeInput.cursor.clear();
+		// The menu bar owns row 0, and the whole screen while it is focused.
+		if(menubar.active || (!dialog && y == 0)) {
+			menubar.clickedAt(x, y, b, clicks);
+			return;
+		}
 		if(dialog)
 			dialog.clickedAt(x, y, b, clicks);
 		else toplevel.clickedAt(x, y, b, clicks);

@@ -1,4 +1,4 @@
-CheeseCutter-Extended 0.1.0
+CheeseCutter-Extended 0.2.0
 
 CheeseCutter-Extended is based on CheeseCutter 2.9.
 
@@ -26,6 +26,17 @@ https://repology.org/metapackage/cheesecutter/versions
 
 NOTE: authors of CheeseCutter-Extended take no responsibility of binaries downloaded
 from any third party website, including the one above.
+
+## Menus
+
+The top row is a dropdown menu bar — press `Esc` to open it. Every command
+(everything except live note entry) is reachable from the menus, grouped as
+File / Edit / View / Playback / Window / Help plus a context menu that follows
+what you are editing. Navigate with the arrow keys and `Enter`, or with the
+mouse; the bar remembers the last menu and item you used. The menus, the `F12`
+help and `doc/KEYBOARD.md` are all generated from one shortcut registry, so a
+command's key and label are defined in a single place. Quit now lives in
+**File → Quit** (it no longer has a hotkey).
 
 ## Documentation
 
