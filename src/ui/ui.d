@@ -183,13 +183,20 @@ final class UI {
 			tickcounter3 = -1;
 		}
 		statusline.timerEvent();
+		// Draw the menu bar on EVERY timer event, not inside the tick-gated
+		// block below: tickcounter1 only advances from player frame ticks
+		// (audio.timer.readTick()), so while the editor sits idle the gated
+		// block never runs. Gated, the dropdown was painted exactly once (by
+		// the keypress update); when the statusline timeout then cleared row 2
+		// it blacked out the dropdown's focused first row until the next
+		// keypress, and the hover tooltip could never appear while idle.
+		// Drawing here — right after statusline.timerEvent() and before the
+		// frame is presented — repaints any statusline clear in the same
+		// cycle and lets the tooltip dwell timer fire on wall clock.
+		drawMenu();
 		tickcounter1 += n;
 		if(tickcounter1 >= UPDATE_RATE) {
 			infobar.update();
-			// Draw the menu bar every timer cycle (not only while playing), so it
-			// is visible as soon as the splash clears — no keypress needed — and
-			// the hover-tooltip timer can fire while the editor sits idle.
-			drawMenu();
 			if(dialog) dialog.update();
 			tickcounter1 = 0;
 			toplevel.timerEvent();
