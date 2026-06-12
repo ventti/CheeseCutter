@@ -272,7 +272,7 @@ final package class Toplevel : WindowSwitcher, Undoable {
 		// multiplier keys above stay because they are matched on key.unicode,
 		// which the registry does not key on. The block below keeps the
 		// data-entry / cursor keys that are intentionally not in the registry.
-		if(!key.mods & KMOD_SHIFT) {
+		if(!(key.mods & KMOD_SHIFT)) {
 			switch(key.raw)
 			 {
 			 case SDLK_KP_DIVIDE:
