@@ -50,6 +50,10 @@ plus the `.ct`/`.ct2` songs in the current directory. Arrows + `Enter` run the
 command or load the song; `Esc` dismisses. Also reachable as
 **Help → Command palette**.
 
+The load/save dialogs support **type-ahead** (type the beginning of a dir/file
+name to jump to it) and show the focused song's **Title / Author / Release** as
+a preview.
+
 ## Documentation
 
 The consolidated user guide is in `guide/` and is prepared for GitHub Pages

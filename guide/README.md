@@ -141,6 +141,20 @@ Quit is <kbd>Alt</kbd>-<kbd>F4</kbd>, or open the menu bar with <kbd>Esc</kbd> a
 choose **File → Quit**. The confirmation warns when the song has unsaved changes
 ("You have unsaved changes. Really exit?").
 
+## Load / Save Dialogs
+
+In the load (<kbd>F9</kbd>), save (<kbd>F10</kbd>) and `.prg` export dialogs:
+
+- **Type-ahead**: with the file list focused, just type the beginning of a
+  directory or file name — the cursor jumps to the first matching entry
+  (case-insensitive). The prefix you typed is shown in the dialog title
+  (`find: …`); <kbd>Backspace</kbd> trims it, and it resets after a one-second
+  pause so you can start a new search. (In the save dialog the filename field
+  has focus by default; <kbd>Tab</kbd> to the file list for type-ahead.)
+- **Song preview**: when the focused file is a CheeseCutter song, its
+  **Title / Author / Release** are shown above the Directory row, so you can
+  identify a tune without loading it.
+
 ## Playback
 
 | Shortcut | Action |

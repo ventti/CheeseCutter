@@ -277,6 +277,11 @@ class FileSelector : Window {
 	alias area filearea;
 	private int lastClickNum = -1;
 	private uint lastClickTicks;
+	// Type-ahead: typing jumps to the first entry whose name starts with the
+	// typed prefix (case-insensitive); the buffer expires after a short pause.
+	private enum TYPEAHEAD_TIMEOUT_MS = 1000;
+	private string typeahead;
+	private uint typeaheadDeadline;
 	
 	this(Rectangle a) {
 		super(a);
@@ -299,6 +304,12 @@ class FileSelector : Window {
 	void reset() {
 		fpos.offset = fpos.pos = 0;
 		lastClickNum = -1;
+		typeahead = "";
+	}
+
+	/// The live type-ahead prefix, "" once it has expired (for the dialog header).
+	@property string typeaheadDisplay() {
+		return SDL_GetTicks() <= typeaheadDeadline ? typeahead : "";
 	}
 
 	override void update() { 
@@ -369,10 +380,52 @@ class FileSelector : Window {
 		case SDLK_END:
 			cursorEnd();
 			return WRAP;
+		case SDLK_BACKSPACE:
+			if(typeaheadDisplay.length) {
+				typeahead = typeahead[0 .. $ - 1];
+				typeaheadDeadline = SDL_GetTicks() + TYPEAHEAD_TIMEOUT_MS;
+				if(typeahead.length && jumpToPrefix(typeahead))
+					return WRAP;
+			}
+			break;
 		default:
+			// Type-ahead: printable chars accumulate a prefix and jump to the
+			// first matching entry. An expired buffer restarts from scratch.
+			if(key.unicode >= 0x20 && key.unicode < 0x7f
+			   && !(key.mods & (KMOD_CTRL | KMOD_ALT | KMOD_GUI))) {
+				uint now = SDL_GetTicks();
+				if(now > typeaheadDeadline) typeahead = "";
+				typeahead ~= cast(char)key.unicode;
+				typeaheadDeadline = now + TYPEAHEAD_TIMEOUT_MS;
+				if(jumpToPrefix(typeahead))
+					return WRAP;
+			}
 			break;
 		}
 		return OK;
+	}
+
+	// Move the cursor to the first entry whose displayed name starts with
+	// `prefix` (case-insensitive). Keeps the cursor visible by scrolling.
+	private bool jumpToPrefix(string prefix) {
+		foreach(i, f; filelist) {
+			auto ind = 1 + f.name.lastIndexOf(DIR_SEPARATOR);
+			string nm = f.name[ind .. $];
+			if(nm.length >= prefix.length
+			   && icmp(nm[0 .. prefix.length], prefix) == 0) {
+				int n = cast(int)i;
+				if(n < area.height) {
+					fpos.offset = 0;
+					fpos.pos = n;
+				}
+				else {
+					fpos.offset = n - (area.height - 1);
+					fpos.pos = area.height - 1;
+				}
+				return true;
+			}
+		}
+		return false;
 	}
 
 	int mouseClick(int x, int y, int button) {
@@ -555,6 +608,10 @@ class FileSelectorDialog : WindowSwitcher {
 	private string header;
 	private char[][] filelist;
 	Rectangle filearea;
+	// Metadata preview of the focused .ct/.ct2 file (title/author/release).
+	// update() runs ~25x/s, so the header read is cached per selected path.
+	private string previewPath;
+	private SongInfo previewInfo;
 	
 	this(Rectangle a, string h, CB cb) {
 		header = h;
@@ -615,8 +672,12 @@ class FileSelectorDialog : WindowSwitcher {
 		drawFrame(area);
 		x = area.x + 3;
 		y = area.y + 2;
-		screen.cprint(x,area.y,1,0," " ~ header ~ " ");
+		string hdr = " " ~ header ~ " ";
+		if(fsel.typeaheadDisplay.length)
+			hdr ~= "- find: " ~ fsel.typeaheadDisplay ~ " ";
+		screen.cprint(x,area.y,1,0,hdr);
 
+		drawPreview(x, area.y + area.height - 4);
 		screen.fprint(x,area.y+area.height-3,format("`0fDirectory: `0d%s",sdir.toString()));
 		
 		string f = sfile.toString();
@@ -630,6 +691,34 @@ class FileSelectorDialog : WindowSwitcher {
 			fsel.update();
 		}
 		input = activeWindow.input;
+	}
+
+	// Draw the focused entry's song metadata on the spare row above the
+	// Directory/Filename rows; nothing is drawn for dirs / non-.ct files
+	// (update() has already space-filled the row).
+	private void drawPreview(int x, int y) {
+		string sel = fsel.selected;
+		if(sel != previewPath) {
+			previewPath = sel;
+			previewInfo = SongInfo.init;
+			try {
+				if(sel != "." && sel != ".." && std.file.exists(sel)
+				   && !std.file.isDir(sel))
+					previewInfo = readSongInfo(sel);
+			}
+			catch(Exception e) {}
+		}
+		if(!previewInfo.valid) return;
+		int limit = area.x + area.width - 3;
+		void seg(string s, int fg) {
+			if(x >= limit || s.length == 0) return;
+			if(x + cast(int)s.length > limit) s = s[0 .. limit - x];
+			screen.cprint(x, y, fg, 0, s);
+			x += cast(int)s.length;
+		}
+		seg("    Title: ", 15); seg(previewInfo.title, 13);
+		seg("  Author: ", 15);  seg(previewInfo.author, 13);
+		seg("  Release: ", 15); seg(previewInfo.release, 13);
 	}
 
 	override void clickedAt(int x, int y, int button, int clicks = 1) {
@@ -719,13 +808,9 @@ class LoadFileDialog : FileSelectorDialog {
 	}
 
 	private bool shouldUpgrade(string fn) {
-		try {
-		    Song newsong = new Song();
-		    newsong.open(fn);
-		    return SONG_REVISION > newsong.ver;
-		}
-		catch(Exception e) { return false; }
-		return true;
+		// Header-only read; no need to construct a full Song just for `ver`.
+		auto info = readSongInfo(fn);
+		return info.valid && SONG_REVISION > info.ver;
 	}
 
 	private void confirmCallback(int param) {

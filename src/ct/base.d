@@ -721,6 +721,41 @@ class Sequence {
 	}
 }
 
+/**
+ * Song metadata read from a .ct/.ct2 file header without constructing a Song
+ * (no 64K image, no CPU init). Used by the file dialogs' preview and the
+ * load dialog's player-upgrade check.
+ */
+struct SongInfo {
+	bool valid;
+	int ver;
+	string title, author, release;
+}
+
+/// Reads the header metadata of a .ct/.ct2 file; valid=false on any error
+/// (missing file, wrong magic, corrupt stream, unsupported version).
+SongInfo readSongInfo(string fn) {
+	SongInfo info;
+	try {
+		ubyte[] inbuf = cast(ubyte[])read(fn);
+		if(inbuf.length < 4 || inbuf[0..3] != cast(ubyte[])"CC2"[0..3])
+			return info;
+		ubyte[] debuf = cast(ubyte[])std.zlib.uncompress(inbuf[3..$], 167832);
+		if(debuf.length < Song.DatafileOffset.Release + 32)
+			return info;
+		info.ver = debuf[Song.DatafileOffset.Header];
+		if(info.ver < 6 || info.ver >= 128)   // same limits as Song.open()
+			return info;
+		int offset = Song.DatafileOffset.Title;
+		info.title = strip(cast(string)debuf[offset .. offset + 32].idup);
+		info.author = strip(cast(string)debuf[offset + 32 .. offset + 64].idup);
+		info.release = strip(cast(string)debuf[offset + 64 .. offset + 96].idup);
+		info.valid = true;
+	}
+	catch(Exception e) {}
+	return info;
+}
+
 class Song {
 	enum DatafileOffset {
 		Binary,
