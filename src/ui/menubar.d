@@ -327,6 +327,9 @@ final class MenuBar {
 		case SDLK_RETURN, SDLK_KP_ENTER:
 			invokeCurrent();
 			break;
+		case SDLK_SPACE:
+			toggleCurrent();
+			break;
 		default:
 			break;
 		}
@@ -509,6 +512,26 @@ final class MenuBar {
 		close();
 		if(def !is null && (def.enabled is null || def.enabled()))
 			def.callback();
+	}
+
+	// Space on a toggle item: flip it but KEEP the menu open (Enter-and-close
+	// stays available for the same item). No-op on non-toggles.
+	void toggleCurrent() {
+		if(menuIndex >= cast(int)menus.length) return;
+		auto items = menus[menuIndex].items;
+		if(itemIndex < 0 || itemIndex >= cast(int)items.length) return;
+		auto it = items[itemIndex];
+		if(it.sep || !it.enabled || !it.toggle) return;
+		auto def = sm.getAction(it.actionId);
+		if(def is null || (def.enabled !is null && !def.enabled())) return;
+		// Erase the menu (restore both save-unders) before the callback runs:
+		// it may repaint the screen beneath the box (statusline message,
+		// fullscreen re-init). The next drawDropdown then recaptures a fresh
+		// save-under, so closing the menu later cannot restore stale content.
+		if(hasTip) restoreTip();
+		if(hasUnder) restoreUnder();
+		drawn = false;
+		def.callback();
 	}
 
 	void clampIndices() {

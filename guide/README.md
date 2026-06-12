@@ -69,6 +69,7 @@ keyboard shortcut shown on the right of each item.
 | <kbd>←</kbd> / <kbd>→</kbd> | Switch between top-level menus |
 | <kbd>↑</kbd> / <kbd>↓</kbd> | Move between items (separators and disabled items are skipped) |
 | <kbd>Enter</kbd> | Run the highlighted command |
+| <kbd>Space</kbd> | Flip the highlighted on/off command, keeping the menu open |
 | Mouse | Click a title to open it, click an item to run it, click elsewhere to close |
 
 The menu bar is shown from startup. The fixed menus are **File**, **Edit**,
@@ -84,7 +85,9 @@ description as a tooltip.
 
 On/off commands (voices, interpolation, keyjam, help texts, fullscreen, tracking)
 show their current state with a `[x]` / `[ ]` checkbox in an aligned column; each
-item's keyboard shortcut is shown on the right.
+item's keyboard shortcut is shown on the right. <kbd>Space</kbd> flips such an
+item without closing the menu (handy for switching several voices at once);
+<kbd>Enter</kbd> flips it and closes the menu as usual.
 
 The menus are generated from the same shortcut registry that drives the
 <kbd>F12</kbd> help and `doc/KEYBOARD.md`, so a command, its label and its shortcut
