@@ -25,6 +25,7 @@ OBJS= \
 	src/ui/tables.o \
 	src/ui/dialogs.o \
 	src/ui/menubar.o \
+	src/ui/palette.o \
 	src/ui/ui.o \
 	src/ui/window.o \
 	src/ui/statusbar.o \

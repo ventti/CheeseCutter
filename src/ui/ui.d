@@ -29,6 +29,7 @@ import com.util;
 import com.shortcuts;
 import ui.shorthelp;
 import ui.menubar;
+import ui.palette;
 import seq.sequencer;
 import audio.audio;
 import std.string;
@@ -63,6 +64,7 @@ final class UI {
 	static Infobar infobar;
 	static Toplevel toplevel;
 	MenuBar menubar;
+	CommandPalette palette;
 	bool exitRequested = false;
 	// Constructed at runtime in the ctor (NOT via a field initializer): a
 	// `= new` field initializer is evaluated with CTFE and baked into shared
@@ -127,6 +129,7 @@ final class UI {
 		// Build the top-bar menu (also from the now-populated registry); its ctor
 		// asserts every global command category is reachable from a menu.
 		menubar = new MenuBar(sm);
+		palette = new CommandPalette(this, sm);
 
 		// Pop the splash on startup; it auto-dismisses after SPLASH_DURATION_MS
 		// (see timerEvent) and any key also clears it.
@@ -252,6 +255,7 @@ final class UI {
 		if(menubar is null) return;
 		menubar.drawBar();
 		menubar.drawDropdown();
+		if(palette !is null) palette.draw();
 	}
 
 	package void F1orF2(Keyinfo key, bool fromStart) {
@@ -308,10 +312,25 @@ final class UI {
 		else+/
 		bool skip_imm_keypress = false; //workaround for F11 - crapchars in savedialog
 
+		// The command palette, when open, gets every key first (like the menu
+		// bar, it is an overlay, not a dialog).
+		if(palette !is null && palette.active) {
+			palette.keypress(key);
+			return OK;
+		}
 		// The top-bar menu, when focused, gets every key first (it is not a
 		// dialog, so it never goes through the dialog/closeDialog path — a menu
 		// item callback may itself open a dialog and must not be torn down).
 		if(menubar.active) {
+			// Typing a printable character morphs the menu into the command
+			// palette, seeded with that character ("Esc, then type"). Space is
+			// excluded: it toggles the focused menu checkbox.
+			if(key.unicode > 0x20 && key.unicode < 0x7f
+			   && !(key.mods & (KMOD_CTRL | KMOD_ALT | KMOD_GUI))) {
+				menubar.close();
+				palette.open("" ~ cast(char)key.unicode);
+				return OK;
+			}
 			menubar.keypress(key);
 			return OK;
 		}
@@ -371,6 +390,11 @@ final class UI {
 	void clickedAt(int x, int y, int b, int clicks = 1) {
 		if(activeInput !is null && activeInput.cursor !is null)
 			activeInput.cursor.clear();
+		// The palette, while open, owns the whole screen (click outside closes).
+		if(palette.active) {
+			palette.clickedAt(x, y, b, clicks);
+			return;
+		}
 		// The menu bar owns row 0, and the whole screen while it is focused.
 		if(menubar.active || (!dialog && y == 0)) {
 			menubar.clickedAt(x, y, b, clicks);
@@ -384,12 +408,12 @@ final class UI {
 	// Drag + release route to the toplevel (the active window owns the drag);
 	// never to a dialog or the menu bar.
 	void draggedTo(int x, int y) {
-		if(dialog || menubar.active) return;
+		if(dialog || menubar.active || palette.active) return;
 		toplevel.draggedTo(x, y);
 	}
 
 	void releasedAt(int x, int y) {
-		if(dialog || menubar.active) return;
+		if(dialog || menubar.active || palette.active) return;
 		toplevel.releasedAt(x, y);
 	}
 

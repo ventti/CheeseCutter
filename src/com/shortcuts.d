@@ -278,6 +278,24 @@ class ShortcutManager {
 	}
 
 	/**
+	 * The dispatch fallback chain for the active context:
+	 * [active, parents..., global]. This is exactly the set of contexts
+	 * handleKeypress() consults, so enumerating actionsForContext() over it
+	 * yields every command reachable from the current focus.
+	 */
+	string[] contextChain() {
+		string[] chain;
+		for(string ctx = activeContext; ctx.length; ) {
+			chain ~= ctx;
+			auto p = ctx in contextParent;
+			ctx = p is null ? null : *p;
+		}
+		if(chain.length == 0 || chain[$ - 1] != Ctx.global)
+			chain ~= Ctx.global;
+		return chain;
+	}
+
+	/**
 	 * Handles a keypress: resolves active-context binding first, then global.
 	 * Returns true if a shortcut was found and invoked.
 	 */

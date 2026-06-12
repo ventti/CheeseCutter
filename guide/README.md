@@ -93,11 +93,38 @@ The menus are generated from the same shortcut registry that drives the
 <kbd>F12</kbd> help and `doc/KEYBOARD.md`, so a command, its label and its shortcut
 are defined in exactly one place and can never disagree between them.
 
+## Command Palette
+
+Press <kbd>Esc</kbd> and just start typing: the first printable character turns
+the menu bar into a *command palette* — a `>` prompt, VS Code style, that
+searches as you type. It is also reachable as **Help → Command palette**.
+
+The palette matches your query case-insensitively against the name and
+description of every command reachable from where you are (the global commands
+plus the active context's), and against the `.ct`/`.ct2` song files in the
+current directory. Better matches sort first (name prefix, then word starts,
+then any substring), commands above songs; commands show their keyboard
+shortcut on the right and songs a `load` tag.
+
+| Key | Action |
+| --- | --- |
+| any printable character | Add to the query and refilter |
+| <kbd>↑</kbd> / <kbd>↓</kbd> | Move the selection |
+| <kbd>Enter</kbd> | Run the selected command, or load the selected song |
+| <kbd>Backspace</kbd> | Delete the last character (dismisses when the query is empty) |
+| <kbd>Esc</kbd> | Dismiss |
+| Mouse | Click a suggestion to run it, click elsewhere to dismiss |
+
+One quirk: <kbd>Space</kbd> cannot be the *first* typed character (in the menu
+bar it flips the highlighted on/off item), but it works fine inside a query
+(e.g. `play from`).
+
 ## Global Shortcuts
 
 | Shortcut | Action |
 | --- | --- |
 | <kbd>Esc</kbd> | Open the menu bar (see [Menus](#menus)) |
+| <kbd>Esc</kbd>, then type | Command palette: search commands and songs (see [Command Palette](#command-palette)) |
 | <kbd>Alt</kbd>-<kbd>Return</kbd> | Toggle fullscreen |
 | <kbd>F9</kbd> | Load song |
 | <kbd>F10</kbd> | Save song |

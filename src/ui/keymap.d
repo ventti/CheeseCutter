@@ -74,6 +74,14 @@ void registerShortcuts(UI ui) {
 		activateDialog(helpdialog);
 	});
 
+	// No key binding of its own: pressing Esc focuses the menu bar, and typing
+	// any printable character there opens the palette seeded with it.
+	sm.registerMenuOnly("open_palette", Ctx.global, "Help",
+				"Open the command palette: search commands and songs by name (Esc, then type)", {
+		menubar.close();
+		palette.open("");
+	}, "Command palette");
+
 	sm.register("screenshot", Ctx.global, "Display",
 				"Save screenshot", SDLK_F12, KMOD_CTRL, {
 		// Handled in main.d before translation

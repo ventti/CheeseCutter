@@ -44,6 +44,12 @@ help and `doc/KEYBOARD.md` are all generated from one shortcut registry, so a
 command's key and label are defined in a single place. Quit now lives in
 **File → Quit** (it no longer has a hotkey).
 
+With the menu bar open, just start typing to open the **command palette**: a
+`>` prompt that searches every command by name/description (case-insensitive)
+plus the `.ct`/`.ct2` songs in the current directory. Arrows + `Enter` run the
+command or load the song; `Esc` dismisses. Also reachable as
+**Help → Command palette**.
+
 ## Documentation
 
 The consolidated user guide is in `guide/` and is prepared for GitHub Pages

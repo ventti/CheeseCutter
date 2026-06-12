@@ -39,6 +39,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 | Shortcut | Action |
 |---|---|
 | `F12` | Open context help |
+|  | Open the command palette: search commands and songs by name (Esc, then type) |
 | `Alt-S` / `F11` | Show the splash / about screen |
 
 ### Keyjam
