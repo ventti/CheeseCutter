@@ -58,6 +58,10 @@ struct EditorState {
 	bool displayHelp = true;
 	bool keyjamStatus = false;
 	bool allowInstabNavigation = true;
+	// Song edited since the last load/save: any undoable change sets it (see
+	// insertUndo / executeUndo / executeRedo); UI.saveCallback / loadCallback
+	// reset it. Drives the unsaved-changes warning in the quit confirmation.
+	bool songModified = false;
 	string filename;
 	auto undoQueue = Queue!UndoState();
 	auto redoQueue = Queue!UndoState();
@@ -71,6 +75,7 @@ EditorState state;
 void insertUndo(Undoable undoable, UndoValue value) {
 	state.undoQueue.insert(UndoState(undoable, value));
 	state.redoQueue.clear();
+	state.songModified = true;
 }
 
 void executeUndo() {
@@ -80,6 +85,7 @@ void executeUndo() {
 	auto redo = makeRedoOrUndo(u);
 	state.redoQueue.insert(redo);
 	u.func.undo(u.value);
+	state.songModified = true;
 }
 
 void executeRedo() {
@@ -89,6 +95,7 @@ void executeRedo() {
 	auto undo = makeRedoOrUndo(r);
 	state.undoQueue.insert(undo);
 	r.func.undo(r.value);
+	state.songModified = true;
 }
 
 private UndoState makeRedoOrUndo(UndoState state) {

@@ -111,7 +111,8 @@ are defined in exactly one place and can never disagree between them.
 | <kbd>Esc</kbd> → File → Quit | Quit (asks for confirmation) |
 
 Quit no longer has a hotkey — open the menu bar with <kbd>Esc</kbd> and choose
-**File → Quit**.
+**File → Quit**. The confirmation warns when the song has unsaved changes
+("You have unsaved changes. Really exit?").
 
 ## Playback
 

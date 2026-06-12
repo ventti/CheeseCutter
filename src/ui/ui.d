@@ -407,6 +407,7 @@ final class UI {
 		auto ind = 1 + fn.lastIndexOf(DIR_SEPARATOR);
 		fn = fn[ind..$];
 		state.filename = fn;
+		state.songModified = false;
 
 		// sync load filesel to save filesel
 		if(loaddialog.directory != savedialog.directory) {
@@ -509,6 +510,9 @@ final class UI {
 		import com.session;
 		com.session.state.undoQueue.clear();
 		com.session.state.redoQueue.clear();
+		// A plain load matches the file on disk; an import alters the current
+		// song without touching its file.
+		com.session.state.songModified = doImport;
 	}
 
 	void activateDialog(Window d) {
