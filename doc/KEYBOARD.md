@@ -8,7 +8,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 
 | Shortcut | Action |
 |---|---|
-|  | Quit program |
+| `Alt-F4` | Quit program |
 
 ### Display
 
@@ -158,8 +158,8 @@ _Generated from the shortcut registry (com.shortcuts)._
 |---|---|
 | `Alt-Right` | Activate next subtune |
 | `Alt-Left` | Activate previous subtune |
-| `Alt-C` | Ask for a SEQ number and copy contents over current SEQ |
-| `Alt-A` | Ask for a SEQ number and insert contents to cursor pos |
+| `Alt-C` | Ask for a sequence number and copy contents over current sequence |
+| `Alt-A` | Ask for a sequence number and insert contents to cursor pos |
 | `F6` | Enter the note column |
 | `F5` | Enter the track column / toggle tracklist display |
 | `F7` | Toggle tracklist overview mode |
@@ -187,8 +187,8 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Shift-Delete` | Delete a row (with sequence shrink) |
 | `Ctrl-Insert` | Expand the sequence |
 | `Shift-Insert` | Insert a row (with sequence expand) |
-| `End` | Move cursor to SEQ end (or screen bottom) |
-| `Home` | Move cursor to SEQ start (or screen top) |
+| `End` | Move cursor to sequence end (or screen bottom) |
+| `Home` | Move cursor to sequence start (or screen top) |
 | `Ctrl-Shift-P` / `Keypad 0` | Play notes for all voices in current row |
 | `Shift-Return` | Quick expand sequence (by highlight value * 4) |
 | `Ctrl-Delete` | Shrink the sequence |

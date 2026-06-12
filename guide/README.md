@@ -108,10 +108,10 @@ are defined in exactly one place and can never disagree between them.
 | <kbd>F12</kbd> again in context help | Global help |
 | <kbd>Ctrl</kbd>-<kbd>F12</kbd> | Screenshot |
 | <kbd>Alt</kbd>-<kbd>H</kbd> | Toggle table byte help |
-| <kbd>Esc</kbd> → File → Quit | Quit (asks for confirmation) |
+| <kbd>Alt</kbd>-<kbd>F4</kbd> | Quit (asks for confirmation) |
 
-Quit no longer has a hotkey — open the menu bar with <kbd>Esc</kbd> and choose
-**File → Quit**. The confirmation warns when the song has unsaved changes
+Quit is <kbd>Alt</kbd>-<kbd>F4</kbd>, or open the menu bar with <kbd>Esc</kbd> and
+choose **File → Quit**. The confirmation warns when the song has unsaved changes
 ("You have unsaved changes. Really exit?").
 
 ## Playback

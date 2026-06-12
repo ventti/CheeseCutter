@@ -43,8 +43,9 @@ void registerShortcuts(UI ui) {
 	// bar); it is reached via File > Quit, so it is registered menu-only.
 	// Its own "Application" category places it in a trailing group of the
 	// File menu (separated from the load/save items, Quit last).
-	sm.registerMenuOnly("exit_app", Ctx.global, "Application",
-				"Quit program", {
+	// Alt-F4 is the conventional close shortcut; the same item is File ▸ Quit.
+	sm.register("exit_app", Ctx.global, "Application",
+				"Quit program", SDLK_F4, KMOD_ALT, {
 		string msg = state.songModified
 			? "You have unsaved changes. Really exit (y/n)? "
 			: "Really exit (y/n)? ";
