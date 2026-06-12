@@ -539,6 +539,29 @@ final class UI {
 		com.session.state.songModified = doImport;
 	}
 
+	// Start a fresh, empty project. Round-trips a blank Song through the normal
+	// load path so every view and dialog rebinds exactly as for a file load
+	// (replacing the global `song` reference would leave the voices bound to the
+	// old data), then drops the temp file and presents it as an unnamed,
+	// unmodified song.
+	package void newSong() {
+		import std.path : buildPath;
+		string tmp = buildPath(tempDir(), "cc-new.ct");
+		try {
+			(new Song()).save(tmp);
+		}
+		catch(Exception e) {
+			statusline.display("Could not start a new song: " ~ e.msg);
+			return;
+		}
+		loadCallback(tmp);
+		try { std.file.remove(tmp); } catch(Exception e) {}
+		state.filename = "";
+		foreach(d; [loaddialog, savedialog, prgdialog])
+			d.setFilename("");
+		statusline.display("New song.");
+	}
+
 	void activateDialog(Window d) {
 		enableKeyjamMode(false);
 		closeDialog();

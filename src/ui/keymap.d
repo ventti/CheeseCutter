@@ -89,6 +89,17 @@ void registerShortcuts(UI ui) {
 	});
 
 	// File Operations
+	sm.registerMenuOnly("new_song", Ctx.global, "File",
+				"Clear the song and start a new project", {
+		if(state.songModified)
+			activateDialog(new ConfirmationDialog(
+				"Discard unsaved changes and start new (y/n)? ", (int param) {
+					if(param != 0) return;
+					newSong();
+				}));
+		else newSong();
+	}, "New");
+
 	sm.register("load_file", Ctx.global, "File",
 				"Open the Load song dialog", SDLK_F9, 0, {
 		activateDialog(loaddialog);
