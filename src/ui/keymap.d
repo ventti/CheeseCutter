@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Registers all editor shortcuts and context bindings into com.shortcuts and applies derived menu labels.
 */
 
 module ui.keymap;
@@ -401,6 +403,7 @@ void registerShortcuts(UI ui) {
 	// Dialogs
 	sm.register("about_dialog", Ctx.global, "Help",
 				"Show the splash / about screen", SDLK_F11, 0, {
+		aboutdialog.withScroller = true; // user-opened About shows the scroller
 		activateDialog(aboutdialog);
 	});
 	// macOS reserves bare F11 (Show Desktop); Alt-S is a Mac-safe alias

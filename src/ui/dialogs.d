@@ -243,16 +243,24 @@ class DebugDialog : Window {
 // artwork (CheeseCutterEXT.png -> src/font/splash.dat) already carries the
 // credits, so there is no text to draw here.
 class AboutDialog : Window {
+	// Set by the caller before opening to request the scroller. The startup
+	// splash leaves it false so it shows the artwork only; the F11/Alt-S handler
+	// sets it true. Reset on deactivate so the intent does not leak to a later open.
+	bool withScroller;
+
 	this(Rectangle a) {
 		super(a);
 	}
 
 	override void activate() {
 		video.splashActive = true;
+		video.splashScroll = withScroller;
 	}
 
 	override void deactivate() {
 		video.splashActive = false;
+		video.splashScroll = false;
+		withScroller = false;
 		screen.refresh(); // force a full cell redraw so the editor reappears
 	}
 

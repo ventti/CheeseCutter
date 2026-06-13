@@ -25,6 +25,10 @@ only replaces the default gray — the cursor, the playback/selection highlight
 and the active-instrument color always take precedence. See the Player Tables
 section of the guide.
 
+Also new: the **About / splash screen** (Help → About, `F11` / `Alt-S`) now has a
+PETSCII scroller running below the artwork — arbitrary-length text scrolling
+right-to-left with inline C64 color changes.
+
 Programmed by abaddon 2009-2017.
 
 Mac OSX and D2 port by Ruk 2013.

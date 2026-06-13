@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Text-mode framebuffer — Video/Screen abstraction, character-cell rendering and the Visualizer interface.
 */
 
 module com.fb;
@@ -48,10 +50,31 @@ SDL_Color[] PALETTE = [
 immutable FONT_X = 8, FONT_Y = 14;
 __gshared ubyte[] font;
 
+// Separate 8x8 PETSCII font used only by the About-splash scroller (see
+// Video.drawSplash()). Glyphs are MSB-left bitmap rows like `font`, but 8 tall.
+immutable SCROLL_FONT_Y = 8;
+__gshared ubyte[] scrollfont;
+
 // Splash artwork: raw 320x200 array of PALETTE indices (see tools/mk-splash.py),
 // shown by Video.drawSplash() in place of the text grid while splashActive.
 immutable SPLASH_W = 320, SPLASH_H = 200, SPLASH_SCALE = 2;
 immutable ubyte[] splashData = cast(immutable(ubyte)[])import("splash.dat");
+
+// About-splash scroller: a right-to-left PETSCII scroller drawn over the bottom
+// of the artwork. Text is light gray (PALETTE 15) by default; an inline control
+// byte 0x00..0x0f changes the colour to that C64 palette index for what follows.
+immutable double SCROLL_SPEED = 50.0;    // 1 scaled px (1 font px) per 50Hz tick
+immutable ubyte SCROLL_DEFAULT_COL = 1;
+immutable string scrollText =
+	"   \x0dCHEESECUTTER EXTENDED " ~ APP_VERSION ~
+	"   \x01 - A MODERNIZED FORK OF THE POPULAR EDITOR" ~
+	"               \x01(C) 2009-17 ABADDON - RELEASED UNDER THE GNU GPL" ~
+	"               \x01RESID ENGINE BY DAG LEM & ANTTI LANKILA" ~
+	"               \x01PARTS OF RESID INTERFACE BY CADAVER / COVERT BITOPS" ~
+	"               \x01INCLUDES ACME ASSEMBLER 0.91 BY MARCO BAYE" ~
+	"               \x01LIBSDL2 BY THE SDL TEAM" ~
+	"               \x01SEE \x0dhttps://github.com/ventti/CheeseCutter\x01 FOR MORE INFORMATION" ~
+	"               \x0fPRESS ANY KEY TO RETURN TO THE EDITOR ...        ";
 
 int mode; // 0 = compact (default), >0 = wide
 immutable int border = 1;
@@ -68,6 +91,13 @@ static this() {
 	immutable rawfont = import("font.psf");
 	for(int i=0;i<256;i++) {
 		font[i*16..i*16+FONT_Y] = cast(ubyte[])rawfont[i*FONT_Y+4..i*FONT_Y+4+FONT_Y];
+	}
+	// PSF1 8x8 PETSCII font for the splash scroller (4-byte header, 8 bytes/glyph).
+	scrollfont.length = 256*SCROLL_FONT_Y;
+	immutable rawpet = import("petscii.psf");
+	for(int i=0;i<256;i++) {
+		scrollfont[i*SCROLL_FONT_Y..i*SCROLL_FONT_Y+SCROLL_FONT_Y] =
+			cast(ubyte[])rawpet[4+i*SCROLL_FONT_Y..4+i*SCROLL_FONT_Y+SCROLL_FONT_Y];
 	}
 }
 
@@ -171,6 +201,10 @@ abstract class Video {
 	// no new virtual method so the class layout/vtable stays compatible with
 	// objects compiled before this change (the repo has no dep tracking).
 	bool splashActive;
+	// When set (only while the user-opened About dialog is active, not the
+	// startup splash), drawSplash() also draws the scroller. Trailing data field,
+	// no new virtual method, for the same vtable-compatibility reason as above.
+	bool splashScroll;
 
 	abstract void updateFrame();
 }
@@ -212,6 +246,76 @@ class VideoStandard : Video {
 
 	private SDL_Texture* splashTexture;
 
+	// Scroller state. scrollCells is the message expanded into one entry per
+	// drawn glyph (control bytes consumed into the active colour); built lazily.
+	private struct SCell { ubyte g; ubyte col; }
+	private SCell[] scrollCells;
+	private int scrollTotalW;            // total scroller width in font-space px
+	private double scrollX = 0;          // left edge offset, font-space px
+	private uint scrollLastMs = 0;       // for frame-rate-independent advance
+
+	private void buildScrollCells() {
+		ubyte col = SCROLL_DEFAULT_COL;
+		foreach(ubyte ch; cast(immutable(ubyte)[])scrollText) {
+			if(ch < 0x10) { col = ch; continue; }
+			scrollCells ~= SCell(ch, col);
+		}
+		scrollTotalW = cast(int)scrollCells.length * 8;
+		scrollX = -SPLASH_W;             // start fully off the right edge
+	}
+
+	// Draw the right-to-left PETSCII scroller across the bottom of the splash
+	// rect `splash`, scaled at SPLASH_SCALE and clipped to the splash width.
+	private void drawScroller(SDL_Rect splash) {
+		if(scrollCells.length == 0) {
+			buildScrollCells();
+			if(scrollCells.length == 0) return;
+		}
+		uint now = SDL_GetTicks();
+		uint dt = now - scrollLastMs;
+		// A long gap means a fresh open (or the first frame): restart from the
+		// right edge and don't advance, so each About open scrolls from scratch.
+		if(scrollLastMs == 0 || dt > 500) {
+			scrollLastMs = now;
+			scrollX = -SPLASH_W;
+			return;
+		}
+		scrollX += SCROLL_SPEED * dt / 1000.0;
+		scrollLastMs = now;
+		if(scrollX >= scrollTotalW) scrollX = -SPLASH_W;
+
+		immutable bandH = SCROLL_FONT_Y * SPLASH_SCALE;
+		// Just below the artwork in the black margin: the splash image already has
+		// static credits baked into its bottom rows, so overlaying there collides.
+		int bandY = splash.y + splash.h + SPLASH_SCALE*4;
+		SDL_Rect clip = { splash.x, bandY, splash.w, bandH };
+		SDL_RenderSetClipRect(renderer, &clip);
+
+		int rightEdge = splash.x + splash.w;
+		int first = cast(int)(scrollX / 8);
+		if(first < 0) first = 0;
+		for(int ci = first; ci < cast(int)scrollCells.length; ci++) {
+			int gx = splash.x + cast(int)((ci*8 - scrollX) * SPLASH_SCALE);
+			if(gx >= rightEdge) break;
+			SCell cell = scrollCells[ci];
+			ubyte* bp = &scrollfont[cell.g * SCROLL_FONT_Y];
+			SDL_SetRenderDrawColor(renderer, PALETTE[cell.col].r,
+								   PALETTE[cell.col].g, PALETTE[cell.col].b, 255);
+			for(int row = 0; row < SCROLL_FONT_Y; row++, bp++) {
+				ubyte b = *bp;
+				for(int colb = 0; colb < 8; colb++) {
+					if(b & (0x80 >> colb)) {
+						SDL_Rect px = { gx + colb*SPLASH_SCALE,
+										bandY + row*SPLASH_SCALE,
+										SPLASH_SCALE, SPLASH_SCALE };
+						SDL_RenderFillRect(renderer, &px);
+					}
+				}
+			}
+		}
+		SDL_RenderSetClipRect(renderer, null);
+	}
+
 	// Not an override: kept off the base Video vtable so stale objects keep
 	// calling updateFrame() at the right slot (no dep tracking in this repo).
 	void drawSplash() {
@@ -236,6 +340,7 @@ class VideoStandard : Video {
 		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 		SDL_RenderClear(renderer);
 		SDL_RenderCopy(renderer, splashTexture, null, &dst);
+		if(splashScroll) drawScroller(dst);
 		SDL_RenderPresent(renderer);
 	}
 
