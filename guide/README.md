@@ -70,7 +70,7 @@ keyboard shortcut shown on the right of each item.
 | <kbd>↑</kbd> / <kbd>↓</kbd> | Move between items (separators and disabled items are skipped) |
 | <kbd>Enter</kbd> | Run the highlighted command |
 | <kbd>Space</kbd> | Flip the highlighted on/off command, keeping the menu open |
-| Mouse | Click a title to open it, click an item to run it, click elsewhere to close |
+| Mouse | Click a title to open it; the highlight follows the pointer as you hover items, the pressed item turns yellow, and the command runs when you release the button. Press elsewhere to close. You can also press a title and drag straight onto an item in one motion. |
 
 The menu bar is shown from startup. The fixed menus are **File**, **Edit**,
 **View**, **Playback**, **Navigate** (jump between the sequencer, tables and song

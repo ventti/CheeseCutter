@@ -401,16 +401,26 @@ final class UI {
 		else toplevel.clickedAt(x, y, b, clicks);
 	}
 
-	// Drag + release route to the toplevel (the active window owns the drag);
-	// never to a dialog or the menu bar.
+	// While the menu bar is focused it owns drag + release (the highlight follows
+	// the drag; the action fires on release). Otherwise they route to the toplevel
+	// (the active window owns the drag); never to a dialog.
 	void draggedTo(int x, int y) {
-		if(dialog || menubar.active || palette.active) return;
+		if(menubar.active) { menubar.draggedTo(x, y); return; }
+		if(dialog || palette.active) return;
 		toplevel.draggedTo(x, y);
 	}
 
 	void releasedAt(int x, int y) {
-		if(dialog || menubar.active || palette.active) return;
+		if(menubar.active) { menubar.releasedAt(x, y); return; }
+		if(dialog || palette.active) return;
 		toplevel.releasedAt(x, y);
+	}
+
+	// Mouse moved with no button held. Only the focused menu bar reacts: its
+	// highlight cursor follows the pointer. Returns true if a redraw is needed.
+	bool hoverAt(int x, int y) {
+		if(!menubar.active) return false;
+		return menubar.hoverAt(x, y, false);
 	}
 
 	package void saveCallback(string s) {

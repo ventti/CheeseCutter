@@ -120,6 +120,10 @@ private void usage(File f) {
 "  click:cx,cy[,b[,n]]  inject a mouse click at char-cell coords (b=button,\n" ~
 "                   n=clicks); e.g. click:3,0 opens the File menu\n" ~
 "  drag:x1,y1,x2,y2 left-drag from (x1,y1) to (x2,y2) (press, move, release)\n" ~
+"  press:cx,cy[,b]  mouse button-down only (no release) — e.g. to capture the\n" ~
+"                   menu bar's armed/yellow pressed state in a screenshot\n" ~
+"  release:cx,cy    mouse button-up at a cell (pairs with press)\n" ~
+"  hover:cx,cy      mouse motion with no button held (drives menu-bar hover)\n" ~
 "  play             start playback (player.start)\n" ~
 "  mult:<n>         set the multispeed multiplier (1..16)\n" ~
 "  ff:<n>           advance playback n*16 frames (synchronous; no audio device)\n" ~
@@ -174,6 +178,32 @@ private bool processCommand(string arg) {
 			if(button == 1) mainui.releasedAt(cx, cy);
 			mainui.update();
 			stderr.writefln("click %d,%d b%d x%d", cx, cy, button, clicks);
+			break;
+		}
+		case "press": {
+			// press:CX,CY[,BUTTON] — button-down only (no release), so the menu
+			// bar's armed/pressed (yellow) state can be screenshotted.
+			auto parts = val.split(",");
+			int cx = to!int(parts[0]), cy = to!int(parts[1]);
+			int button = parts.length > 2 ? to!int(parts[2]) : 1;
+			mainui.clickedAt(cx, cy, button, 1); mainui.update();
+			stderr.writefln("press %d,%d b%d", cx, cy, button);
+			break;
+		}
+		case "release": {
+			// release:CX,CY — button-up at the given cell (pairs with press).
+			auto parts = val.split(",");
+			int cx = to!int(parts[0]), cy = to!int(parts[1]);
+			mainui.releasedAt(cx, cy); mainui.update();
+			stderr.writefln("release %d,%d", cx, cy);
+			break;
+		}
+		case "hover": {
+			// hover:CX,CY — mouse motion with no button held (drives ui.hoverAt).
+			auto parts = val.split(",");
+			int cx = to!int(parts[0]), cy = to!int(parts[1]);
+			mainui.hoverAt(cx, cy); mainui.update();
+			stderr.writefln("hover %d,%d", cx, cy);
 			break;
 		}
 		case "drag": {

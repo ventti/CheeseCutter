@@ -32,6 +32,8 @@ final class MenuBar {
 	bool _active;                  // bar has keyboard focus (Esc pressed)
 	int menuIndex;                 // remembered last top-level menu (latest focus)
 	int itemIndex;                 // remembered last highlighted item (latest focus)
+	int pressed = -1;              // dropdown item under a held mouse button (armed
+	                               // for invoke-on-release); drawn with a yellow bar
 
 	struct Item {
 		string actionId;
@@ -90,6 +92,7 @@ final class MenuBar {
 	void openMenu() {
 		rebuild();
 		_active = true;
+		pressed = -1;
 		clampIndices();
 		resetTip();
 		// No screen clear: drawDropdown captures the cells it covers (save-under)
@@ -100,6 +103,7 @@ final class MenuBar {
 	void close() {
 		if(!_active) return;
 		_active = false;
+		pressed = -1;
 		if(hasTip) restoreTip();
 		if(hasUnder) restoreUnder();   // erase the dropdown, no full-screen clear
 		drawn = false;
@@ -218,20 +222,22 @@ final class MenuBar {
 				continue;
 			}
 			bool hl = cast(int)i == itemIndex;
-			int rbg = hl ? 4 : 0;                                      // purple bar
+			bool press = cast(int)i == pressed;          // mouse held on this item
+			// Yellow bar while pressed (armed for release), else the purple cursor.
+			int rbg = press ? 7 : (hl ? 4 : 0);
 			foreach(cx; bx + 1 .. bx + w - 1)
 				screen.setChar(cx, ry, cast(Uint32)(0x20 | (rbg << 16)));
-			int lfg = hl ? 1 : (it.enabled ? 15 : 8);
+			int lfg = press ? 0 : (hl ? 1 : (it.enabled ? 15 : 8));
 			screen.cprint(labelX, ry, lfg, rbg, it.label);
 			if(it.toggle)
-				screen.cprint(cbX, ry, hl ? 1 : (it.on ? 13 : 8), rbg,
+				screen.cprint(cbX, ry, press ? 0 : (hl ? 1 : (it.on ? 13 : 8)), rbg,
 							  it.on ? "[x]" : "[ ]");
 			if(it.primary.isValid) {
 				int sw = shortcutWidth(it.primary);
 				int sx = bx + w - 1 - PAD - sw;       // right-aligned
 				drawShortcut(sx, ry, it.primary,
-							 hl ? 1 : (it.enabled ? 12 : 8),   // key colour
-							 hl ? 15 : 11,                     // separator colour
+							 press ? 0 : (hl ? 1 : (it.enabled ? 12 : 8)),   // key colour
+							 press ? 0 : (hl ? 15 : 11),                     // separator colour
 							 rbg);
 			}
 		}
@@ -336,35 +342,104 @@ final class MenuBar {
 		return 0;
 	}
 
+	// Index of the top-level title under column x on row 0, or -1.
+	private int titleAt(int x) {
+		foreach(i, m; menus)
+			if(i < titleX.length && x >= titleX[i]
+			   && x < titleX[i] + cast(int)m.title.length)
+				return cast(int)i;
+		return -1;
+	}
+
+	// Index of the selectable (non-separator, enabled) dropdown item under
+	// (x,y) inside the open box, or -1.
+	private int itemAt(int x, int y) {
+		if(boxW <= 0 || menuIndex >= cast(int)menus.length) return -1;
+		if(!(x > boxX && x < boxX + boxW - 1 && y > boxY && y < boxY + boxH - 1))
+			return -1;
+		int idx = y - (boxY + 1);
+		auto items = menus[menuIndex].items;
+		if(idx >= 0 && idx < cast(int)items.length
+		   && !items[idx].sep && items[idx].enabled)
+			return idx;
+		return -1;
+	}
+
+	// Mouse button pressed: open/switch the menu under a title, or arm the
+	// pointed item (drawn yellow). The action is NOT run here — it fires on
+	// release (see releasedAt), and the menu stays visible meanwhile.
 	void clickedAt(int x, int y, int button, int clicks) {
 		rebuild();
 		if(y == 0) {
-			foreach(i, m; menus) {
-				if(i < titleX.length && x >= titleX[i]
-				   && x < titleX[i] + cast(int)m.title.length) {
-					menuIndex = cast(int)i;
-					_active = true;
-					itemIndex = firstSelectable(menuIndex);
-					resetTip();
-					return;
-				}
+			int t = titleAt(x);
+			if(t >= 0) {
+				menuIndex = t;
+				_active = true;
+				pressed = -1;
+				itemIndex = firstSelectable(menuIndex);
+				resetTip();
+				return;
 			}
 			if(_active) close();
 			return;
 		}
 		if(!_active) return;
+		int idx = itemAt(x, y);
+		if(idx >= 0) {
+			itemIndex = idx;
+			pressed = idx;          // armed; invoked on release
+			resetTip();
+			return;
+		}
+		// Press on a separator/disabled row keeps the menu open; press outside
+		// the box dismisses it.
 		if(boxW > 0 && x > boxX && x < boxX + boxW - 1
 		   && y > boxY && y < boxY + boxH - 1) {
-			int idx = y - (boxY + 1);
-			auto items = menus[menuIndex].items;
-			if(idx >= 0 && idx < cast(int)items.length
-			   && !items[idx].sep && items[idx].enabled) {
-				itemIndex = idx;
-				invokeCurrent();
-			}
+			pressed = -1;
 			return;
 		}
 		close();
+	}
+
+	// Mouse moved to (x,y). `pressing` = a button is held (a drag). The highlight
+	// follows the pointer onto the pointed title/item; while pressing, the pointed
+	// item is also armed (yellow) so press-drag-release works in one gesture.
+	// Returns true if anything visible changed (so the caller can redraw).
+	bool hoverAt(int x, int y, bool pressing) {
+		if(!_active) return false;
+		rebuild();
+		int oldMenu = menuIndex, oldItem = itemIndex, oldPressed = pressed;
+		if(y == 0) {
+			int t = titleAt(x);
+			if(t >= 0 && t != menuIndex) {
+				menuIndex = t;
+				itemIndex = firstSelectable(menuIndex);
+				resetTip();
+			}
+			pressed = -1;
+		} else {
+			int idx = itemAt(x, y);
+			if(idx >= 0) {
+				if(idx != itemIndex) { itemIndex = idx; resetTip(); }
+				pressed = pressing ? idx : -1;
+			} else pressed = -1;
+		}
+		return menuIndex != oldMenu || itemIndex != oldItem || pressed != oldPressed;
+	}
+
+	void draggedTo(int x, int y) { hoverAt(x, y, true); }
+
+	// Mouse button released: invoke the item under the pointer (closing the bar).
+	// Released on a title or empty space just disarms, leaving the menu open.
+	void releasedAt(int x, int y) {
+		if(!_active) return;
+		rebuild();
+		int idx = itemAt(x, y);
+		pressed = -1;
+		if(idx >= 0) {
+			itemIndex = idx;
+			invokeCurrent();
+		}
 	}
 
 	// --- Menu building (from the registry) -----------------------------------
