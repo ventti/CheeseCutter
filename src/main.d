@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Editor entry point — parses the CLI, initialises SDL/audio/framebuffer and the UI, then runs the main loop.
 */
 
 module main;
@@ -92,6 +94,11 @@ void initVideo(bool useFullscreen, bool useyuv, int seqHeight = 0, int uiWidthCo
     screen = new Screen(logicalCols, logicalRows);
     video = new VideoStandard(mx, my, screen, useFullscreen ? 1 : 0);
 
+	// Deliver layout/Shift/AltGr-aware composed characters as SDL_TEXTINPUT events
+	// (so text fields can type e.g. '$' regardless of keyboard layout). Keydown
+	// still drives shortcuts/navigation; see the SDL_TEXTINPUT case in mainloop().
+	SDL_StartTextInput();
+
 	// SDL_EnableKeyRepeat(200, 10);
 	// SDL_EnableUNICODE(1);
 	// SDL_WM_SetCaption("CheeseCutter".toStringz(),"CheeseCutter".toStringz());
@@ -141,6 +148,14 @@ void mainloop(bool verbose) {
 				if(mainui.exitRequested)
 					quit = true;
 
+				mainui.update();
+				break;
+			case SDL_TEXTINPUT:
+				// Layout/Shift/AltGr-aware composed characters for text fields
+				// (e.g. '$' = AltGr-4 on a Swedish/Finnish layout). Routed only to
+				// the focused text field; ignored elsewhere. Keydown still drives
+				// shortcuts, navigation and the sequencer/table grids.
+				mainui.textInput(std.string.fromStringz(&evt.text.text[0]).idup);
 				mainui.update();
 				break;
 			case SDL_KEYUP:

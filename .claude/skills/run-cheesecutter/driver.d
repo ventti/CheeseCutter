@@ -80,6 +80,11 @@ private void press(string spec) {
 	auto k = Keyinfo(sym, mods, uni);
 	com.kbd.translate(k);
 	mainui.keypress(k);
+	// Mirror real SDL: a printable key also yields an SDL_TEXTINPUT event with the
+	// composed character. Text fields take their input from there now, so feed it
+	// (no Ctrl/Alt/GUI held). e.g. `key:$` types '$' into a focused text field.
+	if(uni >= 0x20 && uni <= 0x7e && !(mods & (KMOD_CTRL | KMOD_ALT | KMOD_GUI)))
+		mainui.textInput("" ~ cast(char)uni);
 	mainui.update();
 }
 

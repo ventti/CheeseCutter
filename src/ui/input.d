@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Editor input primitives — Cursor, Keyinfo and the value-changed handler mixin for editable fields.
 */
 
 module ui.input;
@@ -120,6 +122,11 @@ class Input {
 	alias setCoord set;
 
 	int keypress(Keyinfo key) { return 0 ;}
+
+	// Composed text from the OS (SDL_TEXTINPUT): layout/Shift/AltGr-aware
+	// characters. Only text fields (InputString) consume it; numeric/hex/note
+	// inputs ignore it and keep reading raw keys in keypress(). No-op by default.
+	void textInput(string s) {}
 
 	int keyrelease(Keyinfo key) { return 0; }
 
@@ -472,9 +479,26 @@ class InputString : Input {
 		instring[nibble] = cast(char)value;
 	}
 
-	override int keypress(Keyinfo key) {
-		int i;
+	private void insertGap() {
+		instring[nibble+1 .. $] = instring[nibble .. $-1].dup;
+	}
 
+	// Character entry comes from SDL_TEXTINPUT (layout/Shift/AltGr-aware), so e.g.
+	// '$' works on every keyboard layout regardless of which key combo produces it.
+	// keypress() handles only cursor/edit control keys (below), never insertion, so
+	// there is no double entry and shortcut keycodes never become typed text.
+	override void textInput(string s) {
+		foreach(dchar c; s) {
+			// The C64 text rows are single-byte; accept printable ASCII only.
+			// '`' is the colour-escape lead-in used by the framebuffer, so skip it.
+			if(c < 0x20 || c > 0x7e || c == '`') continue;
+			insertGap();
+			setChar(c);
+			if(step(1) == WRAP) nibble = inputLength - 1;
+		}
+	}
+
+	override int keypress(Keyinfo key) {
 		switch(key.raw)
 		{
 		case SDLK_LEFT:
@@ -504,32 +528,16 @@ class InputString : Input {
 			if(nibble >= inputLength)
 				nibble = inputLength - 1;
 			break;
+		case SDLK_INSERT:
+			insertGap();
+			setChar(' ');
+			break;
 		case SDLK_RETURN:
 			return RETURN;
 		case SDLK_ESCAPE:
 			return CANCEL;
 		default:
-			void insert() {
-				instring[nibble+1 .. $] = instring[nibble .. $-1].dup;
-			}
-			if(key.raw == SDLK_INSERT) {
-				insert();
-				setChar(' ');
-			}
-			else if(key.unicode && key.unicode != '`') {
-				string old = cast(string)(instring.dup);
-				insert();
-				setChar(key.unicode);
-				try {
-					validate(instring);
-				}
-				catch(UTFException e) {
-					stderr.writeln(e.toString);
-					instring = old.dup;
-					break;
-				}
-				if(step(1) == WRAP) nibble = inputLength - 1;
-			}
+			// Printable characters arrive via textInput() (SDL_TEXTINPUT), not here.
 			break;
 		}
 		return OK;

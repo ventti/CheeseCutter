@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+UI facade — owns the main UI object and visualizer mode, and re-exports the window/bar modules.
 */
 
 module ui.ui;
@@ -165,6 +167,22 @@ final class UI {
 		return activeWindow.input;
 	}
 
+	// True while a free-text field (InputString) is focused — the song-info
+	// Title/Author/Release bar and the instrument description. Every printable
+	// key (including ones that share a keycode with a shortcut, e.g. '$' = Shift-4)
+	// must reach the field, so global shortcuts are suppressed while it is active.
+	// Numeric/hex/note inputs are NOT InputString, so shortcuts still work there.
+	@property bool textInputActive() {
+		return cast(InputString)activeInput !is null;
+	}
+
+	// OS-composed text (SDL_TEXTINPUT) routed to the focused text field. Ignored
+	// unless a text field is active, so it never disturbs the sequencer/tables.
+	void textInput(string s) {
+		if(textInputActive)
+			activeInput.textInput(s);
+	}
+
 	@property VisMode currentVisMode() {
 		return cast(VisMode)vismode;
 	}
@@ -319,9 +337,10 @@ final class UI {
 			return OK;
 		}
 
-		// Check if shortcut manager handles this keypress
-		// But only if there's no active input field or dialog that needs to handle it first
-		if(!dialog) { // if(activeInput is null && !dialog) {
+		// Check if shortcut manager handles this keypress, but NOT while a free-text
+		// field is being edited (the description / song-info fields) — there every
+		// printable key must reach the field, not trigger a shortcut.
+		if(!dialog && !textInputActive) {
 			//auto sm = getShortcutManager();
 			if(sm.handleKeypress(key)) {
 
