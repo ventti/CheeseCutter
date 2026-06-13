@@ -30,6 +30,8 @@ _Generated from the shortcut registry (com.shortcuts)._
 | Shortcut | Action |
 |---|---|
 |  | Clear the song and start a new project |
+| `Ctrl-Shift-F10` | Export an optimized, packed .prg (options dialog) |
+| `Alt-F10` | Export the song as a PSID .sid file (options dialog) |
 | `F9` | Open the Load song dialog |
 | `F10` | Open the Save song dialog |
 | `Ctrl-F10` | Quick save song (doesn't ask a filename) |

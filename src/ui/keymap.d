@@ -117,6 +117,16 @@ void registerShortcuts(UI ui) {
 		activateDialog(prgdialog);
 	});
 
+	sm.register("save_prg_packed", Ctx.global, "File",
+				"Export an optimized, packed .prg (options dialog)", SDLK_F10, KMOD_SHIFT | KMOD_CTRL, {
+		activateDialog(prgOptDialog);
+	});
+
+	sm.register("save_sid", Ctx.global, "File",
+				"Export the song as a PSID .sid file (options dialog)", SDLK_F10, KMOD_ALT, {
+		activateDialog(sidOptDialog);
+	});
+
 	sm.register("quick_save", Ctx.global, "File",
 				"Quick save song (doesn't ask a filename)", SDLK_F10, KMOD_CTRL, {
 		string s = savedialog.filename;
@@ -709,6 +719,8 @@ void applyMenuLabels(UI ui) {
 		setMenuLabel("load_file", "Load song...");
 		setMenuLabel("save_file", "Save song...");
 		setMenuLabel("save_prg", "Export .prg...");
+		setMenuLabel("save_prg_packed", "Export packed .prg...");
+		setMenuLabel("save_sid", "Export .sid...");
 		setMenuLabel("quick_save", "Quick save");
 		setMenuLabel("optimize_song", "Optimize song");
 		setMenuLabel("clear_sequences", "Clear sequences");

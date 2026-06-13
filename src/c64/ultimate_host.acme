@@ -270,6 +270,7 @@ dispatch
 		;; mode 1 = play
 		lda rasidx
 		bne pf_mplay
+!if SHOW_RASTERTIME = 1 {
 		lda rasacc		; frame boundary (slot 0): publish the previous
 		sta rasval		; frame's summed raster time (all play+mplay)...
 		lda #0
@@ -279,35 +280,46 @@ dispatch
 		sta ras_start
 		lda #COL_GREEN
 		sta $d020
+}
 		jsr PLAYADDR
+!if SHOW_RASTERTIME = 1 {
 		lda #COL_BLACK
 		sta $d020
 		jsr add_raster
-		jsr update_status	; advance the MM:SS clock once per frame
+}
+		jsr update_status	; repaint clock / raster meter once per frame
 		jmp nextline
 pf_mplay
+!if SHOW_RASTERTIME = 1 {
 		jsr read_raster		; mplay subframe: time it and add to the frame total
 		stx ras_start_hi
 		sta ras_start
 		lda #COL_GREEN
 		sta $d020
+}
 		jsr MPLAYADDR
+!if SHOW_RASTERTIME = 1 {
 		lda #COL_BLACK
 		sta $d020
 		jsr add_raster
+}
 		jmp nextline
 
 kjtick
 		ldx #0
+!if SHOW_RASTERTIME = 1 {
 		lda #COL_GREEN
 		sta $d020
+}
 !if NEWKEYJAM = 1 {
 		jsr SUBMPLAY
 } else {
 		jsr $100c
 }
+!if SHOW_RASTERTIME = 1 {
 		lda #COL_BLACK
 		sta $d020
+}
 
 		;; --- advance to the next slot and program its raster compare line ---
 nextline
@@ -341,6 +353,7 @@ irqdone
 ;;; Advance the MM:SS clock (once per frame) and repaint the Time/raster row.
 ;;; ----------------------------------------
 update_status
+!if SHOW_TIMER = 1 {
 		inc fcnt
 		lda fcnt
 		cmp #FRAMERATE
@@ -368,10 +381,13 @@ us_show
 		jsr dec2
 		stx CELL_SEC10
 		sta CELL_SEC1
+}
+!if SHOW_RASTERTIME = 1 {
 		lda rasval
 		jsr hex2
 		stx CELL_RASH
 		sta CELL_RASL
+}
 		rts
 
 ;;; value A (0..99) -> X = tens screen char, A = ones screen char

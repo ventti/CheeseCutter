@@ -56,7 +56,9 @@ final class UI {
 	package {
 		int vismode = VisMode.Regs;
 		AboutDialog aboutdialog;
-		FileSelectorDialog loaddialog, savedialog, prgdialog;
+		FileSelectorDialog loaddialog, savedialog, prgdialog, sidsavedialog, prgpacksavedialog;
+		ExportOptionsDialog prgOptDialog, sidOptDialog;
+		ExportOptions prgExportOpts, sidExportOpts;
 	}
 	enum SPLASH_DURATION_MS = 2500;
 	static Statusline statusline;
@@ -96,6 +98,14 @@ final class UI {
 												  dialog_width), &saveCallback);
 		prgdialog = new SaveFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
 												  dialog_width), &savePrgCallback, "Save playable .prg");
+		prgpacksavedialog = new SaveFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
+												  dialog_width), &savePackedPrgCallback, "Export packed .prg");
+		sidsavedialog = new SaveFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
+												  dialog_width), &saveSidCallback, "Export .sid");
+		prgOptDialog = new ExportOptionsDialog(ExportOptionsDialog.Mode.Prg,
+											   "Export packed .prg", &prgOptConfirm);
+		sidOptDialog = new ExportOptionsDialog(ExportOptionsDialog.Mode.Sid,
+											   "Export .sid (PSID)", &sidOptConfirm);
 
 		int aboutdlg_width = screen.width - 18;
 		int aboutdlg_height = 13;
@@ -417,14 +427,17 @@ final class UI {
 		}
 	}
 
-	// Propose a .prg filename from the current .ct(2) file (or a default).
-	package string proposePrgName() {
+	// Propose an export filename from the current .ct(2) file (or a default).
+	package string proposeExportName(string ext) {
 		string fn = state.filename.strip();
-		if(fn.length == 0) return "song.prg";
+		if(fn.length == 0) return "song" ~ ext;
 		auto dot = fn.lastIndexOf('.');
 		if(dot > 0) fn = fn[0 .. dot];
-		return fn ~ ".prg";
+		return fn ~ ext;
 	}
+
+	package string proposePrgName() { return proposeExportName(".prg"); }
+	package string proposeSidName() { return proposeExportName(".sid"); }
 
 	private void savePrgCallback(string s) {
 		try {
@@ -439,6 +452,53 @@ final class UI {
 		string fn = s.strip();
 		auto ind = 1 + fn.lastIndexOf(DIR_SEPARATOR);
 		statusline.display(format("Saved playable \"%s\".", fn[ind .. $]));
+	}
+
+	// Step 1 of packed-.prg / .sid export: the options dialog confirmed; stash the
+	// options and open the save-file dialog (same one used for saving a song).
+	private void prgOptConfirm(ExportOptions o) {
+		prgExportOpts = o;
+		prgpacksavedialog.setDirectory(getcwd());
+		prgpacksavedialog.setFilename(proposePrgName());
+		activateDialog(prgpacksavedialog);
+	}
+
+	private void sidOptConfirm(ExportOptions o) {
+		sidExportOpts = o;
+		sidsavedialog.setDirectory(getcwd());
+		sidsavedialog.setFilename(proposeSidName());
+		activateDialog(sidsavedialog);
+	}
+
+	// Step 2: write the optimized export with the stashed options.
+	private void savePackedPrgCallback(string s) {
+		try {
+			ubyte[] prg = ct.build.exportPrg(song, audio.player.ntsc != 0, prgExportOpts);
+			std.file.write(s, prg);
+		}
+		catch(Exception e) {
+			stderr.writeln(e.toString);
+			statusline.display("Could not write .prg! " ~ e.msg);
+			return;
+		}
+		string fn = s.strip();
+		auto ind = 1 + fn.lastIndexOf(DIR_SEPARATOR);
+		statusline.display(format("Exported packed \"%s\".", fn[ind .. $]));
+	}
+
+	private void saveSidCallback(string s) {
+		try {
+			ubyte[] sid = ct.build.exportSid(song, sidExportOpts);
+			std.file.write(s, sid);
+		}
+		catch(Exception e) {
+			stderr.writeln(e.toString);
+			statusline.display("Could not write .sid! " ~ e.msg);
+			return;
+		}
+		string fn = s.strip();
+		auto ind = 1 + fn.lastIndexOf(DIR_SEPARATOR);
+		statusline.display(format("Exported \"%s\".", fn[ind .. $]));
 	}
 
 	void importCallback(string s) {
@@ -486,7 +546,7 @@ final class UI {
 
 		// sync save filesel to load filesel in case dir was changed
 		// (prgdialog too, so the .prg is offered in the loaded .ct's dir)
-		foreach(d; [loaddialog, savedialog, prgdialog]) {
+		foreach(d; [loaddialog, savedialog, prgdialog, prgpacksavedialog, sidsavedialog]) {
 			d.setFilename(fn);
 			d.setDirectory(getcwd());
 		}
@@ -531,7 +591,7 @@ final class UI {
 		loadCallback(tmp);
 		try { std.file.remove(tmp); } catch(Exception e) {}
 		state.filename = "";
-		foreach(d; [loaddialog, savedialog, prgdialog])
+		foreach(d; [loaddialog, savedialog, prgdialog, prgpacksavedialog, sidsavedialog])
 			d.setFilename("");
 		statusline.display("New song.");
 	}

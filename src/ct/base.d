@@ -1348,6 +1348,12 @@ class Song {
 		}
 
 		ubyte[] debuf = cast(ubyte[])std.zlib.uncompress(inbuf[3..$],167832);
+		deserializeFromBuffer(debuf);
+	}
+
+	// Parse a decompressed .ct payload (the buffer produced by serializeToBuffer,
+	// i.e. open()'s uncompressed image+metadata+subtunes) into this song.
+	void deserializeFromBuffer(ubyte[] debuf) {
 		int offset = 65536;
 		ver = debuf[offset++];
 		if(ver < 6) 
@@ -1543,6 +1549,23 @@ class Song {
 	}
 	
 	void save(string fn) {
+		ubyte[] b = serializeToBuffer();
+		std.file.write(fn, "CC2");
+		append(fn, std.zlib.compress(b));
+	}
+
+	// Deep-copy this song via the .ct serialization (no temp file / zlib): the
+	// returned song is independent, so callers (e.g. export) can purge it without
+	// touching the live working copy.
+	Song dup() {
+		Song c = new Song();
+		c.deserializeFromBuffer(serializeToBuffer());
+		return c;
+	}
+
+	// Build the uncompressed .ct payload (full C64 image + metadata + subtunes).
+	// save() compresses this; dup()/deserializeFromBuffer() round-trip it in memory.
+	ubyte[] serializeToBuffer() {
 		// get tracks from the c64 memory to subtunes-array
 		subtunes.sync();
 		ubyte[] b;
@@ -1575,11 +1598,10 @@ class Song {
 		offset += arr.length;
 
 		offset += 32 * 32 - 0x200;
-		arr = cast(ubyte[])(&subtunes.subtunes)[0..1]; 
+		arr = cast(ubyte[])(&subtunes.subtunes)[0..1];
 		b[offset .. offset + arr.length] = arr[];
 		offset += arr.length;
-		std.file.write(fn, "CC2");
-		append(fn, std.zlib.compress(b));
+		return b;
 	}
 
 	void splitSequence(int seqnumber, int seqofs) {

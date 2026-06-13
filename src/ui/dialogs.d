@@ -9,6 +9,7 @@ import com.fb;
 import com.util;
 import com.session;
 private import ct.base;
+import ct.build : ExportOptions;
 import ui.help;
 import ui.ui;
 import ui.input;
@@ -862,6 +863,179 @@ class SaveFileDialog : FileSelectorDialog {
 		else if(activeWindow == sfile) { // pressed RETURN in file dialog
 			string filename = getcwd() ~ DIR_SEPARATOR ~ sfile.toString();
 			processFileCallback(filename);
+		}
+	}
+}
+
+// Popup that collects export options (the same knobs ct2util exposes on the
+// command line, plus the executable PRG display toggles) before the file is
+// saved. On Return it hands the gathered ExportOptions to onConfirm (which opens
+// the save-file dialog); Esc cancels. Used for both packed .prg and .sid export.
+class ExportOptionsDialog : Window {
+	enum Mode { Prg, Sid }
+	alias void delegate(ExportOptions) ConfirmCB;
+
+	private {
+		Mode mode;
+		ConfirmCB onConfirm;
+		string header;
+		int sel;
+		// Working values (assembled into ExportOptions on confirm). singleSubtune
+		// is held as 0 = "all" here; defaultSubtune is 1-based.
+		int fAddr = 0x1000, fZp = 0, fSingle = 0, fDef = 1;
+		bool fExe = true, fInfo = true, fRaster = true, fTimer = true;
+	}
+
+	this(Mode mode, string header, ConfirmCB cb) {
+		super(Rectangle(0, 0, 1));
+		this.mode = mode;
+		this.header = header;
+		this.onConfirm = cb;
+	}
+
+	// kind codes: a=addr(hex16) z=zp(hex8) s=single(dec) d=default(dec),
+	// E/I/R/T = executable / show-info / raster-meter / timer toggles.
+	private struct Row { string label; char kind; }
+	private Row[] rows() {
+		Row[] r;
+		r ~= Row("Reloc address   $", 'a');
+		r ~= Row("Zero page       $", 'z');
+		r ~= Row("Single subtune   ", 's');
+		if(mode == Mode.Sid) {
+			r ~= Row("Default subtune  ", 'd');
+		}
+		else {
+			r ~= Row("Executable       ", 'E');
+			if(fExe) {
+				r ~= Row("  Show info      ", 'I');
+				r ~= Row("  Raster meter   ", 'R');
+				r ~= Row("  Timer          ", 'T');
+			}
+		}
+		return r;
+	}
+
+	private string valStr(char kind) {
+		switch(kind) {
+		case 'a': return format("%04X", fAddr);
+		case 'z': return fZp == 0 ? "00 (default)" : format("%02X", fZp);
+		case 's': return fSingle == 0 ? "all" : format("%d", fSingle);
+		case 'd': return format("%d", fDef);
+		case 'E': return fExe ? "yes" : "no";
+		case 'I': return fInfo ? "yes" : "no";
+		case 'R': return fRaster ? "yes" : "no";
+		case 'T': return fTimer ? "yes" : "no";
+		default: return "";
+		}
+	}
+
+	override void activate() { sel = 0; }
+
+	override void update() {
+		auto rs = rows();
+		int fw = 46;
+		int h = cast(int)rs.length + 6;
+		int x = screen.width / 2 - (fw + 2) / 2;
+		int y = screen.height / 2 - h / 2;
+		drawFrame(Rectangle(x, y, h, fw + 2));
+		screen.cprint(x + 2, y, 1, 0, " " ~ header ~ " ");
+		foreach(i, row; rs) {
+			int ry = y + 2 + cast(int)i;
+			int fg = (cast(int)i == sel) ? 0 : 15;
+			int bg = (cast(int)i == sel) ? 15 : 0;
+			string line = format(" %s%s", row.label, valStr(row.kind));
+			screen.cprint(x + 2, ry, fg, bg, line.leftJustify(fw - 2));
+		}
+		screen.cprint(x + 2, y + h - 3, 13, 0, "Up/Dn pick  Spc/<>/keys edit");
+		screen.cprint(x + 2, y + h - 2, 13, 0, "Return: file & export   Esc: cancel");
+	}
+
+	private void clampAll() {
+		if(fAddr < 0) fAddr = 0; if(fAddr > 0xffff) fAddr = 0xffff;
+		if(fZp < 0) fZp = 0; if(fZp > 0xff) fZp = 0xff;
+		if(fSingle < 0) fSingle = 0; if(fSingle > SUBTUNE_MAX) fSingle = SUBTUNE_MAX;
+		if(fDef < 1) fDef = 1; if(fDef > SUBTUNE_MAX) fDef = SUBTUNE_MAX;
+	}
+
+	private void toggle(char kind) {
+		switch(kind) {
+		case 'E': fExe = !fExe; break;
+		case 'I': fInfo = !fInfo; break;
+		case 'R': fRaster = !fRaster; break;
+		case 'T': fTimer = !fTimer; break;
+		case 's': fSingle++; if(fSingle > SUBTUNE_MAX) fSingle = 0; break;
+		case 'd': fDef++; if(fDef > SUBTUNE_MAX) fDef = 1; break;
+		case 'a': fAddr = (fAddr + 0x100) & 0xffff; break;
+		case 'z': fZp = (fZp + 1) & 0xff; break;
+		default: break;
+		}
+	}
+
+	private void editDigit(char kind, int uc) {
+		int hex = -1;
+		if(uc >= '0' && uc <= '9') hex = uc - '0';
+		else if(uc >= 'a' && uc <= 'f') hex = uc - 'a' + 10;
+		else if(uc >= 'A' && uc <= 'F') hex = uc - 'A' + 10;
+		if(hex < 0) return;
+		switch(kind) {
+		case 'a': fAddr = ((fAddr << 4) | hex) & 0xffff; break;
+		case 'z': fZp = ((fZp << 4) | hex) & 0xff; break;
+		case 's': if(hex <= 9) { fSingle = fSingle * 10 + hex; if(fSingle > SUBTUNE_MAX) fSingle = hex; } break;
+		case 'd': if(hex <= 9) { fDef = fDef * 10 + hex; if(fDef > SUBTUNE_MAX) fDef = hex; } break;
+		default: break;
+		}
+		clampAll();
+	}
+
+	private void backspace(char kind) {
+		switch(kind) {
+		case 'a': fAddr >>= 4; break;
+		case 'z': fZp >>= 4; break;
+		case 's': fSingle /= 10; break;
+		case 'd': fDef /= 10; break;
+		default: break;
+		}
+		clampAll();
+	}
+
+	override int keypress(Keyinfo key) {
+		if(key.mods & KMOD_ALT) return OK;
+		auto rs = rows();
+		int n = cast(int)rs.length;
+		if(sel >= n) sel = n - 1;
+		char kind = rs[sel].kind;
+		switch(key.raw) {
+		case SDLK_ESCAPE:
+			return CANCEL;
+		case SDLK_RETURN:
+			ExportOptions o;
+			o.relocAddress = fAddr;
+			o.zpAddress = fZp;
+			o.singleSubtune = (fSingle == 0) ? -1 : fSingle;
+			o.defaultSubtune = (mode == Mode.Sid) ? fDef : 1;
+			o.executable = (mode == Mode.Prg) ? fExe : false;
+			o.showInfo = fInfo;
+			o.showRastertime = fRaster;
+			o.showTimer = fTimer;
+			onConfirm(o);   // opens the save-file dialog; keep loop from closing it
+			return OK;
+		case SDLK_UP:
+			sel = (sel + n - 1) % n;
+			return OK;
+		case SDLK_DOWN:
+			sel = (sel + 1) % n;
+			return OK;
+		case SDLK_LEFT:
+		case SDLK_RIGHT:
+		case SDLK_SPACE:
+			toggle(kind);
+			return OK;
+		case SDLK_BACKSPACE:
+			backspace(kind);
+			return OK;
+		default:
+			editDigit(kind, key.unicode);
+			return OK;
 		}
 	}
 }
