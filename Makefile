@@ -16,19 +16,31 @@ OBJ_EXT=.o
 
 include Makefile.objects.mk
 
-.PHONY: install release dist clean dclean tar docs
+PYTHON?=python3
+
+.PHONY: install release dist clean dclean tar docs map check-map
 
 all: ct2util ccutter
 
 # Regenerate the man page and keyboard reference from the tool itself
 # (single source of truth: src/main.d cliOptions() and the com.shortcuts registry).
-docs: ccutter
+docs: ccutter map
 	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./ccutter --dump-man     > doc/ccutter.1
 	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./ccutter --dump-man fr  > doc/ccutter.fr.1
 	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./ccutter --dump-man de  > doc/ccutter.de.1
 	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./ccutter --dump-man sv  > doc/ccutter.sv.1
 	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./ccutter --dump-man fi  > doc/ccutter.fi.1
 	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./ccutter --dump-keys    > doc/KEYBOARD.md
+
+# Regenerate the architecture map (doc/ARCHITECTURE.md) from the source itself.
+# Pure text parse — no build needed (see tools/genmap.py).
+map:
+	$(PYTHON) tools/genmap.py
+
+# CI/pre-commit guard: fail if doc/ARCHITECTURE.md is stale vs the source.
+check-map:
+	$(PYTHON) tools/genmap.py
+	git diff --exit-code -- doc/ARCHITECTURE.md
 
 ccutter: $(C64OBJS) $(OBJS) $(CXX_OBJS) $(C_OBJS)
 	$(DC) $(COMFLAGS) -of=$@ $(OBJS) $(CXX_OBJS) $(C_OBJS) $(LIBS)

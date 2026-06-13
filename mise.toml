@@ -22,13 +22,16 @@
 LIBSPATH = "/opt/homebrew/lib"
 
 [tasks.build]
-description = "Build CheeseCutter for current platform"
+description = "Build CheeseCutter for current platform (also refreshes doc/ARCHITECTURE.md)"
 run = """
 #!/usr/bin/env bash
+set -e
 if [[ "$OSTYPE" == "darwin"* ]]; then
   make -j -f Makefile.mac LIBSPATH=${LIBSPATH:-/opt/homebrew/lib}
+  make -f Makefile.mac map
 else
   make -j
+  make map
 fi
 """
 
