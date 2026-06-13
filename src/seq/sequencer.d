@@ -1032,7 +1032,7 @@ final class Sequencer : Window, Undoable {
 		queryAppend = new QueryDialog("Insert this sequence to cursor pos: $",
 							  &insertCallback, 0x80);
 
-		queryCopy = new QueryDialog("Copy this sequence to cursor seq: $",
+		queryCopy = new QueryDialog("Overwrite current sequence with seq: $",
 							&copyCallback, 0x80);
 
 		// top & bottom
@@ -1166,6 +1166,8 @@ final class Sequencer : Window, Undoable {
 				mainui.activateDialog(queryAppend);
 				break;
 			case SDLK_c:
+				queryCopy.setQuery(format("Overwrite current seq $%02X with seq: $",
+										  activeView.getRowData().trk.number));
 				mainui.activateDialog(queryCopy);
 				break;
 			case SDLK_RIGHT:

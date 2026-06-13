@@ -34,6 +34,13 @@ abstract class QueryDialogBase(T) : Window {
 		frameWidth = cast(int)query.length;
 	}
 
+	// Replace the prompt text (e.g. to embed live state); keeps the frame and
+	// the input-field position in sync with the new length.
+	void setQuery(string s) {
+		query = s;
+		frameWidth = cast(int)s.length;
+	}
+
 	override void update() {
 		int x = cast(int)(screen.width / 2 - (frameWidth + 6)/2);
 		int y = cast(int)(screen.height / 2 - 11);
