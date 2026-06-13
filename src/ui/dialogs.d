@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Modal dialogs — query / confirm / string-entry and the help viewer (QueryDialog family).
 */
 
 module ui.dialogs;
@@ -970,14 +972,14 @@ class ExportOptionsDialog : Window {
 			int ry = y + 2 + cast(int)i;
 			bool on = enabled(row.kind);
 			int fg, bg;
-			if(cast(int)i == sel) { fg = 0; bg = 15; }       // selected (always enabled)
+			if(cast(int)i == sel) { fg = 1; bg = 4; }        // selected: white on purple
 			else if(on)           { fg = 15; bg = 0; }       // normal
 			else                  { fg = 11; bg = 0; }       // greyed / disabled
 			string line = format(" %s%s", row.label.leftJustify(LBLW), valStr(row.kind));
 			screen.cprint(x + 2, ry, fg, bg, line.leftJustify(fw - 2));
 		}
-		screen.cprint(x + 2, y + h - 3, 13, 0, "Up/Dn pick   < reduce   > increase");
-		screen.cprint(x + 2, y + h - 2, 13, 0, "Return: file & export   Esc: cancel");
+		screen.cprint(x + 2, y + h - 3, 12, 0, "Up/Down: Navigate   Left/Right: Change value");
+		screen.cprint(x + 2, y + h - 2, 12, 0, "Return: OK   Esc: Cancel");
 	}
 
 	private void clampAll() {
