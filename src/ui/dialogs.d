@@ -9,7 +9,7 @@ import com.fb;
 import com.util;
 import com.session;
 private import ct.base;
-import ct.build : ExportOptions;
+import ct.build : ExportOptions, ExportFormat;
 import ui.help;
 import ui.ui;
 import ui.input;
@@ -874,61 +874,82 @@ class SaveFileDialog : FileSelectorDialog {
 	}
 }
 
-// Popup that collects export options (the same knobs ct2util exposes on the
-// command line, plus the executable PRG display toggles) before the file is
-// saved. On Return it hands the gathered ExportOptions to onConfirm (which opens
-// the save-file dialog); Esc cancels. Used for both packed .prg and .sid export.
+// Single "Export song" popup: pick the output format (Full player .prg /
+// Optimized .prg / PSID) and the options ct2util exposes on the command line plus
+// the executable-PRG display toggles. Options that don't apply to the chosen
+// format are shown greyed and skipped. On Return it hands the gathered
+// ExportOptions (including .format) to onConfirm, which opens the save-file
+// dialog; Esc cancels.
 class ExportOptionsDialog : Window {
-	enum Mode { Prg, Sid }
 	alias void delegate(ExportOptions) ConfirmCB;
 
 	private {
-		Mode mode;
 		ConfirmCB onConfirm;
-		string header;
 		int sel;
 		// Working values (assembled into ExportOptions on confirm). singleSubtune
 		// is held as 0 = "all" here; defaultSubtune is 1-based.
+		ExportFormat fFormat = ExportFormat.FullPrg;
 		int fAddr = 0x1000, fZp = 0, fSingle = 0, fDef = 1;
 		bool fExe = true, fInfo = true, fRaster = true, fTimer = true;
 	}
 
-	this(Mode mode, string header, ConfirmCB cb) {
+	this(ConfirmCB cb) {
 		super(Rectangle(0, 0, 1));
-		this.mode = mode;
-		this.header = header;
 		this.onConfirm = cb;
 	}
 
-	// kind codes: a=addr(hex16) z=zp(hex8) s=single(dec) d=default(dec),
+	// kind codes: F=format a=addr(hex16) z=zp(hex8) s=single(dec) d=default(dec),
 	// E/I/R/T = executable / show-info / raster-meter / timer toggles.
+	// Labels mirror the ct2util command-line option descriptions.
+	private enum LBLW = 29;     // label column width (longest label + a gap)
 	private struct Row { string label; char kind; }
-	private Row[] rows() {
-		Row[] r;
-		r ~= Row("Reloc address   $", 'a');
-		r ~= Row("Zero page       $", 'z');
-		r ~= Row("Single subtune   ", 's');
-		if(mode == Mode.Sid) {
-			r ~= Row("Default subtune  ", 'd');
+	private static immutable Row[] allRows = [
+		Row("Format", 'F'),
+		Row("Relocate output to address", 'a'),
+		Row("Relocate zero page", 'z'),
+		Row("Export single subtune", 's'),
+		Row("Set the default subtune", 'd'),
+		Row("Executable (player + UI)", 'E'),
+		Row("  Show title/author/release", 'I'),
+		Row("  Raster-time meter", 'R'),
+		Row("  Playback timer", 'T'),
+	];
+
+	// Which options apply to the currently selected format. Inapplicable rows are
+	// shown greyed and skipped by the cursor.
+	private bool enabled(char kind) {
+		final switch(fFormat) {
+		case ExportFormat.FullPrg:
+			// Verbatim current-subtune image: no relocate / zp / subtune select and
+			// no executable toggle (it IS the player+UI); display toggles apply.
+			return kind == 'F' || kind == 'I' || kind == 'R' || kind == 'T';
+		case ExportFormat.OptimizedPrg:
+			if(kind == 'd') return false;                        // PSID-only
+			if(kind == 'I' || kind == 'R' || kind == 'T') return fExe;
+			return true;                                          // F, a, z, s, E
+		case ExportFormat.Psid:
+			return kind == 'F' || kind == 'a' || kind == 'z'
+				|| kind == 's' || kind == 'd';                    // no shim/UI
 		}
-		else {
-			r ~= Row("Executable       ", 'E');
-			if(fExe) {
-				r ~= Row("  Show info      ", 'I');
-				r ~= Row("  Raster meter   ", 'R');
-				r ~= Row("  Timer          ", 'T');
-			}
-		}
-		return r;
 	}
 
 	private string valStr(char kind) {
 		switch(kind) {
-		case 'a': return format("%04X", fAddr);
-		case 'z': return fZp == 0 ? "00 (default)" : format("%02X", fZp);
-		case 's': return fSingle == 0 ? "all" : format("%d", fSingle);
+		case 'F':
+			final switch(fFormat) {
+			case ExportFormat.FullPrg:      return "Full player .prg";
+			case ExportFormat.OptimizedPrg: return "Optimized .prg";
+			case ExportFormat.Psid:         return "PSID (.sid)";
+			}
+		case 'a': return format("$%04X", fAddr);
+		case 'z': return fZp == 0 ? "$00 (default)" : format("$%02X", fZp);
+		case 's': return fSingle == 0 ? (fFormat == ExportFormat.FullPrg ? "current" : "all")
+									   : format("%d", fSingle);
 		case 'd': return format("%d", fDef);
-		case 'E': return fExe ? "yes" : "no";
+		case 'E':
+			if(fFormat == ExportFormat.FullPrg) return "yes";
+			if(fFormat == ExportFormat.Psid) return "n/a";
+			return fExe ? "yes" : "no";
 		case 'I': return fInfo ? "yes" : "no";
 		case 'R': return fRaster ? "yes" : "no";
 		case 'T': return fTimer ? "yes" : "no";
@@ -939,21 +960,23 @@ class ExportOptionsDialog : Window {
 	override void activate() { sel = 0; }
 
 	override void update() {
-		auto rs = rows();
-		int fw = 46;
-		int h = cast(int)rs.length + 6;
+		int fw = 48;
+		int h = cast(int)allRows.length + 6;
 		int x = screen.width / 2 - (fw + 2) / 2;
 		int y = screen.height / 2 - h / 2;
 		drawFrame(Rectangle(x, y, h, fw + 2));
-		screen.cprint(x + 2, y, 1, 0, " " ~ header ~ " ");
-		foreach(i, row; rs) {
+		screen.cprint(x + 2, y, 1, 0, " Export song ");
+		foreach(i, row; allRows) {
 			int ry = y + 2 + cast(int)i;
-			int fg = (cast(int)i == sel) ? 0 : 15;
-			int bg = (cast(int)i == sel) ? 15 : 0;
-			string line = format(" %s%s", row.label, valStr(row.kind));
+			bool on = enabled(row.kind);
+			int fg, bg;
+			if(cast(int)i == sel) { fg = 0; bg = 15; }       // selected (always enabled)
+			else if(on)           { fg = 15; bg = 0; }       // normal
+			else                  { fg = 11; bg = 0; }       // greyed / disabled
+			string line = format(" %s%s", row.label.leftJustify(LBLW), valStr(row.kind));
 			screen.cprint(x + 2, ry, fg, bg, line.leftJustify(fw - 2));
 		}
-		screen.cprint(x + 2, y + h - 3, 13, 0, "Up/Dn pick  Spc/<>/keys edit");
+		screen.cprint(x + 2, y + h - 3, 13, 0, "Up/Dn pick   < reduce   > increase");
 		screen.cprint(x + 2, y + h - 2, 13, 0, "Return: file & export   Esc: cancel");
 	}
 
@@ -964,16 +987,31 @@ class ExportOptionsDialog : Window {
 		if(fDef < 1) fDef = 1; if(fDef > SUBTUNE_MAX) fDef = SUBTUNE_MAX;
 	}
 
-	private void toggle(char kind) {
+	// delta < 0 reduces the value, delta > 0 increases it (bound to < / >).
+	// Toggles flip regardless of direction; Format cycles.
+	private void adjust(char kind, int delta) {
 		switch(kind) {
+		case 'F':
+			int f = (cast(int)fFormat + delta) % 3;
+			if(f < 0) f += 3;
+			fFormat = cast(ExportFormat)f;
+			break;
 		case 'E': fExe = !fExe; break;
 		case 'I': fInfo = !fInfo; break;
 		case 'R': fRaster = !fRaster; break;
 		case 'T': fTimer = !fTimer; break;
-		case 's': fSingle++; if(fSingle > SUBTUNE_MAX) fSingle = 0; break;
-		case 'd': fDef++; if(fDef > SUBTUNE_MAX) fDef = 1; break;
-		case 'a': fAddr = (fAddr + 0x100) & 0xffff; break;
-		case 'z': fZp = (fZp + 1) & 0xff; break;
+		case 's':
+			fSingle += delta;
+			if(fSingle < 0) fSingle = SUBTUNE_MAX;
+			else if(fSingle > SUBTUNE_MAX) fSingle = 0;
+			break;
+		case 'd':
+			fDef += delta;
+			if(fDef < 1) fDef = SUBTUNE_MAX;
+			else if(fDef > SUBTUNE_MAX) fDef = 1;
+			break;
+		case 'a': fAddr = (fAddr + delta * 0x100) & 0xffff; break;
+		case 'z': fZp = (fZp + delta) & 0xff; break;
 		default: break;
 		}
 	}
@@ -1005,42 +1043,59 @@ class ExportOptionsDialog : Window {
 		clampAll();
 	}
 
+	// Move the cursor by `dir`, skipping disabled rows.
+	private void move(int dir) {
+		int n = cast(int)allRows.length;
+		int i = sel;
+		foreach(_; 0 .. n) {
+			i = (i + dir + n) % n;
+			if(enabled(allRows[i].kind)) { sel = i; return; }
+		}
+	}
+
 	override int keypress(Keyinfo key) {
 		if(key.mods & KMOD_ALT) return OK;
-		auto rs = rows();
-		int n = cast(int)rs.length;
-		if(sel >= n) sel = n - 1;
-		char kind = rs[sel].kind;
+		if(!enabled(allRows[sel].kind)) move(1);   // keep cursor on an active row
+		char kind = allRows[sel].kind;
 		switch(key.raw) {
 		case SDLK_ESCAPE:
 			return CANCEL;
 		case SDLK_RETURN:
 			ExportOptions o;
+			o.format = fFormat;
 			o.relocAddress = fAddr;
 			o.zpAddress = fZp;
 			o.singleSubtune = (fSingle == 0) ? -1 : fSingle;
-			o.defaultSubtune = (mode == Mode.Sid) ? fDef : 1;
-			o.executable = (mode == Mode.Prg) ? fExe : false;
+			o.defaultSubtune = fDef;
+			// Only the optimized .prg honours the toggle; full-player is always the
+			// executable player+UI (dispatched by format), PSID is never executable.
+			o.executable = (fFormat == ExportFormat.OptimizedPrg) ? fExe
+						 : (fFormat == ExportFormat.FullPrg);
 			o.showInfo = fInfo;
 			o.showRastertime = fRaster;
 			o.showTimer = fTimer;
 			onConfirm(o);   // opens the save-file dialog; keep loop from closing it
 			return OK;
 		case SDLK_UP:
-			sel = (sel + n - 1) % n;
+			move(-1);
 			return OK;
 		case SDLK_DOWN:
-			sel = (sel + 1) % n;
+			move(1);
 			return OK;
 		case SDLK_LEFT:
+			adjust(kind, -1);
+			return OK;
 		case SDLK_RIGHT:
 		case SDLK_SPACE:
-			toggle(kind);
+			adjust(kind, +1);
 			return OK;
 		case SDLK_BACKSPACE:
 			backspace(kind);
 			return OK;
 		default:
+			// '<' / '>' (the keys the footer advertises) mirror Left / Right.
+			if(key.unicode == '<') { adjust(kind, -1); return OK; }
+			if(key.unicode == '>') { adjust(kind, +1); return OK; }
 			editDigit(kind, key.unicode);
 			return OK;
 		}

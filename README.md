@@ -8,14 +8,14 @@ across one or more voices, then copy / cut / paste / merge / "paste as new
 track(s)". Works in both the note column (F6) and the track column (F5). See the
 Block Selection section of the guide.
 
-Also new: **optimized export from the editor**. Alongside the verbatim live-image
-`.prg` (Shift-F10), the editor now exports a **packed `.prg`** (Ctrl-Shift-F10) and
-a **PSID `.sid`** (Alt-F10) — both purged/relocated like `ct2util`, through a small
-options dialog (relocation address, zero page, subtune selection). The packed
-`.prg` can either embed the self-running player + on-screen UI (same look & feel as
-the live `.prg`, with opt-out toggles for the title/author/release display, the
-raster-time meter and the playback clock) or contain just the player routine +
-compacted song data. See the Exporting section of the guide.
+Also new: a unified **Export song** dialog (Shift-F10) that picks the output
+**format** — *Full player .prg* (the verbatim live image), *Optimized .prg*
+(purged/relocated like `ct2util`), or *PSID .sid* — with the relevant `ct2util`
+options (relocation address, zero page, subtune selection) and, for the executable
+`.prg`, opt-out toggles for the title/author/release display, the raster-time meter
+and the playback clock. Options that don't apply to the chosen format are greyed
+out. The optimized `.prg` can also drop the player UI to leave just the player
+routine + compacted song data. See the Exporting section of the guide.
 
 Programmed by abaddon 2009-2017.
 

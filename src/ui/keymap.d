@@ -110,21 +110,9 @@ void registerShortcuts(UI ui) {
 		activateDialog(savedialog);
 	});
 
-	sm.register("save_prg", Ctx.global, "File",
-				"Save current subtune as a playable .prg", SDLK_F10, KMOD_SHIFT, {
-		prgdialog.setDirectory(getcwd());   // = the loaded .ct's dir
-		prgdialog.setFilename(proposePrgName());
-		activateDialog(prgdialog);
-	});
-
-	sm.register("save_prg_packed", Ctx.global, "File",
-				"Export an optimized, packed .prg (options dialog)", SDLK_F10, KMOD_SHIFT | KMOD_CTRL, {
-		activateDialog(prgOptDialog);
-	});
-
-	sm.register("save_sid", Ctx.global, "File",
-				"Export the song as a PSID .sid file (options dialog)", SDLK_F10, KMOD_ALT, {
-		activateDialog(sidOptDialog);
+	sm.register("export_song", Ctx.global, "File",
+				"Export song: Full player .prg / Optimized .prg / PSID (options dialog)", SDLK_F10, KMOD_SHIFT, {
+		activateDialog(exportDialog);
 	});
 
 	sm.register("quick_save", Ctx.global, "File",
@@ -718,9 +706,7 @@ void applyMenuLabels(UI ui) {
 		// File / Edit / View / Help
 		setMenuLabel("load_file", "Load song...");
 		setMenuLabel("save_file", "Save song...");
-		setMenuLabel("save_prg", "Export .prg...");
-		setMenuLabel("save_prg_packed", "Export packed .prg...");
-		setMenuLabel("save_sid", "Export .sid...");
+		setMenuLabel("export_song", "Export song...");
 		setMenuLabel("quick_save", "Quick save");
 		setMenuLabel("optimize_song", "Optimize song");
 		setMenuLabel("clear_sequences", "Clear sequences");

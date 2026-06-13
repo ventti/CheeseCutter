@@ -146,9 +146,17 @@ ubyte[] doBuild(Song song, int address, int zpAddress,
  + Shared export API used by BOTH the ct2util CLI and the editor, so the
  + purge/validate/relocate logic lives in exactly one place.
  + ExportOptions mirrors the ct2util command-line switches (-r/-zp/-s/-d) plus the
- + editor-only PRG display toggles.
+ + editor-only output format + PRG display toggles.
  +/
+
+// Output format the editor's "Export song" dialog offers.
+//  FullPrg      - the verbatim live-image self-running .prg (buildResidentImage)
+//  OptimizedPrg - purged/relocated player+data, optionally wrapped in the shim
+//  Psid         - PSID .sid file
+enum ExportFormat { FullPrg, OptimizedPrg, Psid }
+
 struct ExportOptions {
+	ExportFormat format = ExportFormat.FullPrg;
 	int  relocAddress   = 0x1000;  // -r  : relocate player+data here
 	int  zpAddress      = 0;       // -zp : relocate zero page (0 = leave default)
 	int  singleSubtune  = -1;      // -s  : export only this subtune (1-based; -1 = all)
@@ -240,6 +248,20 @@ ubyte[] exportPrg(Song live, bool ntsc, ref ExportOptions o, bool verbose = fals
 						reloc, reloc, reloc,
 						s.ver > 7, startSub,
 						o.showInfo, o.showRastertime, o.showTimer);
+}
+
+// Single entry point for the editor's "Export song" dialog: dispatch on the
+// chosen format. The full-player .prg ships the live image verbatim (current
+// subtune, not relocated/purged) but honours the same display toggles.
+ubyte[] exportSong(Song live, bool ntsc, ref ExportOptions o) {
+	final switch(o.format) {
+	case ExportFormat.FullPrg:
+		return buildResidentImage(live, ntsc, true, o.showInfo, o.showRastertime, o.showTimer);
+	case ExportFormat.OptimizedPrg:
+		return exportPrg(live, ntsc, o);
+	case ExportFormat.Psid:
+		return exportSid(live, o);
+	}
 }
 
 /+
@@ -383,18 +405,21 @@ private ubyte[] wrapWithShim(Song song, bool ntsc, bool autoPlay,
 	return prg;
 }
 
-ubyte[] buildResidentImage(Song song, bool ntsc, bool autoPlay) {
+ubyte[] buildResidentImage(Song song, bool ntsc, bool autoPlay,
+						   bool showInfo = true, bool showRastertime = true,
+						   bool showTimer = true) {
 	bool newKeyjam = song.ver > 7;
 	int subnote = newKeyjam ? song.offsets[Offsets.Subnoteplay] : 0x1009;
 	int submplay = newKeyjam ? song.offsets[Offsets.Submplayplay] : 0x100c;
 	int shtrans = song.offsets[Offsets.SHTRANS];
 
 	// Ship the live editor memory image verbatim ($0e00..) so addresses match
-	// song.offsets[] 1:1 (full display + raster meter + clock enabled).
+	// song.offsets[] 1:1. Display toggles default on (the --ultimate/--vice host
+	// upload path keeps the full display); the editor's export dialog can opt out.
 	ubyte[] liveImg = song.memspace[ULTIMATE_IMG_LO .. ULTIMATE_IMG_HI].dup;
 	ubyte[] prg = wrapWithShim(song, ntsc, autoPlay, liveImg, ULTIMATE_IMG_LO,
 							   0x1000, 0x1003, 0x1006, subnote, submplay, shtrans,
-							   newKeyjam, 0, true, true, true);
+							   newKeyjam, 0, showInfo, showRastertime, showTimer);
 
 	// Prime the player to start the current subtune from the top, mirroring
 	// audio.player.initPlayOffset([0,0,0],[0,0,0]) + all voices on. The

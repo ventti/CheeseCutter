@@ -128,9 +128,7 @@ bar it flips the highlighted on/off item), but it works fine inside a query
 | <kbd>Alt</kbd>-<kbd>Return</kbd> | Toggle fullscreen |
 | <kbd>F9</kbd> | Load song |
 | <kbd>F10</kbd> | Save song |
-| <kbd>Shift</kbd>-<kbd>F10</kbd> | Save current subtune as a playable (live-image) `.prg` |
-| <kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>F10</kbd> | Export an optimized, packed `.prg` (options dialog) |
-| <kbd>Alt</kbd>-<kbd>F10</kbd> | Export the song as a PSID `.sid` file (options dialog) |
+| <kbd>Shift</kbd>-<kbd>F10</kbd> | Export song (Full player `.prg` / Optimized `.prg` / PSID; options dialog) |
 | <kbd>Ctrl</kbd>-<kbd>F10</kbd> | Quick save (no filename prompt) |
 | <kbd>F11</kbd> | About dialog |
 | <kbd>F12</kbd> | Context help |
@@ -177,48 +175,45 @@ In the load (<kbd>F9</kbd>), save (<kbd>F10</kbd>) and `.prg` export dialogs:
 | <kbd>Ctrl</kbd>-<kbd>F8</kbd> | Next filter preset |
 | <kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>F8</kbd> | Previous filter preset |
 
-## Exporting a playable .prg
+## Exporting a song
 
-<kbd>Shift</kbd>-<kbd>F10</kbd> saves the **current subtune** as a self-running
-C64 program (`.prg`). The dialog opens in the loaded `.ct` file's directory and
-proposes `<name>.prg`. The exported program is standalone — run it on a real C64
-or in an emulator (e.g. VICE `x64sc`); it shows the song title/author/release and
-a live `Time: MM:SS / $RR` line (raster time used by the player), and the border
-flashes dark green for the raster time consumed each frame.
+<kbd>Shift</kbd>-<kbd>F10</kbd> opens the **Export song** dialog. Pick the output
+**Format** at the top (cursor on it; <kbd>&lt;</kbd>/<kbd>&gt;</kbd> or
+<kbd>←</kbd>/<kbd>→</kbd> cycle), then set the options below; options that don't
+apply to the chosen format are greyed and skipped. <kbd>Return</kbd> continues to
+the file-save dialog (the **same one used for saving a song** — type-ahead, song
+preview, overwrite confirmation); <kbd>Esc</kbd> cancels.
 
-This live-image `.prg` ships the whole editor memory image verbatim (it is the
-same image used for hardware playback), so it is large and unoptimized.
+Navigate rows with <kbd>↑</kbd>/<kbd>↓</kbd>; on the selected row,
+<kbd>&lt;</kbd> reduces and <kbd>&gt;</kbd> increases the value (toggles flip), and
+you can type hex/decimal digits directly.
 
-## Exporting an optimized .prg / .sid
+**Formats:**
 
-For distributable files the editor offers the same optimized export that
-`ct2util` does, straight from the UI:
+- **Full player .prg** — the **current subtune** shipped as the whole editor memory
+  image verbatim (the same image used for hardware playback): standalone and
+  self-running, but large and unoptimized. Honours the display toggles below.
+- **Optimized .prg** — the song purged (unused sequences/instruments/table entries
+  removed), relocated and re-assembled, exactly like `ct2util prg`. Far smaller.
+- **PSID (.sid)** — a PSID file, exactly like `ct2util sid`.
 
-- <kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>F10</kbd> — **packed `.prg`**
-- <kbd>Alt</kbd>-<kbd>F10</kbd> — **PSID `.sid`**
+**Options** (each enabled only where it applies):
 
-Each opens a small **options dialog** first (navigate with the arrow keys; edit
-with the digit/hex keys; toggle with <kbd>Space</kbd>/<kbd>←</kbd>/<kbd>→</kbd>;
-<kbd>Return</kbd> continues to the file-save dialog, <kbd>Esc</kbd> cancels). The
-song is purged (unused sequences/instruments/table entries removed), relocated and
-re-assembled, exactly like `ct2util`. Options:
-
-- **Reloc address** — where the player + data is relocated (default `$1000`).
-- **Zero page** — relocate the player's zero-page usage (`00` = leave default).
-- **Single subtune** — export only one subtune (`all` exports every subtune).
-- **Default subtune** (`.sid` only) — the PSID start tune.
-- **Executable** (`.prg` only) — when **yes**, the file embeds the self-running
-  player **and** the on-screen UI (autostart + display), so it looks and plays
-  just like the <kbd>Shift</kbd>-<kbd>F10</kbd> `.prg` but is far smaller. When
-  **no**, the file is just the player routine + compacted song data (the same blob
-  `ct2util prg` produces), to be driven by your own player.
-- **Show info / Raster meter / Timer** (`.prg`, executable only) — opt out of the
-  title/author/release rows, the green raster-time border meter, and the
-  `Time: MM:SS` clock respectively. They have no effect on the bare player+data
-  variant, which carries no display at all.
-
-After the options dialog you get the **same file-save dialog used for saving a
-song** (type-ahead, song preview, overwrite confirmation).
+- **Relocate output to address** — where the player + data is relocated (default
+  `$1000`; optimized / PSID only).
+- **Relocate zero page** — relocate the player's zero-page usage (`$00` = leave
+  default; optimized / PSID only).
+- **Export single subtune** — export only one subtune (`all` exports every subtune;
+  optimized / PSID only — the full player always uses the current subtune).
+- **Set the default subtune** — the PSID start tune (PSID only).
+- **Executable (player + UI)** — optimized `.prg` only: when **yes** the file embeds
+  the self-running player **and** the on-screen UI (autostart + display), looking
+  and playing like the full-player `.prg` but far smaller; when **no** it is just
+  the player routine + compacted song data (the blob `ct2util prg` produces), to be
+  driven by your own player. (The full player is always executable; PSID never is.)
+- **Show title/author/release · Raster-time meter · Playback timer** — opt out of
+  the title/author/release rows, the green raster-time border meter, and the
+  `Time: MM:SS` clock in the on-screen display (executable `.prg` only).
 
 ## Hardware playback (C64 Ultimate)
 

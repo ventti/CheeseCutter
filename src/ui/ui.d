@@ -56,9 +56,9 @@ final class UI {
 	package {
 		int vismode = VisMode.Regs;
 		AboutDialog aboutdialog;
-		FileSelectorDialog loaddialog, savedialog, prgdialog, sidsavedialog, prgpacksavedialog;
-		ExportOptionsDialog prgOptDialog, sidOptDialog;
-		ExportOptions prgExportOpts, sidExportOpts;
+		FileSelectorDialog loaddialog, savedialog, exportsavedialog;
+		ExportOptionsDialog exportDialog;
+		ExportOptions exportOpts;
 	}
 	enum SPLASH_DURATION_MS = 2500;
 	static Statusline statusline;
@@ -96,16 +96,9 @@ final class UI {
 												  dialog_width), &loadCallback, &importCallback);
 		savedialog = new SaveFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
 												  dialog_width), &saveCallback);
-		prgdialog = new SaveFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
-												  dialog_width), &savePrgCallback, "Save playable .prg");
-		prgpacksavedialog = new SaveFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
-												  dialog_width), &savePackedPrgCallback, "Export packed .prg");
-		sidsavedialog = new SaveFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
-												  dialog_width), &saveSidCallback, "Export .sid");
-		prgOptDialog = new ExportOptionsDialog(ExportOptionsDialog.Mode.Prg,
-											   "Export packed .prg", &prgOptConfirm);
-		sidOptDialog = new ExportOptionsDialog(ExportOptionsDialog.Mode.Sid,
-											   "Export .sid (PSID)", &sidOptConfirm);
+		exportsavedialog = new SaveFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
+												  dialog_width), &saveExportCallback, "Export song");
+		exportDialog = new ExportOptionsDialog(&exportConfirm);
 
 		int aboutdlg_width = screen.width - 18;
 		int aboutdlg_height = 13;
@@ -436,64 +429,26 @@ final class UI {
 		return fn ~ ext;
 	}
 
-	package string proposePrgName() { return proposeExportName(".prg"); }
-	package string proposeSidName() { return proposeExportName(".sid"); }
+	// Step 1 of "Export song": the options dialog confirmed; stash the options and
+	// open the save-file dialog (the same one used for saving a song), proposing
+	// the right extension for the chosen format.
+	private void exportConfirm(ExportOptions o) {
+		exportOpts = o;
+		string ext = (o.format == ExportFormat.Psid) ? ".sid" : ".prg";
+		exportsavedialog.setDirectory(getcwd());
+		exportsavedialog.setFilename(proposeExportName(ext));
+		activateDialog(exportsavedialog);
+	}
 
-	private void savePrgCallback(string s) {
+	// Step 2: build and write the export using the stashed options + format.
+	private void saveExportCallback(string s) {
 		try {
-			ubyte[] prg = ct.build.buildResidentImage(song, audio.player.ntsc != 0, true); // standalone: auto-play
-			std.file.write(s, prg);
+			ubyte[] data = ct.build.exportSong(song, audio.player.ntsc != 0, exportOpts);
+			std.file.write(s, data);
 		}
 		catch(Exception e) {
 			stderr.writeln(e.toString);
-			statusline.display("Could not write .prg! " ~ e.msg);
-			return;
-		}
-		string fn = s.strip();
-		auto ind = 1 + fn.lastIndexOf(DIR_SEPARATOR);
-		statusline.display(format("Saved playable \"%s\".", fn[ind .. $]));
-	}
-
-	// Step 1 of packed-.prg / .sid export: the options dialog confirmed; stash the
-	// options and open the save-file dialog (same one used for saving a song).
-	private void prgOptConfirm(ExportOptions o) {
-		prgExportOpts = o;
-		prgpacksavedialog.setDirectory(getcwd());
-		prgpacksavedialog.setFilename(proposePrgName());
-		activateDialog(prgpacksavedialog);
-	}
-
-	private void sidOptConfirm(ExportOptions o) {
-		sidExportOpts = o;
-		sidsavedialog.setDirectory(getcwd());
-		sidsavedialog.setFilename(proposeSidName());
-		activateDialog(sidsavedialog);
-	}
-
-	// Step 2: write the optimized export with the stashed options.
-	private void savePackedPrgCallback(string s) {
-		try {
-			ubyte[] prg = ct.build.exportPrg(song, audio.player.ntsc != 0, prgExportOpts);
-			std.file.write(s, prg);
-		}
-		catch(Exception e) {
-			stderr.writeln(e.toString);
-			statusline.display("Could not write .prg! " ~ e.msg);
-			return;
-		}
-		string fn = s.strip();
-		auto ind = 1 + fn.lastIndexOf(DIR_SEPARATOR);
-		statusline.display(format("Exported packed \"%s\".", fn[ind .. $]));
-	}
-
-	private void saveSidCallback(string s) {
-		try {
-			ubyte[] sid = ct.build.exportSid(song, sidExportOpts);
-			std.file.write(s, sid);
-		}
-		catch(Exception e) {
-			stderr.writeln(e.toString);
-			statusline.display("Could not write .sid! " ~ e.msg);
+			statusline.display("Could not write export! " ~ e.msg);
 			return;
 		}
 		string fn = s.strip();
@@ -545,8 +500,8 @@ final class UI {
 		infobar.refresh();
 
 		// sync save filesel to load filesel in case dir was changed
-		// (prgdialog too, so the .prg is offered in the loaded .ct's dir)
-		foreach(d; [loaddialog, savedialog, prgdialog, prgpacksavedialog, sidsavedialog]) {
+		// (exportsavedialog too, so the export is offered in the loaded .ct's dir)
+		foreach(d; [loaddialog, savedialog, exportsavedialog]) {
 			d.setFilename(fn);
 			d.setDirectory(getcwd());
 		}
@@ -591,7 +546,7 @@ final class UI {
 		loadCallback(tmp);
 		try { std.file.remove(tmp); } catch(Exception e) {}
 		state.filename = "";
-		foreach(d; [loaddialog, savedialog, prgdialog, prgpacksavedialog, sidsavedialog])
+		foreach(d; [loaddialog, savedialog, exportsavedialog])
 			d.setFilename("");
 		statusline.display("New song.");
 	}
