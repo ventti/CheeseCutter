@@ -42,8 +42,7 @@ package enum PAGESTEP = 16;
 package enum CONFIRM_TIMEOUT = 90;
 package enum UPDATE_RATE = 2; // 50 / n times per second
 
-package int tickcounter1, tickcounter3 = -1;
-package int clearcounter, optimizecounter, escapecounter, restartcounter;
+package int tickcounter1;
 
 enum VisMode { None, Regs, Oscilloscope }
 
@@ -179,12 +178,6 @@ final class UI {
 			audio.player.stop();
 			statusline.display(e.toString());
 		}
-		if((tickcounter3 >= 0) && ++tickcounter3 > 20) {
-			clearcounter = optimizecounter = escapecounter = restartcounter = 0;
-			infobar.update();
-			drawMenu();
-			tickcounter3 = -1;
-		}
 		statusline.timerEvent();
 		// Draw the menu bar on EVERY timer event, not inside the tick-gated
 		// block below: tickcounter1 only advances from player frame ticks
@@ -291,25 +284,6 @@ final class UI {
 
 	int keypress(Keyinfo key) {
 
-		/+ old buggy coldstart code
-		if(key.mods & KMOD_ALT && key.mods & KMOD_CTRL && key.raw == SDLK_KP0) {
-			if(++restartcounter > 1) {
-				song = new Song();
-				toplevel.sequencer.reset();
-				refresh();
-				clearcounter = 0;
-				UI.statusline.display("Editor restarted.");
-				savedialog.setFilename("");
-				// TODO: find out why tracklist is not erased
-				filename = "";
-			}
-			else {
-				UI.statusline.display("Press again to confirm editor cold start...");
-				tickcounter3 = 0;
-			}
-			return OK;
-		}
-		else+/
 		bool skip_imm_keypress = false; //workaround for F11 - crapchars in savedialog
 
 		// The command palette, when open, gets every key first (like the menu

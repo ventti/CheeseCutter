@@ -78,8 +78,8 @@ _Generated from the shortcut registry (com.shortcuts)._
 
 | Shortcut | Action |
 |---|---|
-| `Alt-Keypad 0` / `Ctrl-Alt-C` | Clear sequences (press twice to activate) |
-| `Alt-Keypad .` / `Ctrl-Alt-O` | Optimize (clear unused sequences & data) |
+| `Alt-Keypad 0` / `Ctrl-Alt-C` | Clear all sequences |
+| `Alt-Keypad .` / `Ctrl-Alt-O` | Optimize song (clear unused sequences & data) |
 
 ### Song variables
 

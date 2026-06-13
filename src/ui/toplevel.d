@@ -456,28 +456,17 @@ final package class Toplevel : WindowSwitcher, Undoable {
 	}
 
 	package void optimizeSong() {
-		if(++optimizecounter > 1) {
-			refresh();
-			// TODO: VALIDATION HERE BEFORE PURGING... PurgeExpception should be useless if validate covers all errorcases
-			try {
-				saveSongState();
-				(new Purge(song,true)).purgeAll();
-			}
-			catch(PurgeException e) {
-				UI.statusline.display(e.toString);
-				optimizecounter = 0;
-				return;
-
-			}
-
-			refresh();
-			UI.statusline.display("Song data optimized.");
-			optimizecounter = 0;
+		// TODO: VALIDATION HERE BEFORE PURGING... PurgeException should be useless if validate covers all errorcases
+		try {
+			saveSongState();
+			(new Purge(song,true)).purgeAll();
 		}
-		else {
-			UI.statusline.display("Press again to confirm song data optimization...");
-			tickcounter3 = 0;
+		catch(PurgeException e) {
+			UI.statusline.display(e.toString);
+			return;
 		}
+		refresh();
+		UI.statusline.display("Song data optimized.");
 	}
 
 	private void saveSongState() {
@@ -532,32 +521,11 @@ final package class Toplevel : WindowSwitcher, Undoable {
 		return createSongState();
 	}
 
-	private void clearSong() {
-		if(++restartcounter > 1) {
-			//song.open(cast(ubyte[])import("player.bin"));
-			sequencer.reset();
-			refresh();
-			clearcounter = 0;
-			//savedialog.setFilename("");
-			state.filename = "";
-			UI.statusline.display("Editor restarted.");
-		}
-		else {
-			UI.statusline.display("Press again to confirm editor cold start...");
-			tickcounter3 = 0;
-		}
-	}
-
 	package void clearSeqs() {
-		if(++clearcounter > 1) {
-			song.clearSeqs();
-			sequencer.reset();
-			clearcounter = 0;
-			UI.statusline.display("Sequence data cleared.");
-		}
-		else {
-			UI.statusline.display("Press again to confirm sequence data clearing...");
-			tickcounter3 = 0;
-		}
+		saveSongState();          // undo point (same snapshot optimize uses)
+		song.clearSeqs();
+		sequencer.reset();
+		refresh();
+		UI.statusline.display("Sequence data cleared.");
 	}
 }

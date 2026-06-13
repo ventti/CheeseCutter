@@ -380,14 +380,16 @@ void registerShortcuts(UI ui) {
 
 	// Song Management
 	sm.register("clear_sequences", Ctx.global, "Song management",
-				"Clear sequences (press twice to activate)", SDLK_KP_0, KMOD_ALT, {
-		toplevel.clearSeqs();
+				"Clear all sequences", SDLK_KP_0, KMOD_ALT, {
+		activateDialog(new ConfirmationDialog("Clear all sequence data? (y/N) ",
+			(int param) { if(param == 0) toplevel.clearSeqs(); }));
 	});
 	sm.bindAlias("clear_sequences", SDLK_c, KMOD_CTRL | KMOD_ALT);
 
 	sm.register("optimize_song", Ctx.global, "Song management",
-				"Optimize (clear unused sequences & data)", SDLK_KP_PERIOD, KMOD_ALT, {
-		toplevel.optimizeSong();
+				"Optimize song (clear unused sequences & data)", SDLK_KP_PERIOD, KMOD_ALT, {
+		activateDialog(new ConfirmationDialog("Optimize song, removing unused data? (y/N) ",
+			(int param) { if(param == 0) toplevel.optimizeSong(); }));
 	});
 	sm.bindAlias("optimize_song", SDLK_o, KMOD_CTRL | KMOD_ALT);
 

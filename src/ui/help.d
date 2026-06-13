@@ -45,8 +45,8 @@ Ctrl-Keypad - +.........Decrease/increase default song speed
 Alt-Keypad - +..........Decrease/increase multispeed framecall counter 
 { } (AltGr-7 / AltGr-0).Decrease/increase multispeed framecall counter
 Alt-T...................Edit title / author / release info
-Ctrl-Alt-C..............Clear sequences (press TWICE to activate)
-Ctrl-Alt-O..............Optimize (clear unused sequences & data)
+Ctrl-Alt-C..............Clear all sequences (asks for confirmation)
+Ctrl-Alt-O..............Optimize song (clear unused sequences & data)
 ", "
 `+dMoving between tables\n
 Tab.....................Move cursor between subwindows
