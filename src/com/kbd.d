@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Keyboard scancode translation, including the super/cmd layer, into editor key events.
 */
 
 module com.kbd;

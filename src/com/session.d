@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Editor session state — the undo/redo stack (Undoable) plus editor and tracklist state.
 */
 
 module com.session;

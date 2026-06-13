@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Top info bar and bottom status line (Infobar / Statusline).
 */
 
 module ui.statusbar;

@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+ContextHelp data type backing the F12 per-context help pages.
 */
 
 module ui.help;

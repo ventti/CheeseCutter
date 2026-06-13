@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Realtime audio callback — advances the player each tick, runs the 6502 player code, and captures SID register dumps (SongState).
 */
 
 module audio.callback;

@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Top-level editor screen composing the sequencer, editor tables and bars (Toplevel).
 */
 
 module ui.toplevel;

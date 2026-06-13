@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Cycle-stepped MOS 6510 CPU emulator that runs the C64 player code in-process.
 */
 
 module com.cpu;

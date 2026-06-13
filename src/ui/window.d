@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Base windowing primitives — Window, WindowSwitcher, Rectangle, Hotspot.
 */
 
 module ui.window;

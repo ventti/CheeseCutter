@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Follow-play window that keeps the editor view tracking the playing position.
 */
 
 module seq.fplay;

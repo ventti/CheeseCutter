@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+SDL audio device setup and the mix buffer that carries reSID output to the sound card.
 */
 
 module audio.audio;

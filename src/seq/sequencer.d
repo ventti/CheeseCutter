@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Central sequencer view — hosts the per-voice track and sequence editor tables and the orderlist.
 */
 
 module seq.sequencer;

@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+High-level playback control: play/stop/keyjam state, SID model selection and reSID engine wiring.
 */
 
 module audio.player;

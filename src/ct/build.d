@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Song-image build and export — validation plus the FullPrg / OptimizedPrg / PSID formats (ExportOptions).
 */
 
 module ct.build;

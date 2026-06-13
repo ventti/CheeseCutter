@@ -1,7 +1,8 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
 
-This visualizer lib vibe-coded by Vent
+Oscilloscope / SID-register visualizer rendering into the text framebuffer.
+(This visualizer lib vibe-coded by Vent.)
 
 */
 

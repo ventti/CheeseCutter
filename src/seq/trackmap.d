@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Orderlist 'trackmap' editor tables mapping tracks to sequences (TrackmapVoice / TrackmapTable).
 */
 
 module seq.trackmap;

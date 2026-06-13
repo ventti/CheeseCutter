@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Optimize/clean pass — removes unused instruments, tables and sequence rows (Purge).
 */
 
 /*

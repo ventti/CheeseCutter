@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Shared utilities and app identity — APP_NAME/APP_VERSION (string-imported from `Version`) and PET-string helpers.
 */
 
 module com.util;

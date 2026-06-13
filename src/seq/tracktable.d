@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Track editor tables (TrackVoice / BaseTrackTable / TrackTable) layered over the sequence tables.
 */
 
 module seq.tracktable;

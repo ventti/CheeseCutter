@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+ct2util CLI — compiles/optimizes a .ct song into .prg or .sid, sharing ct.build/ct.purge with the editor.
 */
 
 import com.cpu;

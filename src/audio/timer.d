@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Playback timing: the frame- and row-tick counters that pace the player.
 */
 
 module audio.timer;

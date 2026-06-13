@@ -1,8 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
 
-Generic 2-D selection geometry + a block clipboard, shared by the sequencer
-note column and track column (and, later, the wave/pulse/filter sub-tables).
+Generic 2-D selection geometry + a block clipboard, shared by the sequencer note and track columns.
 Deliberately free of SDL / screen / ct.base dependencies so it can be reused
 anywhere a grid of cells needs rectangular select + copy/cut/paste/merge.
 
