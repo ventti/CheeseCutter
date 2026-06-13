@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Per-voice note-sequence editor tables (SeqVoice / SequenceTable).
 */
 
 module seq.seqtable;
@@ -183,6 +185,15 @@ class SeqVoice : Voice, Undoable {
 					if(scry < area.y + 1) break;
 					Element d = seq.data[i];
 					screen.fprint(area.x + 4, scry, d.toString(wseq.element.transpose));
+					if(d.instr.hasValue) {   // user color from instrument description ($X/$XY)
+						auto uc = song.instrumentColor(d.instr.value);
+						if(uc.fg >= 0 || uc.bg >= 0) {
+							int fg = uc.fg >= 0 ? uc.fg : 15;   // 15 = default instr fg here
+							int bg = uc.bg >= 0 ? uc.bg : 0;
+							screen.setColor(area.x + 8, scry, fg, bg);
+							screen.setColor(area.x + 9, scry, fg, bg);
+						}
+					}
 					if(state.activeInstrument >= 0 &&
 					   d.instr.hasValue &&
 					   d.instr.value == state.activeInstrument) {

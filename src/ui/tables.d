@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Instrument and command editor panels (HexTable / InsTable / CmdTable).
 */
 
 module ui.tables;
@@ -517,14 +519,24 @@ class InsValueTable : HexTable {
 
 			float brightness = audio.visualizer.getInstrumentBrightness(p);
 			bool isActiveInstrument = state.activeInstrument >= 0 && state.activeInstrument == p;
-			int instrNumColor = isActiveInstrument ? activeInstrumentColor : 12;
 
-			if(!isActiveInstrument && brightness > 0.01f) {
+			int instrNumColor = 12;   // default gray
+			int instrNumBg = 0;
+			auto uc = song.instrumentColor(p);   // user color from description ($X/$XY)
+			if(uc.fg >= 0) instrNumColor = uc.fg;
+			if(uc.bg >= 0) instrNumBg = uc.bg;
+
+			if(!isActiveInstrument && brightness > 0.01f) {   // playback highlight overrides
 				instrNumColor = brightness > 0.66f ? 1 :
 					brightness > 0.33f ? 15 : 12;
+				instrNumBg = 0;
+			}
+			if(isActiveInstrument) {   // active instrument overrides all
+				instrNumColor = activeInstrumentColor;
+				instrNumBg = 0;
 			}
 
-			screen.cprint(area.x, area.y + i + 1, instrNumColor, 0, format("%02X:", p));
+			screen.cprint(area.x, area.y + i + 1, instrNumColor, instrNumBg, format("%02X:", p));
 
 		// Print instrument data bytes
 		for(j=0; j<8; j++) {

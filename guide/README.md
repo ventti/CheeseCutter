@@ -355,6 +355,29 @@ Instrument bytes:
 | G | Unused |
 | H | Wave table pointer |
 
+### Instrument color tags
+
+You can color-code an instrument by putting a `$` tag anywhere in its
+description (the text field to the right of the instrument bytes). The digit(s)
+after `$` are hex `0`–`F`, the 16 standard C64 palette colors:
+
+| Tag | Effect |
+| --- | --- |
+| `$X` | Draw the instrument **number** in palette color `X` (foreground only; background unchanged) |
+| `$XY` | Foreground color `X` **and** background color `Y` for the instrument number |
+
+The tag recolors the instrument's number both here in the instruments list and
+everywhere it appears in the track view, so a sound is easy to spot at a glance.
+The first valid `$` tag wins, and a `$` not followed by a hex digit is ignored
+(so it stays usable as ordinary text). The tag text itself remains visible in
+the description.
+
+The color only **replaces the default gray** — the editing cursor, the
+playback/selection highlight and the active-instrument color always override it,
+so navigation stays readable. Example: a description of `Lead $E` shows the
+`Lead` number in light blue; `Bass $1F` gives a white number on a light-grey
+background.
+
 ![Wave table](pics/wave.png)
 
 Wave table byte A is transpose/control and byte B is waveform/delay:

@@ -17,6 +17,14 @@ and the playback clock. Options that don't apply to the chosen format are greyed
 out. The optimized `.prg` can also drop the player UI to leave just the player
 routine + compacted song data. See the Exporting section of the guide.
 
+Also new: **instrument color tags** — put `$X` or `$XY` (hex digits `0`–`F`,
+the 16 C64 palette colors) anywhere in an instrument's description to recolor
+that instrument's number in the instruments list and the track view. `$X` sets
+the number's foreground color; `$XY` sets foreground `X` and background `Y`. It
+only replaces the default gray — the cursor, the playback/selection highlight
+and the active-instrument color always take precedence. See the Player Tables
+section of the guide.
+
 Programmed by abaddon 2009-2017.
 
 Mac OSX and D2 port by Ruk 2013.

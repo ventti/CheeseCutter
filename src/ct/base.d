@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+In-memory song model — the .ct/.ct2 data format: notes, commands, instruments, tables and memory offsets.
 */
 module ct.base;
 import com.cpu;
@@ -756,6 +758,10 @@ SongInfo readSongInfo(string fn) {
 	return info;
 }
 
+/// User color preference parsed from an instrument description (see
+/// Song.instrumentColor). Both fields are C64 palette indices 0..15, or -1 when unset.
+struct InstrumentColor { int fg = -1; int bg = -1; }
+
 class Song {
 	enum DatafileOffset {
 		Binary,
@@ -1235,6 +1241,35 @@ class Song {
 	int ver = SONG_REVISION, clock, multiplier = 1, sidModel, fppres;
 	char[32] title = ' ', author = ' ', release = ' ', message = ' ';
 	char[32][48] insLabels;
+
+	/// Parse an instrument's description for a `$X`/`$XY` color directive.
+	/// `$X` sets the instrument-number foreground; `$XY` sets foreground X and
+	/// background Y. Digits are C64 palette indices 0..F. The first valid marker
+	/// wins; a `$` not followed by a hex digit is ignored. Returns -1 for unset.
+	InstrumentColor instrumentColor(int ins) {
+		InstrumentColor c;
+		if(ins < 0 || ins >= 48) return c;
+		static int hexDigit(char ch) {
+			if(ch >= '0' && ch <= '9') return ch - '0';
+			if(ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+			if(ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+			return -1;
+		}
+		auto s = insLabels[ins][];
+		for(size_t i = 0; i + 1 < s.length; i++) {
+			if(s[i] != '$') continue;
+			int d1 = hexDigit(s[i+1]);
+			if(d1 < 0) continue;
+			c.fg = d1;
+			if(i + 2 < s.length) {
+				int d2 = hexDigit(s[i+2]);
+				if(d2 >= 0) c.bg = d2;
+			}
+			break;
+		}
+		return c;
+	}
+
 	private Features features;
 	CPU cpu;
 	ubyte[] sidbuf;
