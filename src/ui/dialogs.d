@@ -903,47 +903,70 @@ class ExportOptionsDialog : Window {
 		int fAddr = 0x1000, fZp = 0, fSingle = 0, fDef = 1;
 		bool fExe = true, fInfo = true, fRaster = true, fTimer = true;
 		int fDur = 180, fFade = 5;       // audio: render length / fade-out, seconds
+		bool fNorm = false;              // audio: peak-normalize
+		int fBits = 16;                  // audio: WAV bit depth (8/16/24, 32 = float)
+		int fRate = 48000;               // audio: sample rate (Hz)
+		string fFlac = "--best";         // audio: editable flac encoder flags
 		// Selectable formats, in cycle order. Flac is only offered when the `flac`
 		// CLI is present (we transcode WAV->FLAC through it).
 		ExportFormat[] formats;
+		// Mode + presentation, chosen in the ctor: Export (.prg/PSID) vs Render
+		// (.wav/.flac). The row set, format list, title and width differ per mode.
+		bool audioMode;
+		Row[] rows;
+		string dlgTitle;
+		int frameW, lblW;
 	}
 
-	this(ConfirmCB cb) {
+	this(ConfirmCB cb, bool audioMode) {
 		super(Rectangle(0, 0, 1));
 		this.onConfirm = cb;
-		formats = [ExportFormat.FullPrg, ExportFormat.OptimizedPrg,
-				   ExportFormat.Psid, ExportFormat.Wav];
-		if(flacAvailable())
-			formats ~= ExportFormat.Flac;
+		this.audioMode = audioMode;
+		if(audioMode) {
+			fFormat = ExportFormat.Wav;
+			formats = [ExportFormat.Wav];
+			if(flacAvailable())
+				formats ~= ExportFormat.Flac;
+			rows = [Row("Format", 'F'), Row("Render subtune", 's'),
+					Row("Duration (sec)", 'u'), Row("Fade-out (sec)", 'o'),
+					Row("Normalize", 'N'), Row("WAV bit depth", 'B'),
+					Row("Sample rate (Hz)", 'H'), Row("FLAC options", 'C')];
+			dlgTitle = " Render audio ";
+			frameW = 60; lblW = 20;
+		}
+		else {
+			fFormat = ExportFormat.FullPrg;
+			formats = [ExportFormat.FullPrg, ExportFormat.OptimizedPrg,
+					   ExportFormat.Psid];
+			rows = [Row("Format", 'F'), Row("Relocate output to address", 'a'),
+					Row("Relocate zero page", 'z'), Row("Export single subtune", 's'),
+					Row("Set the default subtune", 'd'), Row("Executable (player + UI)", 'E'),
+					Row("  Show title/author/release", 'I'), Row("  Raster-time meter", 'R'),
+					Row("  Playback timer", 'T')];
+			dlgTitle = " Export song ";
+			frameW = 48; lblW = 29;
+		}
 	}
 
 	// kind codes: F=format a=addr(hex16) z=zp(hex8) s=single(dec) d=default(dec),
 	// E/I/R/T = executable / show-info / raster-meter / timer toggles,
-	// u=audio duration (dec sec) o=audio fade-out (dec sec).
-	// Labels mirror the ct2util command-line option descriptions.
-	private enum LBLW = 29;     // label column width (longest label + a gap)
+	// u=audio duration (dec sec) o=audio fade-out (dec sec), N=normalize toggle,
+	// B=WAV bit depth (cycle) H=sample rate (cycle) C=FLAC options (text).
+	// Labels mirror the ct2util command-line option descriptions. The active row
+	// set is chosen per mode in the ctor (see `rows`).
+	private enum FLAC_MAX = 30;     // max editable FLAC-options length (fits the box)
 	private struct Row { string label; char kind; }
-	private static immutable Row[] allRows = [
-		Row("Format", 'F'),
-		Row("Relocate output to address", 'a'),
-		Row("Relocate zero page", 'z'),
-		Row("Export single subtune", 's'),
-		Row("Set the default subtune", 'd'),
-		Row("Executable (player + UI)", 'E'),
-		Row("  Show title/author/release", 'I'),
-		Row("  Raster-time meter", 'R'),
-		Row("  Playback timer", 'T'),
-		Row("Audio duration (sec)", 'u'),
-		Row("Audio fade-out (sec)", 'o'),
-	];
 
 	// Which options apply to the currently selected format. Inapplicable rows are
 	// shown greyed and skipped by the cursor.
 	private bool enabled(char kind) {
-		// Audio duration/fade apply only to the audio formats, and vice versa.
-		if(kind == 'u' || kind == 'o') return isAudioFormat(fFormat);
-		if(isAudioFormat(fFormat))
-			return kind == 'F' || kind == 's';   // which subtune to render
+		if(audioMode) {
+			// Bit depth + sample rate apply to both WAV and the intermediate WAV
+			// that feeds flac; the FLAC-options text only when rendering FLAC.
+			if(kind == 'C') return fFormat == ExportFormat.Flac;
+			return kind == 'F' || kind == 's' || kind == 'u' || kind == 'o'
+				|| kind == 'N' || kind == 'B' || kind == 'H';
+		}
 		final switch(fFormat) {
 		case ExportFormat.FullPrg:
 			// Verbatim current-subtune image: no relocate / zp / subtune select and
@@ -988,6 +1011,10 @@ class ExportOptionsDialog : Window {
 		case 'T': return fTimer ? "yes" : "no";
 		case 'u': return format("%d", fDur);
 		case 'o': return format("%d", fFade);
+		case 'N': return fNorm ? "yes (-1 dBFS)" : "no";
+		case 'B': return fBits == 32 ? "32-bit float" : format("%d-bit", fBits);
+		case 'H': return format("%d", fRate);
+		case 'C': return fFlac;
 		default: return "";
 		}
 	}
@@ -995,20 +1022,22 @@ class ExportOptionsDialog : Window {
 	override void activate() { sel = 0; }
 
 	override void update() {
-		int fw = 48;
-		int h = cast(int)allRows.length + 6;
+		int fw = frameW;
+		int h = cast(int)rows.length + 6;
 		int x = screen.width / 2 - (fw + 2) / 2;
 		int y = screen.height / 2 - h / 2;
 		drawFrame(Rectangle(x, y, h, fw + 2));
-		screen.cprint(x + 2, y, 1, 0, " Export song ");
-		foreach(i, row; allRows) {
+		screen.cprint(x + 2, y, 1, 0, dlgTitle);
+		foreach(i, row; rows) {
 			int ry = y + 2 + cast(int)i;
 			bool on = enabled(row.kind);
 			int fg, bg;
 			if(cast(int)i == sel) { fg = 1; bg = 4; }        // selected: white on purple
 			else if(on)           { fg = 15; bg = 0; }       // normal
 			else                  { fg = 11; bg = 0; }       // greyed / disabled
-			string line = format(" %s%s", row.label.leftJustify(LBLW), valStr(row.kind));
+			string v = valStr(row.kind);
+			if(row.kind == 'C' && cast(int)i == sel) v ~= "_";   // text-field cursor
+			string line = format(" %s%s", row.label.leftJustify(lblW), v);
 			screen.cprint(x + 2, ry, fg, bg, line.leftJustify(fw - 2));
 		}
 		screen.cprint(x + 2, y + h - 3, 12, 0, "Up/Down: Navigate   Left/Right: Change value");
@@ -1028,17 +1057,38 @@ class ExportOptionsDialog : Window {
 	// Toggles flip regardless of direction; Format cycles.
 	private void adjust(char kind, int delta) {
 		switch(kind) {
-		case 'F':
+		case 'F': {
 			// Cycle within the available formats (Flac present only if `flac` is).
 			int n = cast(int)formats.length;
 			int cur = 0;
 			foreach(i, f; formats) if(f == fFormat) { cur = cast(int)i; break; }
 			fFormat = formats[((cur + delta) % n + n) % n];
+			// flac can't encode 32-bit float; fall back to 24-bit for it.
+			if(fFormat == ExportFormat.Flac && fBits == 32) fBits = 24;
 			break;
+		}
 		case 'E': fExe = !fExe; break;
 		case 'I': fInfo = !fInfo; break;
 		case 'R': fRaster = !fRaster; break;
 		case 'T': fTimer = !fTimer; break;
+		case 'N': fNorm = !fNorm; break;
+		case 'B': {
+			int[] depths = (fFormat == ExportFormat.Flac) ? [8, 16, 24] : [8, 16, 24, 32];
+			int bi = 0;
+			foreach(i, d; depths) if(d == fBits) { bi = cast(int)i; break; }
+			int bn = cast(int)depths.length;
+			fBits = depths[((bi + delta) % bn + bn) % bn];
+			break;
+		}
+		case 'H': {
+			static immutable int[] rates = [22050, 44100, 48000];
+			int hi = 0;
+			foreach(i, r; rates) if(r == fRate) { hi = cast(int)i; break; }
+			int hn = cast(int)rates.length;
+			fRate = rates[((hi + delta) % hn + hn) % hn];
+			break;
+		}
+		case 'C': break;   // text field; edited via keypress, not adjusted
 		case 's':
 			fSingle += delta;
 			if(fSingle < 0) fSingle = SUBTUNE_MAX;
@@ -1090,18 +1140,19 @@ class ExportOptionsDialog : Window {
 
 	// Move the cursor by `dir`, skipping disabled rows.
 	private void move(int dir) {
-		int n = cast(int)allRows.length;
+		int n = cast(int)rows.length;
 		int i = sel;
 		foreach(_; 0 .. n) {
 			i = (i + dir + n) % n;
-			if(enabled(allRows[i].kind)) { sel = i; return; }
+			if(enabled(rows[i].kind)) { sel = i; return; }
 		}
 	}
 
 	override int keypress(Keyinfo key) {
 		if(key.mods & KMOD_ALT) return OK;
-		if(!enabled(allRows[sel].kind)) move(1);   // keep cursor on an active row
-		char kind = allRows[sel].kind;
+		if(!enabled(rows[sel].kind)) move(1);   // keep cursor on an active row
+		char kind = rows[sel].kind;
+		// Navigation + confirm/cancel, common to every row.
 		switch(key.raw) {
 		case SDLK_ESCAPE:
 			return CANCEL;
@@ -1121,6 +1172,10 @@ class ExportOptionsDialog : Window {
 			o.showTimer = fTimer;
 			o.durationSec = fDur;
 			o.fadeSec = fFade;
+			o.normalize = fNorm;
+			o.wavBits = fBits;
+			o.wavSampleRate = fRate;
+			o.flacOptions = fFlac;
 			onConfirm(o);   // opens the save-file dialog; keep loop from closing it
 			return OK;
 		case SDLK_UP:
@@ -1129,6 +1184,23 @@ class ExportOptionsDialog : Window {
 		case SDLK_DOWN:
 			move(1);
 			return OK;
+		default:
+			break;
+		}
+		// The FLAC-options row is a free-text field: it consumes printable keys
+		// (incl. Space and '-') and Backspace, rather than the value adjusters.
+		if(kind == 'C') {
+			if(key.raw == SDLK_BACKSPACE) {
+				if(fFlac.length) fFlac = fFlac[0 .. $ - 1];
+				return OK;
+			}
+			int uc = key.unicode;
+			if(uc >= 0x20 && uc < 0x7f && fFlac.length < FLAC_MAX)
+				fFlac ~= cast(char)uc;
+			return OK;
+		}
+		// Value rows: Left/Right (or '<'/'>'), Space, Backspace and digit entry.
+		switch(key.raw) {
 		case SDLK_LEFT:
 			adjust(kind, -1);
 			return OK;

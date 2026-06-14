@@ -8,16 +8,19 @@ across one or more voices, then copy / cut / paste / merge / "paste as new
 track(s)". Works in both the note column (F6) and the track column (F5). See the
 Block Selection section of the guide.
 
-Also new: a unified **Export song** dialog (Shift-F10) that picks the output
-**format** — *Full player .prg* (the verbatim live image), *Optimized .prg*
-(purged/relocated like `ct2util`), *PSID .sid*, or **rendered audio** (*Audio .wav*,
-and *Audio .flac* when the `flac` tool is installed) — with the relevant `ct2util`
-options (relocation address, zero page, subtune selection) and, for the executable
-`.prg`, opt-out toggles for the title/author/release display, the raster-time meter
-and the playback clock. The audio formats render the selected subtune offline (with
-a Duration and a linear Fade-out option). Options that don't apply to the chosen
-format are greyed out. The optimized `.prg` can also drop the player UI to leave
-just the player routine + compacted song data. See the Exporting section of the guide.
+Also new: separate **Export song** (Shift-F10) and **Render audio**
+(Ctrl-Shift-F10) dialogs. *Export song* picks a C64 **format** — *Full player .prg*
+(the verbatim live image), *Optimized .prg* (purged/relocated like `ct2util`), or
+*PSID .sid* — with the relevant `ct2util` options (relocation address, zero page,
+subtune selection) and, for the executable `.prg`, opt-out toggles for the
+title/author/release display, the raster-time meter and the playback clock; the
+optimized `.prg` can also drop the player UI to leave just the player routine +
+compacted song data. *Render audio* renders the chosen subtune offline to *.wav*
+(or *.flac* when the `flac` tool is installed) with Duration, linear Fade-out,
+**Normalize** (to −1 dBFS), **WAV bit depth** (8 / 16 / 24 / 32-float), **sample
+rate** (22.05 / 44.1 / 48 kHz, actually re-rendered at that rate) and an editable
+**FLAC options** field (default `--best`). Options that don't apply to the chosen
+format are greyed out. See the Exporting section of the guide.
 
 Also new: **instrument color tags** — put `$X` or `$XY` (hex digits `0`–`F`,
 the 16 C64 palette colors) anywhere in an instrument's description to recolor

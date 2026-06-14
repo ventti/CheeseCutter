@@ -262,10 +262,14 @@ void fastForward(int val) {
 // audio_callback_2 loop (sid_fillbuffer + audio_frame per frame) with the SDL audio
 // device locked out, so the result matches live playback (same SID model / filter /
 // multiplier). Restores playback state and the active subtune on return.
-short[] renderPcm(int subtune1based, int durationSec) {
+short[] renderPcm(int subtune1based, int durationSec, int sampleRate = 0) {
 	if(durationSec < 1) durationSec = 1;
 	int prevSubtune = song.subtune;
 	bool changedSub = false;
+	// Render at the requested rate by re-initing reSID at it; the global freq is
+	// restored (and the engine re-init'd) before returning to live playback.
+	int savedFreq = audio.audio.freq;
+	if(sampleRate > 0) audio.audio.freq = sampleRate;
 
 	stop();
 	if(subtune1based >= 1 && (subtune1based - 1) != song.subtune) {
@@ -273,7 +277,7 @@ short[] renderPcm(int subtune1based, int durationSec) {
 		changedSub = true;
 	}
 
-	init();                                          // fresh reSID state
+	init();                                          // fresh reSID state at audio.audio.freq
 	audio.audio.setCallMultiplier(song.multiplier);  // sets callbackInterval + framerate
 
 	int interval = audio.audio.getCallbackInterval();
@@ -299,6 +303,7 @@ short[] renderPcm(int subtune1based, int durationSec) {
 
 	if(pcm.length > target) pcm.length = cast(size_t)target;
 	if(changedSub) song.subtunes.activate(prevSubtune);
+	audio.audio.freq = savedFreq;   // restore live sample rate before re-init
 	init();                   // reset reSID for subsequent live playback
 	return pcm;
 }

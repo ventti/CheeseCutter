@@ -60,7 +60,7 @@ final class UI {
 		int vismode = VisMode.Regs;
 		AboutDialog aboutdialog;
 		FileSelectorDialog loaddialog, savedialog, exportsavedialog;
-		ExportOptionsDialog exportDialog;
+		ExportOptionsDialog exportDialog, renderDialog;
 		ExportOptions exportOpts;
 	}
 	enum SPLASH_DURATION_MS = 2500;
@@ -101,7 +101,8 @@ final class UI {
 												  dialog_width), &saveCallback);
 		exportsavedialog = new SaveFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
 												  dialog_width), &saveExportCallback, "Export song");
-		exportDialog = new ExportOptionsDialog(&exportConfirm);
+		exportDialog = new ExportOptionsDialog(&exportConfirm, false);
+		renderDialog = new ExportOptionsDialog(&exportConfirm, true);
 
 		int aboutdlg_width = screen.width - 18;
 		int aboutdlg_height = 13;
@@ -485,7 +486,8 @@ final class UI {
 			if(isAudioFormat(exportOpts.format)) {
 				stop();   // the render takes over the audio engine
 				statusline.display("Rendering audio...");
-				short[] pcm = audio.player.renderPcm(exportOpts.singleSubtune, exportOpts.durationSec);
+				short[] pcm = audio.player.renderPcm(exportOpts.singleSubtune,
+													 exportOpts.durationSec, exportOpts.wavSampleRate);
 				audio.render.writeAudioFile(s, pcm, exportOpts);
 			}
 			else {

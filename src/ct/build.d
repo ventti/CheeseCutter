@@ -177,6 +177,11 @@ struct ExportOptions {
 	bool showTimer      = true;    // executable PRG: MM:SS playback clock
 	int  durationSec    = 180;     // audio: render length in seconds
 	int  fadeSec        = 5;       // audio: linear fade-out length (0..30 s)
+	bool normalize      = false;   // audio: peak-normalize to normalizeDb
+	double normalizeDb  = -1.0;    // audio: target peak in dBFS when normalize
+	int  wavBits        = 16;      // audio: 8/16/24 PCM, 32 = 32-bit IEEE float
+	int  wavSampleRate  = 48000;   // audio: render + WAV header sample rate (Hz)
+	string flacOptions  = "--best";// audio: user-editable flac encoder flags
 }
 
 class ValidateException : Exception {

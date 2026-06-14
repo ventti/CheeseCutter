@@ -15,13 +15,17 @@ import std.process;
 import std.file;
 import std.path : setExtension;
 import std.format : format;
+import std.math : pow, lround;
+import std.algorithm : splitter;
+import std.string : strip;
 
 // Linearly fade the last `fadeSec` seconds of PCM to silence, in place. A fixed
-// render length otherwise ends abruptly mid-note. Clamped to [0, 30] s.
-void applyFade(short[] pcm, int fadeSec) {
+// render length otherwise ends abruptly mid-note. Clamped to [0, 30] s. `rate`
+// is the sample rate the PCM was rendered at.
+void applyFade(short[] pcm, int fadeSec, int rate) {
 	if(fadeSec < 0) fadeSec = 0;
 	if(fadeSec > 30) fadeSec = 30;
-	long fade = cast(long)fadeSec * audio.audio.freq;
+	long fade = cast(long)fadeSec * rate;
 	if(fade <= 0) return;
 	if(fade > pcm.length) fade = pcm.length;
 	size_t start = cast(size_t)(pcm.length - fade);
@@ -29,6 +33,25 @@ void applyFade(short[] pcm, int fadeSec) {
 		// gain goes 1.0 -> 0.0 across the fade window
 		double gain = 1.0 - (cast(double)i / cast(double)fade);
 		pcm[start + i] = cast(short)(pcm[start + i] * gain);
+	}
+}
+
+// Peak-normalize PCM in place so the loudest sample reaches `targetDb` dBFS.
+// No-op on silence (or when the signal already sits below a meaningful peak).
+void normalizePcm(short[] pcm, double targetDb) {
+	int peak = 0;
+	foreach(s; pcm) {
+		int a = s < 0 ? -cast(int)s : cast(int)s;
+		if(a > peak) peak = a;
+	}
+	if(peak <= 0) return;
+	double targetPeak = pow(10.0, targetDb / 20.0) * 32767.0;
+	double gain = targetPeak / cast(double)peak;
+	foreach(ref s; pcm) {
+		long v = lround(s * gain);
+		if(v > 32767) v = 32767;
+		else if(v < -32768) v = -32768;
+		s = cast(short)v;
 	}
 }
 
@@ -50,15 +73,23 @@ bool flacAvailable() {
 // fade-out first. FLAC is produced by transcoding a temporary WAV through the
 // `flac` CLI. Throws UserException on a transcode failure.
 void writeAudioFile(string path, short[] pcm, ref ExportOptions o) {
-	applyFade(pcm, o.fadeSec);
-	ubyte[] wav = wavBytes(pcm, audio.audio.freq);
+	int rate = o.wavSampleRate > 0 ? o.wavSampleRate : audio.audio.freq;
+	if(o.normalize) normalizePcm(pcm, o.normalizeDb);
+	applyFade(pcm, o.fadeSec, rate);
+	ubyte[] wav = wavBytes(pcm, rate, o.wavBits);
 
 	if(o.format == ExportFormat.Flac) {
 		string tmp = path.setExtension("tmp.wav");
 		std.file.write(tmp, wav);
 		string err;
 		try {
-			auto r = execute(["flac", "--best", "-s", "-f", "-o", path, tmp]);
+			// Build the flac command from the user-editable options string; the
+			// -s/-f/-o/input args stay structural (silent / force / output / source).
+			string[] userArgs;
+			foreach(tok; o.flacOptions.splitter(' '))
+				if(tok.strip().length) userArgs ~= tok.strip();
+			string[] args = "flac" ~ userArgs ~ ["-s", "-f", "-o", path, tmp];
+			auto r = execute(args);
 			if(r.status != 0)
 				err = format("flac failed (exit %d): %s", r.status, r.output);
 		}

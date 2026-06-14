@@ -129,6 +129,7 @@ bar it flips the highlighted on/off item), but it works fine inside a query
 | <kbd>F9</kbd> | Load song |
 | <kbd>F10</kbd> | Save song |
 | <kbd>Shift</kbd>-<kbd>F10</kbd> | Export song (Full player `.prg` / Optimized `.prg` / PSID; options dialog) |
+| <kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>F10</kbd> | Render audio (`.wav` / `.flac`; duration, normalize, bit depth, rate) |
 | <kbd>Ctrl</kbd>-<kbd>F10</kbd> | Quick save (no filename prompt) |
 | <kbd>F11</kbd> | About dialog |
 | <kbd>F12</kbd> | Context help |
@@ -175,20 +176,23 @@ In the load (<kbd>F9</kbd>), save (<kbd>F10</kbd>) and `.prg` export dialogs:
 | <kbd>Ctrl</kbd>-<kbd>F8</kbd> | Next filter preset |
 | <kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>F8</kbd> | Previous filter preset |
 
-## Exporting a song
+## Exporting and rendering a song
 
-<kbd>Shift</kbd>-<kbd>F10</kbd> opens the **Export song** dialog. Pick the output
-**Format** at the top (cursor on it; <kbd>&lt;</kbd>/<kbd>&gt;</kbd> or
-<kbd>←</kbd>/<kbd>→</kbd> cycle), then set the options below; options that don't
-apply to the chosen format are greyed and skipped. <kbd>Return</kbd> continues to
-the file-save dialog (the **same one used for saving a song** — type-ahead, song
-preview, overwrite confirmation); <kbd>Esc</kbd> cancels.
+There are two dialogs: **Export song** (<kbd>Shift</kbd>-<kbd>F10</kbd>) for the
+C64 formats — Full player `.prg`, Optimized `.prg`, PSID — and **Render audio**
+(<kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>F10</kbd>) for offline-rendered `.wav` /
+`.flac`. Both share the same layout: pick the **Format** at the top (cursor on it;
+<kbd>&lt;</kbd>/<kbd>&gt;</kbd> or <kbd>←</kbd>/<kbd>→</kbd> cycle), set the options
+below (those that don't apply are greyed and skipped), and <kbd>Return</kbd>
+continues to the file-save dialog (the **same one used for saving a song** —
+type-ahead, song preview, overwrite confirmation); <kbd>Esc</kbd> cancels.
 
 Navigate rows with <kbd>↑</kbd>/<kbd>↓</kbd>; on the selected row,
 <kbd>&lt;</kbd> reduces and <kbd>&gt;</kbd> increases the value (toggles flip), and
-you can type hex/decimal digits directly.
+you can type hex/decimal digits directly. The FLAC-options row is a text field —
+just type into it (<kbd>Backspace</kbd> deletes).
 
-**Formats:**
+**Export formats:**
 
 - **Full player .prg** — the **current subtune** shipped as the whole editor memory
   image verbatim (the same image used for hardware playback): standalone and
@@ -196,13 +200,8 @@ you can type hex/decimal digits directly.
 - **Optimized .prg** — the song purged (unused sequences/instruments/table entries
   removed), relocated and re-assembled, exactly like `ct2util prg`. Far smaller.
 - **PSID (.sid)** — a PSID file, exactly like `ct2util sid`.
-- **Audio (.wav)** — the selected subtune **rendered to a 48 kHz / 16-bit mono WAV**
-  offline through the same reSID engine as live playback (so it matches what you
-  hear — SID model, filter, multiplier).
-- **Audio (.flac)** — the same render encoded as FLAC. Only offered when the `flac`
-  command-line tool is on your PATH (`brew install flac`); otherwise WAV only.
 
-**Options** (each enabled only where it applies):
+**Export options** (each enabled only where it applies):
 
 - **Relocate output to address** — where the player + data is relocated (default
   `$1000`; optimized / PSID only).
@@ -219,10 +218,27 @@ you can type hex/decimal digits directly.
 - **Show title/author/release · Raster-time meter · Playback timer** — opt out of
   the title/author/release rows, the green raster-time border meter, and the
   `Time: MM:SS` clock in the on-screen display (executable `.prg` only).
-- **Audio duration (sec)** — render length in seconds (audio formats only; a SID
-  tune loops forever, so the export needs a fixed length).
-- **Audio fade-out (sec)** — linear fade to silence over the last N seconds
-  (0–30, audio formats only) so a fixed-length cut doesn't end abruptly.
+
+**Render audio** (<kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>F10</kbd>) renders the
+chosen subtune offline through the same reSID engine as live playback, so it
+matches what you hear (SID model, filter, multiplier). **Audio (.flac)** is only
+offered when the `flac` command-line tool is on your PATH (`brew install flac`);
+otherwise WAV only. Options:
+
+- **Render subtune** — which subtune to render (`current` by default).
+- **Duration (sec)** — render length (a SID tune loops forever, so a fixed length
+  is needed).
+- **Fade-out (sec)** — linear fade to silence over the last N seconds (0–30) so a
+  fixed-length cut doesn't end abruptly.
+- **Normalize** — when **yes**, peak-normalize the render to −1 dBFS (off by
+  default). Applied before the fade.
+- **WAV bit depth** — `8` / `16` / `24` (PCM) or `32-bit float`. (reSID's output is
+  16-bit; the wider depths are valid files but don't add real precision. FLAC can't
+  carry float, so it offers 8/16/24.)
+- **Sample rate (Hz)** — `22050` / `44100` / `48000`; this actually re-renders
+  reSID at that rate (it isn't a relabel).
+- **FLAC options** — the `flac` encoder flags, an editable text field pre-filled
+  with `--best` (FLAC only; the `-s -f -o`/input args are added automatically).
 
 ## Hardware playback (C64 Ultimate)
 

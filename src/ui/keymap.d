@@ -117,6 +117,11 @@ void registerShortcuts(UI ui) {
 		activateDialog(exportDialog);
 	});
 
+	sm.register("render_audio", Ctx.global, "File",
+				"Render audio: .wav / .flac (duration, normalize, bit depth, rate)", SDLK_F10, KMOD_CTRL | KMOD_SHIFT, {
+		activateDialog(renderDialog);
+	});
+
 	sm.register("quick_save", Ctx.global, "File",
 				"Quick save song (doesn't ask a filename)", SDLK_F10, KMOD_CTRL, {
 		string s = savedialog.filename;
@@ -710,6 +715,7 @@ void applyMenuLabels(UI ui) {
 		setMenuLabel("load_file", "Load song...");
 		setMenuLabel("save_file", "Save song...");
 		setMenuLabel("export_song", "Export song...");
+		setMenuLabel("render_audio", "Render audio...");
 		setMenuLabel("quick_save", "Quick save");
 		setMenuLabel("optimize_song", "Optimize song");
 		setMenuLabel("clear_sequences", "Clear sequences");

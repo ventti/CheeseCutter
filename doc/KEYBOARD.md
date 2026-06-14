@@ -34,6 +34,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `F9` | Open the Load song dialog |
 | `F10` | Open the Save song dialog |
 | `Ctrl-F10` | Quick save song (doesn't ask a filename) |
+| `Ctrl-Shift-F10` | Render audio: .wav / .flac (duration, normalize, bit depth, rate) |
 
 ### Help
 
