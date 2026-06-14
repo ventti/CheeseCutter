@@ -155,7 +155,15 @@ ubyte[] doBuild(Song song, int address, int zpAddress,
 //  FullPrg      - the verbatim live-image self-running .prg (buildResidentImage)
 //  OptimizedPrg - purged/relocated player+data, optionally wrapped in the shim
 //  Psid         - PSID .sid file
-enum ExportFormat { FullPrg, OptimizedPrg, Psid }
+//  Wav / Flac   - offline-rendered audio (handled in the editor's audio layer, not
+//                 by exportSong(): ct.build stays free of any audio/SDL dependency)
+enum ExportFormat { FullPrg, OptimizedPrg, Psid, Wav, Flac }
+
+// True for the rendered-audio formats, which the editor handles via audio.render
+// rather than exportSong() (ct2util and ct.build know nothing about audio).
+bool isAudioFormat(ExportFormat f) {
+	return f == ExportFormat.Wav || f == ExportFormat.Flac;
+}
 
 struct ExportOptions {
 	ExportFormat format = ExportFormat.FullPrg;
@@ -167,6 +175,8 @@ struct ExportOptions {
 	bool showInfo       = true;    // executable PRG: show Title/Author/Release rows
 	bool showRastertime = true;    // executable PRG: border raster meter + $RR value
 	bool showTimer      = true;    // executable PRG: MM:SS playback clock
+	int  durationSec    = 180;     // audio: render length in seconds
+	int  fadeSec        = 5;       // audio: linear fade-out length (0..30 s)
 }
 
 class ValidateException : Exception {
@@ -263,6 +273,11 @@ ubyte[] exportSong(Song live, bool ntsc, ref ExportOptions o) {
 		return exportPrg(live, ntsc, o);
 	case ExportFormat.Psid:
 		return exportSid(live, o);
+	case ExportFormat.Wav:
+	case ExportFormat.Flac:
+		// Rendered offline by the editor's audio layer (audio.render); ct.build has
+		// no audio engine. Reaching here means the UI failed to route an audio export.
+		throw new UserException("Audio export is handled by the editor, not exportSong().");
 	}
 }
 

@@ -78,6 +78,13 @@ extern(C) {
 		return cast(int)(bufferSize * MIXBUF_MUL);
 	}
 
+	// Samples filled per player frame (freq / framerate). The offline audio
+	// render (audio.player.renderPcm) chunks its manual fill loop with it, the
+	// same way audio_callback_2 does.
+	int getCallbackInterval() {
+		return callbackInterval;
+	}
+
 	void audio_close() {
 		SDL_CloseAudio();
 		if(mixbuf) free(mixbuf);

@@ -3,6 +3,8 @@ OBJS= \
 	src/derelict/sdl2/internal/sdl_types.o \
 	src/audio/audio.o \
 	src/audio/player.o \
+	src/audio/wav.o \
+	src/audio/render.o \
 	src/audio/timer.o \
 	src/audio/callback.o \
 	src/audio/visualizer.o \

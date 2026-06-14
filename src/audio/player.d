@@ -257,6 +257,52 @@ void fastForward(int val) {
 	SDL_UnlockAudio();
 }
 
+// Render `durationSec` seconds of the given subtune (1-based; <=0 = current) to
+// 16-bit mono PCM at audio.audio.freq, offline (non-realtime). Mirrors the realtime
+// audio_callback_2 loop (sid_fillbuffer + audio_frame per frame) with the SDL audio
+// device locked out, so the result matches live playback (same SID model / filter /
+// multiplier). Restores playback state and the active subtune on return.
+short[] renderPcm(int subtune1based, int durationSec) {
+	if(durationSec < 1) durationSec = 1;
+	int prevSubtune = song.subtune;
+	bool changedSub = false;
+
+	stop();
+	if(subtune1based >= 1 && (subtune1based - 1) != song.subtune) {
+		song.subtunes.activate(subtune1based - 1);
+		changedSub = true;
+	}
+
+	init();                                          // fresh reSID state
+	audio.audio.setCallMultiplier(song.multiplier);  // sets callbackInterval + framerate
+
+	int interval = audio.audio.getCallbackInterval();
+	long target = cast(long)durationSec * audio.audio.freq;
+	short[] pcm;
+	pcm.reserve(cast(size_t)(target + interval));
+	short[] tmp;
+	tmp.length = interval;
+
+	SDL_LockAudio();          // keep the device callback off the engine during render
+	initPlayOffset([0, 0, 0], [0, 0, 0]);
+	SDL_PauseAudio(1);        // initPlayOffset unpauses; re-pause for the offline run
+	audio.timer.start();
+	audio.callback.reset();
+	playstatus = Status.Play; // audio_frame only advances while playing
+	while(pcm.length < target) {
+		int n = sid_fillbuffer(tmp.ptr, interval, audio.callback.cyclesPerFrame);
+		pcm ~= tmp[0 .. n];
+		audio_frame();
+	}
+	playstatus = Status.Stop;
+	SDL_UnlockAudio();
+
+	if(pcm.length > target) pcm.length = cast(size_t)target;
+	if(changedSub) song.subtunes.activate(prevSubtune);
+	init();                   // reset reSID for subsequent live playback
+	return pcm;
+}
+
 void dumpFrame() {
 	if(playstatus == Status.Play || playstatus == Status.Keyjam)
 		audio.callback.requestDump();

@@ -23,6 +23,7 @@ import ct.purge;
 import ui.help;
 import ui.input;
 import audio.player;
+static import audio.render;
 import ui.tables;
 import ui.dialogs;
 import seq.fplay;
@@ -463,17 +464,34 @@ final class UI {
 	// the right extension for the chosen format.
 	private void exportConfirm(ExportOptions o) {
 		exportOpts = o;
-		string ext = (o.format == ExportFormat.Psid) ? ".sid" : ".prg";
+		string ext;
+		final switch(o.format) {
+		case ExportFormat.Psid:         ext = ".sid"; break;
+		case ExportFormat.Wav:          ext = ".wav"; break;
+		case ExportFormat.Flac:         ext = ".flac"; break;
+		case ExportFormat.FullPrg:
+		case ExportFormat.OptimizedPrg: ext = ".prg"; break;
+		}
 		exportsavedialog.setDirectory(getcwd());
 		exportsavedialog.setFilename(proposeExportName(ext));
 		activateDialog(exportsavedialog);
 	}
 
-	// Step 2: build and write the export using the stashed options + format.
+	// Step 2: build and write the export using the stashed options + format. Data
+	// formats go through ct.build; audio formats are rendered offline by the audio
+	// engine (ct.build has no audio dependency) and written via audio.render.
 	private void saveExportCallback(string s) {
 		try {
-			ubyte[] data = ct.build.exportSong(song, audio.player.ntsc != 0, exportOpts);
-			std.file.write(s, data);
+			if(isAudioFormat(exportOpts.format)) {
+				stop();   // the render takes over the audio engine
+				statusline.display("Rendering audio...");
+				short[] pcm = audio.player.renderPcm(exportOpts.singleSubtune, exportOpts.durationSec);
+				audio.render.writeAudioFile(s, pcm, exportOpts);
+			}
+			else {
+				ubyte[] data = ct.build.exportSong(song, audio.player.ntsc != 0, exportOpts);
+				std.file.write(s, data);
+			}
 		}
 		catch(Exception e) {
 			stderr.writeln(e.toString);

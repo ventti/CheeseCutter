@@ -11,7 +11,8 @@ import com.fb;
 import com.util;
 import com.session;
 private import ct.base;
-import ct.build : ExportOptions, ExportFormat;
+import ct.build : ExportOptions, ExportFormat, isAudioFormat;
+import audio.render : flacAvailable;
 import ui.help;
 import ui.ui;
 import ui.input;
@@ -901,15 +902,24 @@ class ExportOptionsDialog : Window {
 		ExportFormat fFormat = ExportFormat.FullPrg;
 		int fAddr = 0x1000, fZp = 0, fSingle = 0, fDef = 1;
 		bool fExe = true, fInfo = true, fRaster = true, fTimer = true;
+		int fDur = 180, fFade = 5;       // audio: render length / fade-out, seconds
+		// Selectable formats, in cycle order. Flac is only offered when the `flac`
+		// CLI is present (we transcode WAV->FLAC through it).
+		ExportFormat[] formats;
 	}
 
 	this(ConfirmCB cb) {
 		super(Rectangle(0, 0, 1));
 		this.onConfirm = cb;
+		formats = [ExportFormat.FullPrg, ExportFormat.OptimizedPrg,
+				   ExportFormat.Psid, ExportFormat.Wav];
+		if(flacAvailable())
+			formats ~= ExportFormat.Flac;
 	}
 
 	// kind codes: F=format a=addr(hex16) z=zp(hex8) s=single(dec) d=default(dec),
-	// E/I/R/T = executable / show-info / raster-meter / timer toggles.
+	// E/I/R/T = executable / show-info / raster-meter / timer toggles,
+	// u=audio duration (dec sec) o=audio fade-out (dec sec).
 	// Labels mirror the ct2util command-line option descriptions.
 	private enum LBLW = 29;     // label column width (longest label + a gap)
 	private struct Row { string label; char kind; }
@@ -923,11 +933,17 @@ class ExportOptionsDialog : Window {
 		Row("  Show title/author/release", 'I'),
 		Row("  Raster-time meter", 'R'),
 		Row("  Playback timer", 'T'),
+		Row("Audio duration (sec)", 'u'),
+		Row("Audio fade-out (sec)", 'o'),
 	];
 
 	// Which options apply to the currently selected format. Inapplicable rows are
 	// shown greyed and skipped by the cursor.
 	private bool enabled(char kind) {
+		// Audio duration/fade apply only to the audio formats, and vice versa.
+		if(kind == 'u' || kind == 'o') return isAudioFormat(fFormat);
+		if(isAudioFormat(fFormat))
+			return kind == 'F' || kind == 's';   // which subtune to render
 		final switch(fFormat) {
 		case ExportFormat.FullPrg:
 			// Verbatim current-subtune image: no relocate / zp / subtune select and
@@ -940,6 +956,9 @@ class ExportOptionsDialog : Window {
 		case ExportFormat.Psid:
 			return kind == 'F' || kind == 'a' || kind == 'z'
 				|| kind == 's' || kind == 'd';                    // no shim/UI
+		case ExportFormat.Wav:
+		case ExportFormat.Flac:
+			return false;                                         // handled above
 		}
 	}
 
@@ -950,19 +969,25 @@ class ExportOptionsDialog : Window {
 			case ExportFormat.FullPrg:      return "Full player .prg";
 			case ExportFormat.OptimizedPrg: return "Optimized .prg";
 			case ExportFormat.Psid:         return "PSID (.sid)";
+			case ExportFormat.Wav:          return "Audio (.wav)";
+			case ExportFormat.Flac:         return "Audio (.flac)";
 			}
 		case 'a': return format("$%04X", fAddr);
 		case 'z': return fZp == 0 ? "$00 (default)" : format("$%02X", fZp);
-		case 's': return fSingle == 0 ? (fFormat == ExportFormat.FullPrg ? "current" : "all")
-									   : format("%d", fSingle);
+		case 's': return fSingle == 0
+					? ((fFormat == ExportFormat.FullPrg || isAudioFormat(fFormat)) ? "current" : "all")
+					: format("%d", fSingle);
 		case 'd': return format("%d", fDef);
 		case 'E':
+			if(isAudioFormat(fFormat)) return "n/a";
 			if(fFormat == ExportFormat.FullPrg) return "yes";
 			if(fFormat == ExportFormat.Psid) return "n/a";
 			return fExe ? "yes" : "no";
 		case 'I': return fInfo ? "yes" : "no";
 		case 'R': return fRaster ? "yes" : "no";
 		case 'T': return fTimer ? "yes" : "no";
+		case 'u': return format("%d", fDur);
+		case 'o': return format("%d", fFade);
 		default: return "";
 		}
 	}
@@ -995,6 +1020,8 @@ class ExportOptionsDialog : Window {
 		if(fZp < 0) fZp = 0; if(fZp > 0xff) fZp = 0xff;
 		if(fSingle < 0) fSingle = 0; if(fSingle > SUBTUNE_MAX) fSingle = SUBTUNE_MAX;
 		if(fDef < 1) fDef = 1; if(fDef > SUBTUNE_MAX) fDef = SUBTUNE_MAX;
+		if(fDur < 1) fDur = 1; if(fDur > 3600) fDur = 3600;
+		if(fFade < 0) fFade = 0; if(fFade > 30) fFade = 30;
 	}
 
 	// delta < 0 reduces the value, delta > 0 increases it (bound to < / >).
@@ -1002,9 +1029,11 @@ class ExportOptionsDialog : Window {
 	private void adjust(char kind, int delta) {
 		switch(kind) {
 		case 'F':
-			int f = (cast(int)fFormat + delta) % 3;
-			if(f < 0) f += 3;
-			fFormat = cast(ExportFormat)f;
+			// Cycle within the available formats (Flac present only if `flac` is).
+			int n = cast(int)formats.length;
+			int cur = 0;
+			foreach(i, f; formats) if(f == fFormat) { cur = cast(int)i; break; }
+			fFormat = formats[((cur + delta) % n + n) % n];
 			break;
 		case 'E': fExe = !fExe; break;
 		case 'I': fInfo = !fInfo; break;
@@ -1022,6 +1051,8 @@ class ExportOptionsDialog : Window {
 			break;
 		case 'a': fAddr = (fAddr + delta * 0x100) & 0xffff; break;
 		case 'z': fZp = (fZp + delta) & 0xff; break;
+		case 'u': fDur += delta; clampAll(); break;
+		case 'o': fFade += delta; clampAll(); break;
 		default: break;
 		}
 	}
@@ -1037,6 +1068,8 @@ class ExportOptionsDialog : Window {
 		case 'z': fZp = ((fZp << 4) | hex) & 0xff; break;
 		case 's': if(hex <= 9) { fSingle = fSingle * 10 + hex; if(fSingle > SUBTUNE_MAX) fSingle = hex; } break;
 		case 'd': if(hex <= 9) { fDef = fDef * 10 + hex; if(fDef > SUBTUNE_MAX) fDef = hex; } break;
+		case 'u': if(hex <= 9) { fDur = fDur * 10 + hex; if(fDur > 3600) fDur = hex; } break;
+		case 'o': if(hex <= 9) { fFade = fFade * 10 + hex; if(fFade > 30) fFade = hex; } break;
 		default: break;
 		}
 		clampAll();
@@ -1048,6 +1081,8 @@ class ExportOptionsDialog : Window {
 		case 'z': fZp >>= 4; break;
 		case 's': fSingle /= 10; break;
 		case 'd': fDef /= 10; break;
+		case 'u': fDur /= 10; break;
+		case 'o': fFade /= 10; break;
 		default: break;
 		}
 		clampAll();
@@ -1084,6 +1119,8 @@ class ExportOptionsDialog : Window {
 			o.showInfo = fInfo;
 			o.showRastertime = fRaster;
 			o.showTimer = fTimer;
+			o.durationSec = fDur;
+			o.fadeSec = fFade;
 			onConfirm(o);   // opens the save-file dialog; keep loop from closing it
 			return OK;
 		case SDLK_UP:

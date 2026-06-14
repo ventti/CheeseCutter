@@ -196,6 +196,11 @@ you can type hex/decimal digits directly.
 - **Optimized .prg** — the song purged (unused sequences/instruments/table entries
   removed), relocated and re-assembled, exactly like `ct2util prg`. Far smaller.
 - **PSID (.sid)** — a PSID file, exactly like `ct2util sid`.
+- **Audio (.wav)** — the selected subtune **rendered to a 48 kHz / 16-bit mono WAV**
+  offline through the same reSID engine as live playback (so it matches what you
+  hear — SID model, filter, multiplier).
+- **Audio (.flac)** — the same render encoded as FLAC. Only offered when the `flac`
+  command-line tool is on your PATH (`brew install flac`); otherwise WAV only.
 
 **Options** (each enabled only where it applies):
 
@@ -214,6 +219,10 @@ you can type hex/decimal digits directly.
 - **Show title/author/release · Raster-time meter · Playback timer** — opt out of
   the title/author/release rows, the green raster-time border meter, and the
   `Time: MM:SS` clock in the on-screen display (executable `.prg` only).
+- **Audio duration (sec)** — render length in seconds (audio formats only; a SID
+  tune loops forever, so the export needs a fixed length).
+- **Audio fade-out (sec)** — linear fade to silence over the last N seconds
+  (0–30, audio formats only) so a fixed-length cut doesn't end abruptly.
 
 ## Hardware playback (C64 Ultimate)
 
