@@ -136,7 +136,7 @@ final class MenuBar {
 		// Right-aligned program/version tag: use the fullest name that still
 		// clears the menu titles, shrinking the prefix as space runs out.
 		string ver = APP_VERSION ~ versionInfo();
-		foreach(tag; ["CheeseCutter Extended " ~ ver, "CC Ext " ~ ver, "CC " ~ ver]) {
+		foreach(tag; ["CheeseCutter EXTended " ~ ver, "CC EXT " ~ ver, "CC " ~ ver]) {
 			int tx = screen.width - cast(int)tag.length - 1;
 			if(tx > x) { screen.cprint(tx, 0, 1, bg, tag); break; }
 		}

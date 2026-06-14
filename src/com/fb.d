@@ -65,16 +65,22 @@ immutable ubyte[] splashData = cast(immutable(ubyte)[])import("splash.dat");
 // byte 0x00..0x0f changes the colour to that C64 palette index for what follows.
 immutable double SCROLL_SPEED = 50.0;    // 1 scaled px (1 font px) per 50Hz tick
 immutable ubyte SCROLL_DEFAULT_COL = 1;
+// Scroller row position: pixels below the bottom edge of the artwork (the image
+// already has static credits baked into its own bottom rows, so the scroller
+// sits in the black margin beneath it). Band height = SCROLL_FONT_Y*SPLASH_SCALE.
+immutable int SCROLL_ROW_OFFSET = SPLASH_SCALE * 8;
 immutable string scrollText =
 	"   \x0dCHEESECUTTER EXTENDED " ~ APP_VERSION ~
-	"   \x01 - A MODERNIZED FORK OF THE POPULAR EDITOR" ~
+	"   \x01 - A MODERNIZED FORK OF \x0dTHE POPULAR EDITOR" ~
 	"               \x01(C) 2009-17 ABADDON - RELEASED UNDER THE GNU GPL" ~
+	"               \x01(C) 2025-26 EXTENSIONS PRODUCED BY VENT" ~
 	"               \x01RESID ENGINE BY DAG LEM & ANTTI LANKILA" ~
+        "               \x01ORIGINAL MACOSX AND D2 PORT BY RUK 2013" ~
 	"               \x01PARTS OF RESID INTERFACE BY CADAVER / COVERT BITOPS" ~
 	"               \x01INCLUDES ACME ASSEMBLER 0.91 BY MARCO BAYE" ~
 	"               \x01LIBSDL2 BY THE SDL TEAM" ~
-	"               \x01SEE \x0dhttps://github.com/ventti/CheeseCutter\x01 FOR MORE INFORMATION" ~
-	"               \x0fPRESS ANY KEY TO RETURN TO THE EDITOR ...        ";
+	"               \x01VISIT \x0dhttps://github.com/ventti/CheeseCutter\x01 FOR MORE INFORMATION" ~
+	"               \x0fPRESS ANY KEY TO RETURN TO CUT SOME CHEESE ...        ";
 
 int mode; // 0 = compact (default), >0 = wide
 immutable int border = 1;
@@ -285,9 +291,7 @@ class VideoStandard : Video {
 		if(scrollX >= scrollTotalW) scrollX = -SPLASH_W;
 
 		immutable bandH = SCROLL_FONT_Y * SPLASH_SCALE;
-		// Just below the artwork in the black margin: the splash image already has
-		// static credits baked into its bottom rows, so overlaying there collides.
-		int bandY = splash.y + splash.h + SPLASH_SCALE*4;
+		int bandY = splash.y + splash.h + SCROLL_ROW_OFFSET;
 		SDL_Rect clip = { splash.x, bandY, splash.w, bandH };
 		SDL_RenderSetClipRect(renderer, &clip);
 
