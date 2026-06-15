@@ -1,18 +1,19 @@
-.TH ccutter "1" "November 2018" "User Commands"
+.TH CCUTTER "1" "" "CheeseCutter-Extended 0.3.0" "User Commands"
 .SH NAME
 ccutter \- SID music editor
 .SH SYNOPSIS
 .B ccutter
 [\fI\,OPTION\/\fR]... [\fI\,FILE\/\fR]
 .SH DESCRIPTION
-CheeseCutter (C) 2009\-17 Abaddon
-Released under GNU GPL.
+CheeseCutter\-Extended 0.3.0, based on CheeseCutter 2.9.
+.PP
+CheeseCutter (C) 2009\-17 Abaddon. Released under GNU GPL.
 .SH OPTIONS
 .TP
 \fB\-b\fR [value]
 Set playback buffer size (def=2048)
 .TP
-\fB\-f\fR
+\fB\-f\fR, \fB\-\-full\fR
 Start in fullscreen mode
 .TP
 \fB\-nofp\fR
@@ -23,6 +24,9 @@ Specify filter preset. x = 0..16 for 6581 and 0..1 for 8580
 .TP
 \fB\-i\fR
 Disable resid interpolation (use fast mode instead)
+.TP
+\fB\-l\fR
+Enable VIC\-II badline timing emulation
 .TP
 \fB\-m\fR [0|1]
 Specify SID model for reSID (6581/8580) (def=0)
@@ -35,3 +39,41 @@ Set playback frequency (def=48000)
 .TP
 \fB\-y\fR
 Use YUV video overlay
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Show this help and exit
+.TP
+\fB\-\-height\fR [rows]
+Set sequencer height in rows (min=40, max=64); disables autoscale
+.TP
+\fB\-\-width\fR [cols]
+Set UI width in columns (min=160, max=200); disables autoscale
+.TP
+\fB\-\-dump\-keys\fR
+Print the keyboard reference as Markdown and exit
+.TP
+\fB\-\-dump\-man\fR
+Print the man page (roff) to stdout and exit
+.TP
+\fB\-\-ultimate\fR [IP]
+Play on a C64 Ultimate (1541U/Ultimate64) at IP over its REST API
+.TP
+\fB\-\-ultimate\-port\fR [n]
+REST API port for \-\-ultimate (def=80)
+.TP
+\fB\-\-vice\fR
+Play on a VICE x64sc (launches x64sc from PATH). \-\-vice=host:port attaches to a running \-binarymonitor; \-\-vice=/path/x64sc launches that binary
+.TP
+\fB\-\-vice\-port\fR [n]
+Binary\-monitor port for \-\-vice (def=6502)
+.TP
+\fB\-\-verbose\fR
+Enable verbose logging
+.SH ENVIRONMENT
+.TP
+\fBCHEESECUTTER_ULTIMATE_PASSWORD\fR
+If set, sent as the X\-Password header on every C64 Ultimate REST request (firmware 3.12+).
+.SH KEYS
+In the editor press F12 for context help, or run ccutter \-\-dump\-keys for the full reference. Shift\-F10 saves the current subtune as a self\-running .prg.
+.SH SEE ALSO
+ct2util(1)

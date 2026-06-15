@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+In-memory song model — the .ct/.ct2 data format: notes, commands, instruments, tables and memory offsets.
 */
 module ct.base;
 import com.cpu;
@@ -597,7 +599,15 @@ class Sequence {
 	}
 
 	void transpose(int r, int n) {
-		for(int i = r; i < rows;i++) {
+		transposeRange(r, rows - 1, n);
+	}
+
+	// Transpose the notes in rows [r0, r1] (inclusive) by n semitones, clamped
+	// to the valid range. Special values (---, ===, +++) are left untouched.
+	void transposeRange(int r0, int r1, int n) {
+		if(r0 < 0) r0 = 0;
+		if(r1 > rows - 1) r1 = rows - 1;
+		for(int i = r0; i <= r1; i++) {
 			Note note = data[i].note;
 			int v = note.value;
 			if(v < 3) continue;
@@ -606,7 +616,7 @@ class Sequence {
 			if(n < 0 && (v+n) >= 3) v += n;
 			note = cast(ubyte) v;
 		}
-	}	
+	}
 
 	void insert(int pos) {
 		int p1 = pos * 4;
@@ -712,6 +722,45 @@ class Sequence {
 		return outarr[0..outp];
 	}
 }
+
+/**
+ * Song metadata read from a .ct/.ct2 file header without constructing a Song
+ * (no 64K image, no CPU init). Used by the file dialogs' preview and the
+ * load dialog's player-upgrade check.
+ */
+struct SongInfo {
+	bool valid;
+	int ver;
+	string title, author, release;
+}
+
+/// Reads the header metadata of a .ct/.ct2 file; valid=false on any error
+/// (missing file, wrong magic, corrupt stream, unsupported version).
+SongInfo readSongInfo(string fn) {
+	SongInfo info;
+	try {
+		ubyte[] inbuf = cast(ubyte[])read(fn);
+		if(inbuf.length < 4 || inbuf[0..3] != cast(ubyte[])"CC2"[0..3])
+			return info;
+		ubyte[] debuf = cast(ubyte[])std.zlib.uncompress(inbuf[3..$], 167832);
+		if(debuf.length < Song.DatafileOffset.Release + 32)
+			return info;
+		info.ver = debuf[Song.DatafileOffset.Header];
+		if(info.ver < 6 || info.ver >= 128)   // same limits as Song.open()
+			return info;
+		int offset = Song.DatafileOffset.Title;
+		info.title = strip(cast(string)debuf[offset .. offset + 32].idup);
+		info.author = strip(cast(string)debuf[offset + 32 .. offset + 64].idup);
+		info.release = strip(cast(string)debuf[offset + 64 .. offset + 96].idup);
+		info.valid = true;
+	}
+	catch(Exception e) {}
+	return info;
+}
+
+/// User color preference parsed from an instrument description (see
+/// Song.instrumentColor). Both fields are C64 palette indices 0..15, or -1 when unset.
+struct InstrumentColor { int fg = -1; int bg = -1; }
 
 class Song {
 	enum DatafileOffset {
@@ -1192,6 +1241,35 @@ class Song {
 	int ver = SONG_REVISION, clock, multiplier = 1, sidModel, fppres;
 	char[32] title = ' ', author = ' ', release = ' ', message = ' ';
 	char[32][48] insLabels;
+
+	/// Parse an instrument's description for a `$X`/`$XY` color directive.
+	/// `$X` sets the instrument-number foreground; `$XY` sets foreground X and
+	/// background Y. Digits are C64 palette indices 0..F. The first valid marker
+	/// wins; a `$` not followed by a hex digit is ignored. Returns -1 for unset.
+	InstrumentColor instrumentColor(int ins) {
+		InstrumentColor c;
+		if(ins < 0 || ins >= 48) return c;
+		static int hexDigit(char ch) {
+			if(ch >= '0' && ch <= '9') return ch - '0';
+			if(ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+			if(ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+			return -1;
+		}
+		auto s = insLabels[ins][];
+		for(size_t i = 0; i + 1 < s.length; i++) {
+			if(s[i] != '$') continue;
+			int d1 = hexDigit(s[i+1]);
+			if(d1 < 0) continue;
+			c.fg = d1;
+			if(i + 2 < s.length) {
+				int d2 = hexDigit(s[i+2]);
+				if(d2 >= 0) c.bg = d2;
+			}
+			break;
+		}
+		return c;
+	}
+
 	private Features features;
 	CPU cpu;
 	ubyte[] sidbuf;
@@ -1285,7 +1363,7 @@ class Song {
 			memspace[offsets[Offsets.PlaySpeed]] = cast(ubyte)spd;
 	}
 
-	@property int playSpeed() {
+	@property int playSpeed() nothrow {
 		return memspace[offsets[Offsets.PlaySpeed]];
 	}
 
@@ -1305,6 +1383,12 @@ class Song {
 		}
 
 		ubyte[] debuf = cast(ubyte[])std.zlib.uncompress(inbuf[3..$],167832);
+		deserializeFromBuffer(debuf);
+	}
+
+	// Parse a decompressed .ct payload (the buffer produced by serializeToBuffer,
+	// i.e. open()'s uncompressed image+metadata+subtunes) into this song.
+	void deserializeFromBuffer(ubyte[] debuf) {
 		int offset = 65536;
 		ver = debuf[offset++];
 		if(ver < 6) 
@@ -1500,6 +1584,23 @@ class Song {
 	}
 	
 	void save(string fn) {
+		ubyte[] b = serializeToBuffer();
+		std.file.write(fn, "CC2");
+		append(fn, std.zlib.compress(b));
+	}
+
+	// Deep-copy this song via the .ct serialization (no temp file / zlib): the
+	// returned song is independent, so callers (e.g. export) can purge it without
+	// touching the live working copy.
+	Song dup() {
+		Song c = new Song();
+		c.deserializeFromBuffer(serializeToBuffer());
+		return c;
+	}
+
+	// Build the uncompressed .ct payload (full C64 image + metadata + subtunes).
+	// save() compresses this; dup()/deserializeFromBuffer() round-trip it in memory.
+	ubyte[] serializeToBuffer() {
 		// get tracks from the c64 memory to subtunes-array
 		subtunes.sync();
 		ubyte[] b;
@@ -1532,11 +1633,10 @@ class Song {
 		offset += arr.length;
 
 		offset += 32 * 32 - 0x200;
-		arr = cast(ubyte[])(&subtunes.subtunes)[0..1]; 
+		arr = cast(ubyte[])(&subtunes.subtunes)[0..1];
 		b[offset .. offset + arr.length] = arr[];
 		offset += arr.length;
-		std.file.write(fn, "CC2");
-		append(fn, std.zlib.compress(b));
+		return b;
 	}
 
 	void splitSequence(int seqnumber, int seqofs) {

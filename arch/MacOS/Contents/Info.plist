@@ -14,7 +14,7 @@
 			<key>CFBundleTypeIconFile</key>
 			<string>ct.icns</string>
 			<key>CFBundleTypeName</key>
-			<string>ChesseCutter song file</string>
+			<string>CheeseCutter-Extended song file</string>
 			<key>CFBundleTypeOSTypes</key>
 			<array>
 				<string>SONG</string>
@@ -30,21 +30,21 @@
 	<key>CFBundleExecutable</key>
 	<string>ccutter</string>
 	<key>CFBundleGetInfoString</key>
-	<string>Version 2.5.0</string>
+	<string>Version 0.1.0</string>
 	<key>CFBundleIconFile</key>
 	<string>ct.icns</string>
 	<key>CFBundleIdentifier</key>
-	<string>fi.kapsi.theyamo.ct</string>
+	<string>com.github.ventti.cheesecutter-extended</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>CheeseCutter</string>
+	<string>CheeseCutter-Extended</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleSignature</key>
 	<string>CT</string>
 	<key>CFBundleVersion</key>
-	<string>2.5.0</string>
+	<string>0.1.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 </dict>

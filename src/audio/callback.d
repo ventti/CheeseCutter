@@ -1,21 +1,37 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Realtime audio callback — advances the player each tick, runs the 6502 player code, and captures SID register dumps (SongState).
 */
 
 module audio.callback;
-import derelict.sdl.sdl;
+import derelict.sdl2.sdl;
 import audio.player;
+import audio.visualizer;
 import com.session;
 import com.cpu;
 import ct.base;
-static import audio.audio, audio.timer;
+static import audio.timer, audio.audio;
 
 /+ holds the state of cpu and memory for frame debug dumps. not implemented for now. +/
 class SongState {
     int totalFramecallCounter, subframeCounter;
-    private CPU cpu;                                                                                                                
+    private CPU cpu;
     private ubyte[65536] data;
     CPUException exception;
+	/+
+    this(Song song, int tfc, int sfc) {
+        data = song.data;
+        cpu = new CPU(data);
+        totalFramecallCounter = tfc;
+        subframeCounter = sfc;
+        exception = null;
+    }
+
+    void dump() {
+        writefln("Frame %d(%d)", totalFrameCallCounter, subframeCounter);
+        cpu.execute(pc, true);
+    }+/
 }
 
 __gshared private int frameCallCounter, totalFrameCallCounter; // for multispeed
@@ -23,7 +39,10 @@ __gshared private Exception playbackStatus = null;
 __gshared private bool dumpFrameRequested = false;
 __gshared private bool dumpRequested = false;
 __gshared int cyclesPerFrame;
-__gshared int linesPerFrame;
+__gshared int linesPerFrame, maxCycles, maxLines, maxCycleFrame;
+__gshared char[0x19][5*50] dump;
+__gshared int dumpctr;
+__gshared auto avgsPerFrame = new int[](20);
 
 Exception getException() {
 	Exception ex = playbackStatus;
@@ -32,16 +51,20 @@ Exception getException() {
 }
 
 void reset() {
+	maxCycles = 0;
+	cyclesPerFrame = 0;
 	frameCallCounter = 0;
 	totalFrameCallCounter = 0;
 }
 
 void requestDump() {
-	dumpRequested = true;	
+	dumpRequested = true;
 }
 
 // called each frame from soundbuffer callback
-extern(C) __gshared void audio_frame() {
+extern(C) __gshared void audio_frame() nothrow {
+	static char[0x19][5*50] dumpbak;
+
 	switch(audio.player.getPlaystatus()) {
 	case Status.Play:
 		audio.timer.tick();
@@ -68,12 +91,37 @@ extern(C) __gshared void audio_frame() {
 
 	for(int i=0; i<0x19; i++) {
 		sidreg[i] = song.sidbuf[i];
+		// if(com.session.debugMode)
+		// 	dump[dumpctr][i] = song.sidbuf[i];
 	}
+
+	// Update visualizer with current SID register state and player memory.
+	int playerStateOffset = (song.offsets.length > Offsets.SHTRANS) ? song.offsets[Offsets.SHTRANS] : 0;
+	audio.visualizer.updateSidRegisters(cast(ubyte[])sidreg[0..0x19], song.memspace, playerStateOffset);
+
+	// if(com.session.debugMode) {
+	// 	dumpctr++;
+	// 	if(dumpctr >= dump.length) {
+	// 		dumpbak = dump[];
+	// 		dumpctr--;
+	// 		dump[0 .. $-1] = dumpbak[1 .. $];
+
+	// 	}
+	// }
 }
 
-private void frameDone() {
-	static int[10] avgs;
+private void frameDone() nothrow {
+	static int[5] avgs;
 	int totalCycles;
+	auto playerFrameCounter = song.data[song.offsets[2]];
+	static int[][] _avgsPerFrame = new int[][](20,5);
+
+
+	if(cyclesPerFrame > maxCycles) {
+		maxCycles = cyclesPerFrame;
+		maxCycleFrame = song.data[song.offsets[2]];
+	}
+
 
 	foreach(idx, ref avg; avgs) {
 		if(idx == avgs.length - 1) {
@@ -82,6 +130,24 @@ private void frameDone() {
 		else avg = avgs[idx+1];
 		totalCycles += avg;
 	}
+
+
+	int[] _avgPerFrame = _avgsPerFrame[playerFrameCounter];
+	import std.stdio;
+	_avgPerFrame[0 .. $-1] = _avgPerFrame[1 .. $].dup;
+	_avgPerFrame[$-1] = cyclesPerFrame;
+
+	int avg;
+	foreach(i; 0 .. 5) {
+		avg += _avgPerFrame[i];
+	}
+	avg /= 5;
+	avgsPerFrame[playerFrameCounter] = avg / 10;
+
+
+	import std.math : ceil;
+	maxLines = cast(int)ceil(maxCycles / 63.0);
+
 	cyclesPerFrame = 0;
 	linesPerFrame = cast(int)(totalCycles / avgs.length / 63);
 
@@ -92,19 +158,25 @@ private void frameDone() {
 	else dumpFrameRequested = false;
 
 	audio.timer.tickFullFrame();
+
+	// Update visualizer envelope states each full frame
+	audio.visualizer.updateVisualizerFrame();
 }
 
-void cpuCall(ushort pc, bool lockAudio) { cpuCall(pc, lockAudio, false); }
-void cpuCall(ushort pc, bool lockAudio, bool forcedump) {
+void cpuCall(ushort pc, bool lockAudio) nothrow{ cpuCall(pc, lockAudio, false); }
+void cpuCall(ushort pc, bool lockAudio, bool forcedump) nothrow {
 	if(lockAudio) SDL_LockAudio();
 	try {
 		if(dumpFrameRequested) {
 			// state = new SongState(song, totalFrameCallCounter, frameCallCounter);
 		}
 		int i = song.cpu.execute(pc, false);
-		cyclesPerFrame += i; 
+		if(muted[0]) song.sidbuf[0..7] = 0;
+		if(muted[1]) song.sidbuf[7..14] = 0;
+		if(muted[2]) song.sidbuf[14..21] = 0;
+		cyclesPerFrame += i;
 	}
-	catch(CPUException e) {
+	catch(Exception e) {
 		playbackStatus = e;
 		stop(); // < TODO: player.d should check if playback is in error state and stop by itself
 		//UI.statusline.display(e.toString());

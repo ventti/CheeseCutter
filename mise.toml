@@ -1,0 +1,198 @@
+# mise.toml - CheeseCutter task runner + environment
+# Install mise: https://mise.jdx.dev/getting-started.html
+#
+# Quick start (any OS):
+#   mise run setup    # install system dependencies for the current platform
+#   mise run build    # build CheeseCutter (+ refresh doc/ARCHITECTURE.md)
+#   mise run run       # build and run
+# See doc/BUILD.md for the full cross-platform guide.
+#
+# mise here is a TASK RUNNER, not a version manager: ldc/SDL2/acme/curl have no
+# clean mise backend, so they come from the system package manager (Homebrew on
+# macOS, apt/dnf/pacman on Linux, MSYS2 pacman on Windows). There is therefore no
+# [tools] section and `mise install` is intentionally a no-op -- use `mise run
+# setup` (or ./bootstrap.sh) to install dependencies.
+#
+# Toolchain per platform (installed by `mise run setup`):
+# - ldc       D compiler (LLVM-based)
+# - acme      6502 assembler, for src/c64/player.bin  (build from source if the
+#             distro has no package -- see setup-linux / bootstrap-windows.sh)
+# - SDL2      macOS: sdl2 | Linux: libsdl2-dev | Windows: mingw-w64-x86_64-SDL2
+# - libcurl   macOS: bundled | Linux: libcurl*-dev | Windows: mingw-w64-x86_64-curl
+# - make/gcc/g++  macOS: xcode-select --install
+
+[env]
+# Set library path for macOS builds (adjust if needed based on your architecture)
+# Apple Silicon (M1/M2/M3): /opt/homebrew/lib
+# Intel Mac: /usr/local/lib
+LIBSPATH = "/opt/homebrew/lib"
+
+[tasks.build]
+description = "Build CheeseCutter for current platform (also refreshes doc/ARCHITECTURE.md)"
+run = """
+#!/usr/bin/env bash
+set -e
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  make -j -f Makefile.mac LIBSPATH=${LIBSPATH:-/opt/homebrew/lib}
+  make -f Makefile.mac map
+else
+  make -j
+  make map
+fi
+"""
+
+[tasks.build-utils]
+description = "Build ct2util utility"
+run = """
+#!/usr/bin/env bash
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  make -j -f Makefile.mac ct2util LIBSPATH=${LIBSPATH:-/opt/homebrew/lib}
+else
+  make -j ct2util 
+fi
+"""
+
+[tasks.run]
+description = "Build and Run CheeseCutter"
+run = """
+#!/usr/bin/env bash
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  make -j -f Makefile.mac LIBSPATH=${LIBSPATH:-/opt/homebrew/lib}
+else
+  make -j
+fi
+./ccutter $*
+"""
+
+[tasks.release]
+description = "Build release version of CheeseCutter"
+run = """
+#!/usr/bin/env bash
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  make -j -f Makefile.mac release LIBSPATH=${LIBSPATH:-/opt/homebrew/lib}
+else
+  make -j release
+fi
+"""
+
+[tasks.dist]
+description = "Build release version of CheeseCutter"
+run = """
+#!/usr/bin/env bash
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  make -j -f Makefile.mac dist LIBSPATH=${LIBSPATH:-/opt/homebrew/lib}
+else
+  make -j dist
+fi
+"""
+
+[tasks.build-win]
+description = "Build Windows x64 binaries (MSYS2/mingw-w64 native build; see Makefile.win and the windows CI job)"
+run = "make -f Makefile.win release"
+
+[tasks.dclean]
+description = "Clean build artifacts"
+run = """
+#!/usr/bin/env bash
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  make -f Makefile.mac dclean LIBSPATH=${LIBSPATH:-/opt/homebrew/lib}
+else
+  make dclean
+fi
+"""
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = """
+#!/usr/bin/env bash
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  make -f Makefile.mac clean
+else
+  make clean
+fi
+"""
+
+[tasks.setup-macos]
+description = "Install macOS system dependencies via Homebrew (ldc, acme, sdl2)"
+run = """
+#!/usr/bin/env bash
+set -e
+if ! command -v brew &> /dev/null; then
+  echo "Homebrew not found. Please install it from https://brew.sh"
+  exit 1
+fi
+echo "Installing system dependencies (ldc, acme, sdl2)..."
+brew install ldc acme sdl2
+echo "Done! Now run 'mise run build' to build CheeseCutter."
+"""
+
+[tasks.setup-linux]
+description = "Install Linux system dependencies (apt / dnf / pacman)"
+run = """
+#!/usr/bin/env bash
+set -e
+if command -v apt-get &> /dev/null; then
+  sudo apt-get update
+  sudo apt-get install -y ldc acme libsdl2-dev libcurl4-openssl-dev g++ make git
+elif command -v dnf &> /dev/null; then
+  # Fedora has no acme package -- it is built from source below.
+  sudo dnf install -y ldc SDL2-devel libcurl-devel gcc-c++ make git
+  if ! command -v acme &> /dev/null; then
+    echo "acme not packaged -- building from source..."
+    tmp=$(mktemp -d)
+    git clone --depth 1 https://github.com/meonwax/acme "$tmp/acme"
+    make -C "$tmp/acme/src"
+    sudo cp "$tmp/acme/src/acme" /usr/local/bin/
+  fi
+elif command -v pacman &> /dev/null; then
+  # acme lives in the AUR; install it with your AUR helper if pacman misses it.
+  sudo pacman -S --needed --noconfirm ldc sdl2 curl gcc make git || true
+  if ! command -v acme &> /dev/null; then
+    echo "acme not found -- install it from the AUR (e.g. 'yay -S acme') or build"
+    echo "it from https://github.com/meonwax/acme (make -C src)."
+  fi
+else
+  echo "Unknown distro. Install manually: ldc acme libsdl2-dev libcurl-dev g++ make git"
+  echo "(acme source: https://github.com/meonwax/acme -- make -C src)"
+  exit 1
+fi
+echo "Done! Now run 'mise run build' to build CheeseCutter."
+"""
+
+[tasks.setup-windows]
+description = "Install Windows deps (run inside an MSYS2 MINGW64 shell)"
+run = """
+#!/usr/bin/env bash
+set -e
+if [[ "$MSYSTEM" != "MINGW64" ]]; then
+  echo "Run this from an MSYS2 'MINGW64' shell (MSYSTEM=$MSYSTEM)."
+  exit 1
+fi
+pacman -S --needed --noconfirm make git \\
+  mingw-w64-x86_64-ldc mingw-w64-x86_64-gcc \\
+  mingw-w64-x86_64-SDL2 mingw-w64-x86_64-curl
+# acme is not a mingw package -- build it from source.
+if ! command -v acme &> /dev/null; then
+  tmp=$(mktemp -d)
+  git clone --depth 1 https://github.com/meonwax/acme "$tmp/acme"
+  make -C "$tmp/acme/src"
+  cp "$tmp/acme/src/acme.exe" /mingw64/bin/ 2>/dev/null || cp "$tmp/acme/src/acme" /mingw64/bin/acme.exe
+fi
+acme --version
+echo "Done! Now run 'mise run build-win' to build CheeseCutter."
+"""
+
+[tasks.setup]
+description = "Install project dependencies for the current platform"
+run = """
+#!/usr/bin/env bash
+set -e
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  mise run setup-macos
+elif [[ -n "$MSYSTEM" ]]; then
+  mise run setup-windows
+else
+  mise run setup-linux
+fi
+"""
+

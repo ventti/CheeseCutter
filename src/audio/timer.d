@@ -1,11 +1,14 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Playback timing: the frame- and row-tick counters that pace the player.
 */
 
 module audio.timer;
 
 import audio.audio;
 import com.session;
+import ct.base;
 
 __gshared int sec, min;
 __gshared private int clockCounter;
@@ -34,9 +37,11 @@ void start() {
 	fplayTickCounter = fplayRowCounter = 0;
 }
 /+ should be called each on update from callback +/
-void tick() {
+void tick() nothrow {
 	if(++clockCounter >= audio.audio.framerate) {
 		clockCounter = 0;
+        static import audio.callback;
+		audio.callback.maxCycles = 0;
 		if(++sec > 59) {
 			sec = 0; min++;
 			min %= 100;
@@ -45,7 +50,7 @@ void tick() {
 }
 
 /+ should be called once per frame cycle, updated fplay counters +/
-void tickFullFrame() {
+void tickFullFrame() nothrow {
 	tickCounter++;
 	if(++fplayTickCounter > song.playSpeed) {
 		fplayRowCounter++;

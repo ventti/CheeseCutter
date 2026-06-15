@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Follow-play window that keeps the editor view tracking the playing position.
 */
 
 module seq.fplay;
@@ -11,13 +13,13 @@ import ct.base;
 import com.session;
 import com.fb;
 import audio.audio, audio.player, audio.timer;
-import derelict.sdl.sdl;
+import derelict.sdl2.sdl;
 
 private int mode;
 
 protected class FPlayVoice : SeqVoice {
-	this(VoiceInitParams v) { 
-		super(v); 
+	this(VoiceInitParams v) {
+		super(v);
 		assert(pos !is null);
 	}
 
@@ -43,7 +45,7 @@ protected class FPlayVoice : SeqVoice {
 			if(trk.trans >= 0xf0) {
 				if(song.ver >= 6)
 					jump(Jump.toWrapMark);
-				else 
+				else
 					jump(mode);
 				trkofs2 = pos.trkOffset;
 				trk = tracks[trkofs2];
@@ -80,10 +82,10 @@ protected class FPlayVoiceTable : SequenceTable {
 
 class Fplay : Window {
 	private FPlayVoiceTable ftable;
-	this(Rectangle a) { 
+	this(Rectangle a) {
 		assert(fplayPos !is null);
 		ftable = new FPlayVoiceTable(a);
-		super(a); 
+		super(a);
 	}
 
 	void timerEvent() {
@@ -94,6 +96,13 @@ class Fplay : Window {
 
 	override void update() {
 		ftable.update();
+	}
+
+	// Render visualization colors after all other updates
+	void renderVisualization() {
+		if(cast(SequenceTable)ftable) {
+			(cast(SequenceTable)ftable).renderVisualization();
+		}
 	}
 
 	override int keypress(Keyinfo key) {
@@ -131,7 +140,7 @@ class Fplay : Window {
 			int[] m = [m1 , m2, m3];
 			ftable.jump(m1,true);
 			update();
-			break;			
+			break;
 		+/
 		case SDLK_SPACE:
 			audio.player.fastForward(25);

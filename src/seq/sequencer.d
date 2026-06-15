@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Central sequencer view — hosts the per-voice track and sequence editor tables and the orderlist.
 */
 
 module seq.sequencer;
@@ -9,13 +11,15 @@ import ui.ui, ui.help;
 import ct.base;
 import com.session;
 import com.util;
+import com.selection;
 import ui.input;
 import ui.dialogs;
 import seq.fplay;
 import seq.tracktable;
 import seq.seqtable;
 import seq.trackmap;
-import derelict.sdl.sdl;
+import com.shortcuts;
+import derelict.sdl2.sdl;
 import std.string;
 import std.stdio;
 import audio.audio, audio.player;
@@ -25,13 +29,18 @@ enum Jump { toBeginning = 0, toMark = -1, toEnd = -2, toWrapMark = -3 };
 
 enum playbackBarColor = 6;
 enum wrapBarColor = 4;
+enum selectionBarColor = 5;
 
 bool displaySequenceRowcounter = true;
 int stepValue = 1;
 int activeVoiceNum;
 private int stepCounter;
 int tableTop = 15, tableBot = -16;
-enum anchor = 16;
+int anchor = 16;
+int heightAdjustment = 0; // rows to add to default height
+const int minHeight = 32; // minimum total height
+const int maxHeight = 64; // maximum total height
+int initialHeight = 0; // set by command line, 0 means use area.height
 Clip[] clip;
 
 private {
@@ -39,10 +48,10 @@ private {
 }
 
 struct RowData {
-	Track trk; 
+	Track trk;
 	alias trk track;
 	// offset in tracklist, checked against endmark
-	int trkOffset; 
+	int trkOffset;
 	// offset in tracklist, not checked
 	int trkOffset2;
 	int seqOffset;
@@ -60,25 +69,28 @@ struct VoiceInitParams {
 }
 
 class PosData {
-	int pointerOffsetValue = anchor;
+	int pointerOffsetValue;
 	int trkOffset = 0;
 	int seqOffset;
-	int mark; 
+	int mark;
 	int rowCounter;
 	Tracklist tracks;
+	this() {
+		pointerOffsetValue = anchor;
+	}
 
 	@property int pointerOffset() {
 		return pointerOffsetValue - anchor;
 	}
-	
+
 	@property int pointerOffset(int i) {
 		return pointerOffsetValue = i + anchor;
 	}
-	
+
 	@property int rowOnCursor() {
 		return seqOffset + pointerOffset;
 	}
-	
+
 	int getRowCounter() {
 		int counter;
 		for(int i = 0; i <= trkOffset; i++) {
@@ -87,7 +99,7 @@ class PosData {
 		}
 		return counter + seqOffset;
 	}
-	
+
 }
 
 class PosDataTable {
@@ -101,26 +113,26 @@ class PosDataTable {
 		pos.length = 3;
 		foreach(ref p; pos) p = new PosData;
 	}
-	
-	@property int pointerOffset(int o) { 
+
+	@property int pointerOffset(int o) {
 		foreach(ref p; pos) { p.pointerOffset = o; }
 		return 0;
 	}
-	
+
 	@property int pointerOffset() {
 		return pos[0].pointerOffset;
 	}
-	
-	@property int normalPointerOffset() { 
+
+	@property int normalPointerOffset() {
 		int r = tableTop + pos[0].pointerOffset;
 		return r;
 	}
-			
-	@property int rowCounter() { 
-		return pos[0].rowCounter; 
+
+	@property int rowCounter() {
+		return pos[0].rowCounter;
 	}
-	
-	@property int rowCounter(int o) { 
+
+	@property int rowCounter(int o) {
 		foreach(ref p; pos) { p.rowCounter = o; }
 		return 0;
 	}
@@ -130,7 +142,7 @@ class PosDataTable {
 		pt.copyFrom(this);
 		return pt;
 	}
-	
+
 	void copyFrom(PosDataTable pt) {
 		for(int i = 0 ; i < 3; i++) {
 			PosData p = pos[i];
@@ -154,7 +166,7 @@ abstract class Voice : Window {
 	Input input;
 	alias input activeInput;
 	VoiceTable parent;
-	
+
 	this(ref VoiceInitParams v) {
 		super(v.a);
 		tracks = v.t; pos = v.p;
@@ -163,19 +175,19 @@ abstract class Voice : Window {
 
 public:
 
-	bool atBeg() { 
+	bool atBeg() {
 		return pos.trkOffset <= 0
 			&& (pos.seqOffset + pos.pointerOffset) <= 0;
 	}
 
 	bool atEnd() {
-		RowData s = getRowData(pos.trkOffset, 
+		RowData s = getRowData(pos.trkOffset,
 									   pos.seqOffset + pos.pointerOffset);
 		return (s.trk.trans >= 0xf0);
 	}
-	
+
 	bool pastEnd() { return pastEnd(0); }
-	
+
 	bool pastEnd(int y) {
 		RowData s = getRowData(pos.trkOffset,
 							   pos.seqOffset + y);
@@ -219,7 +231,7 @@ public:
 			--trkofs2;
 			s.trk = tracks[trkofs];
 			seq = song.seqs[s.trk.number];
-		} 
+		}
 		assert(seqofs >= 0);
 
 		while(seqofs >= numRowsInSeq()) {
@@ -244,7 +256,7 @@ public:
 		s.seq = seq;
 		return s;
 	}
-	
+
 	RowData getRowData(int tofs) {
 		return getRowData(tofs, 0);
 	}
@@ -268,7 +280,7 @@ public:
 						rowCounter = getRowCounter();
 					}
 					else trkOffset = 0;
-				} 
+				}
 				s = getRowData(trkOffset);
 				seqOffset += s.clippedRows;
 				steps += s.clippedRows;
@@ -281,8 +293,8 @@ public:
 						trkOffset = 0;
 						rowCounter = seqOffset;
 					}
-					else { 
-						trkOffset = tracks.trackLength - 1; 
+					else {
+						trkOffset = tracks.trackLength - 1;
 						rowCounter = oldRowcounter;
 					}
 				}
@@ -303,13 +315,13 @@ public:
 
 
 protected:
-	
+
 	override void update();
-	
+
 	void refreshPointer() {
 		refreshPointer(pos.pointerOffset);
 	}
-	
+
 	void refreshPointer(int y);
 
 	void jump(int jumpto) {
@@ -319,12 +331,12 @@ protected:
 		pos.trkOffset = jumpto;
 		pos.seqOffset = 0;
 		pos.rowCounter = getRowcounter(jumpto);
-	}    
+	}
 
 	void setMark() {
 		setMark(1);
 	}
-	
+
 	// when m == 1, sets mark to current trkOffsets
 	// when m == 0, zeroes it out
 	void setMark(int m) {
@@ -348,7 +360,7 @@ abstract class VoiceTable : Window {
 	Voice active;
 	alias active activeVoice;
 	PosDataTable posTable;
-	
+
 	this(Rectangle a, PosDataTable pi) {
 		super(a);
 		posTable = pi;
@@ -367,7 +379,7 @@ abstract class VoiceTable : Window {
 
 	override void refresh() {
 		foreach(v; voices) {
-			v.refresh(); 
+			v.refresh();
 		}
 	}
 
@@ -405,7 +417,7 @@ abstract class VoiceTable : Window {
 				centralize();
 				break;
 			case SDLK_m:
-				if(song.highlight < 16) 
+				if(song.highlight < 16)
 					song.highlight++;
 				break;
 			case SDLK_n:
@@ -445,7 +457,7 @@ abstract class VoiceTable : Window {
 		switch(key.raw)
 		{
 		case SDLK_DOWN:
-			if(key.mods & KMOD_SHIFT) 
+			if(key.mods & KMOD_SHIFT)
 				goto case SDLK_PAGEDOWN;
 			else if(key.mods & KMOD_CTRL) {
 				scroll(1);
@@ -481,7 +493,7 @@ abstract class VoiceTable : Window {
 	}
 
 	void stepVoice() { stepVoice(1); }
-	
+
 	void stepVoice(int i) {
 		// safety check - if we're past endmark on all voices,
 		// exit the method -- can happen if all tracklists
@@ -518,13 +530,13 @@ abstract class VoiceTable : Window {
 		// making sure cursor is not past endmark
 		step(0);
 	}
-	
+
 	override void update() {
-		input = activeVoice.activeInput; 
-		foreach(v; voices) { 
+		input = activeVoice.activeInput;
+		foreach(v; voices) {
 			v.refreshPointer(posTable.pointerOffset);
-			v.update(); 
-			
+			v.update();
+
 		}
 		// statusline
 		screen.cprint(area.x + 1, area.y, 1, 0, format("#%02X",song.subtune));
@@ -545,8 +557,10 @@ abstract class VoiceTable : Window {
 			screen.cprint(area.x, area.y + y + 1, 12, 0, s);
 		}
 
+		// Tint selected cells on top of the freshly drawn rows (both columns).
+		renderSelection();
 	}
-	
+
 	void setPositionMark() {
 		int rows = -1;
 		foreach(v; voices) {
@@ -605,7 +619,7 @@ abstract class VoiceTable : Window {
 			}
 
 			int e = activeVoice.tracks.trackLength - 1;
-			
+
 			for(int i = 0; i < e; i++) {
 				activeVoice.refreshPointer(posTable.pointerOffset);
 				RowData s = activeVoice.getRowData(i);
@@ -650,7 +664,7 @@ abstract class VoiceTable : Window {
 	void toScreenTop() {
 		step(-posTable.normalPointerOffset);
 	}
-	
+
 	void toScreenBot() {
 		int scrend = tableTop - posTable.pointerOffset - 1;
 		step(scrend);
@@ -678,14 +692,14 @@ abstract class VoiceTable : Window {
 			st = 0;
 			wrapOk = false;
 		}
-	
-		posTable.pointerOffset = 
+
+		posTable.pointerOffset =
 			posTable.pointerOffset + st;
 
 		bool atEnd = activeVoice.atEnd();
 
 		if(atEnd && stepCounter > 1) {
-			posTable.pointerOffset = 
+			posTable.pointerOffset =
 				posTable.pointerOffset - st;
 			st = 0;
 			wrapOk = false;
@@ -711,7 +725,7 @@ abstract class VoiceTable : Window {
 
 		if(d <= 0) return;
 		assert(extra >= 0);
-		posTable.pointerOffset = 
+		posTable.pointerOffset =
 			posTable.pointerOffset - extra;
 
 		doStep(true,extra);
@@ -724,7 +738,7 @@ abstract class VoiceTable : Window {
 		}
 	}
 
-	// for seq copy/insert/etc 
+	// for seq copy/insert/etc
 	RowData getRowData() {
 		return activeVoice.activeRow;
 	}
@@ -736,6 +750,244 @@ abstract class VoiceTable : Window {
 	// helper for trackcopy/paste
 	Tracklist getTracklist(Voice v) {
 		return v.tracks[v.activeRow.trkOffset .. v.tracks.length];
+	}
+
+	// ----------------------------------------------------------------
+	// Rectangular selection + block copy/cut/paste/merge/paste-new.
+	//
+	// The engine lives here on the shared base so every column view (note,
+	// track, later the sub-tables) gets the same verbs. Surface-specific cell
+	// access is delegated to the hooks below, which default to inert so a view
+	// that hasn't opted in simply has no selection behaviour.
+	// ----------------------------------------------------------------
+
+	Selection sel;
+	protected bool dragging;
+	protected bool dragMoved;
+
+	/// A view enables selection by overriding this to true and implementing the
+	/// cell hooks. Default-off keeps trackmap / fplay inert.
+	bool selectionEnabled() { return false; }
+
+	// --- Surface hooks (safe no-op defaults) ---
+
+	/// Clipboard kind so a note block can't be pasted onto tracks, etc.
+	protected ClipKind cellKind() { return ClipKind.none; }
+	/// Bytes per cell (note Element = 4, Track = 2).
+	protected int cellSize() { return 0; }
+	/// Absolute row (natural units) of the cursor in the active voice.
+	protected int activeRowAbs() { return 0; }
+	/// Map a click's view-local screen Y to an absolute row in `voiceIdx`.
+	protected int rowAtScreenY(int voiceIdx, int localY) { return int.min; }
+	/// Read one cell's bytes by absolute row, or null if past the data end.
+	protected ubyte[] readCellBytes(int voiceIdx, int absRow) { return null; }
+	/// Clear one cell (cut). No length change.
+	protected void blankCellAt(int voiceIdx, int absRow) {}
+	/// Paste clipboard column `clipCol` into voice `voiceIdx` from the cursor
+	/// down, bounded by the current sequence/track end (overflow dropped). When
+	/// `mergeOnly`, write only into currently-empty target cells.
+	protected void pasteColumn(int voiceIdx, int clipCol, bool mergeOnly) {}
+	/// Paste-new: insert fresh track(s)/sequence(s) at the cursor sized to hold
+	/// clipboard column `clipCol`, then write its rows.
+	protected void pasteNewColumn(int voiceIdx, int clipCol) {}
+	/// Undo checkpoint before a mutating verb.
+	protected void saveSelState() {}
+	/// Re-sync inputs / cursor after a mutation.
+	protected void afterMutate() { refresh(); step(0); }
+	/// Clamp a candidate selection-end row so the selection can't extend past
+	/// the boundaries of the anchor's sequence (note column) / the valid track
+	/// range (track column). Default: no clamp.
+	protected int clampSelRow(int col, int row) { return row; }
+
+	// --- Verbs (called from keypress + mouse) ---
+
+	void clearSel() { sel.clear(); }
+
+	void setSelBegin() {
+		if(!selectionEnabled) return;
+		sel.setBegin(activeVoiceNum, activeRowAbs());
+		sel.active = true;
+		UI.statusline.display("Selection start set.");
+	}
+
+	void setSelEnd() {
+		if(!selectionEnabled) return;
+		if(!sel.active) sel.setBegin(activeVoiceNum, activeRowAbs());
+		sel.setEnd(activeVoiceNum, clampSelRow(activeVoiceNum, activeRowAbs()));
+		sel.active = true;
+		UI.statusline.display(format("Selection: %d row(s), %d voice(s).",
+									 sel.rows, sel.cols));
+	}
+
+	void copySel() {
+		if(!selectionEnabled || !sel.active) return;
+		int csz = cellSize();
+		rowClip.reset(cellKind(), sel.cols, sel.rows, csz);
+		for(int c = 0; c < sel.cols; c++) {
+			for(int r = 0; r < sel.rows; r++) {
+				ubyte[] b = readCellBytes(sel.loCol + c, sel.loRow + r);
+				if(b !is null)
+					rowClip.cell(c, r)[] = b[0 .. csz];
+			}
+		}
+		UI.statusline.display(format("Copied %d x %d block.", sel.cols, sel.rows));
+	}
+
+	void cutSel() {
+		if(!selectionEnabled || !sel.active) return;
+		saveSelState();
+		copySel();
+		for(int c = 0; c < sel.cols; c++)
+			for(int r = 0; r < sel.rows; r++)
+				blankCellAt(sel.loCol + c, sel.loRow + r);
+		afterMutate();
+		UI.statusline.display("Cut block (rows blanked).");
+	}
+
+	private void pasteCommon(bool mergeOnly) {
+		if(!selectionEnabled || rowClip.empty || rowClip.kind != cellKind())
+			return;
+		saveSelState();
+		for(int c = 0; c < rowClip.cols; c++) {
+			int tcol = activeVoiceNum + c;
+			if(tcol > 2) break;
+			pasteColumn(tcol, c, mergeOnly);
+		}
+		afterMutate();
+	}
+
+	void pasteOver() {
+		pasteCommon(false);
+		UI.statusline.display("Pasted (overwrite).");
+	}
+
+	void mergeFill() {
+		pasteCommon(true);
+		UI.statusline.display("Merged (filled empty rows).");
+	}
+
+	void pasteNew() {
+		if(!selectionEnabled || rowClip.empty || rowClip.kind != cellKind())
+			return;
+		saveSelState();
+		for(int c = 0; c < rowClip.cols; c++) {
+			int tcol = activeVoiceNum + c;
+			if(tcol > 2) break;
+			pasteNewColumn(tcol, c);
+		}
+		afterMutate();
+		UI.statusline.display("Pasted as new track(s).");
+	}
+
+	// --- Mouse drag ---
+
+	void beginDrag(int voiceIdx, int absRow) {
+		if(!selectionEnabled || absRow == int.min) return;
+		sel.setBegin(voiceIdx, absRow);
+		sel.active = true;
+		dragging = true;
+		dragMoved = false;
+	}
+
+	/// Anchor a drag at the current cursor cell. Used on mouse-down: the click
+	/// has already positioned the cursor, so anchoring here keeps the anchor and
+	/// the drag-motion mapping in the same (post-click) scroll frame.
+	void beginDragAtCursor() {
+		beginDrag(activeVoiceNum, activeRowAbs());
+	}
+
+	void dragTo(int voiceIdx, int absRow) {
+		if(!dragging || absRow == int.min) return;
+		sel.setEnd(voiceIdx, clampSelRow(voiceIdx, absRow));
+	}
+
+	/// Extend only the row of the drag end (pointer left the voice columns).
+	void dragToRow(int absRow) {
+		if(!dragging || absRow == int.min) return;
+		sel.setEnd(sel.endCol, clampSelRow(sel.endCol, absRow));
+	}
+
+	/// The pointer moved to a different screen cell during the drag — so this is
+	/// a real drag, not a plain click. Decided at the screen level (by the
+	/// Sequencer) because a selection unit may span many screen rows (a track
+	/// covers many note rows, so abs-row equality can't detect motion).
+	void markDragMoved() { if(dragging) dragMoved = true; }
+
+	/// Public screen->absolute-row mapping for the mouse path (screenY in
+	/// screen char-cells; converts to the view-local Y rowAtScreenY expects).
+	int screenRowToAbs(int voiceIdx, int screenY) {
+		return rowAtScreenY(voiceIdx, screenY - area.y);
+	}
+
+	void endDrag() {
+		if(!dragging) return;
+		dragging = false;
+		// A plain click (no drag motion) clears the selection and just
+		// positions the cursor, preserving the old click behaviour.
+		if(!dragMoved) sel.clear();
+	}
+
+	// --- Keyboard entry point (subclasses call this first in keypress) ---
+
+	/// Returns true if the key was a selection command and was consumed.
+	bool handleSelectionKey(Keyinfo key) {
+		if(!selectionEnabled) return false;
+		bool ctrl = (key.mods & KMOD_CTRL) != 0;
+		bool shift = (key.mods & KMOD_SHIFT) != 0;
+		bool alt = (key.mods & KMOD_ALT) != 0;
+		if(!ctrl || alt) return false;
+		switch(key.raw) {
+		case SDLK_b:
+			if(shift) setSelEnd(); else setSelBegin();
+			return true;
+		case SDLK_d:
+			if(shift) return false;
+			clearSel();
+			UI.statusline.display("Selection cleared.");
+			return true;
+		case SDLK_c:
+			if(shift) return false;
+			if(!sel.active) return false; // let other Ctrl-C handlers (track col) run
+			copySel();
+			return true;
+		case SDLK_x:
+			if(shift) return false;
+			if(!sel.active) return false;
+			cutSel();
+			return true;
+		case SDLK_v:
+			// Both paste and merge fall through (don't swallow the key) when the
+			// clipboard is empty or holds a different cell kind.
+			if(rowClip.empty || rowClip.kind != cellKind()) return false;
+			if(shift) mergeFill(); else pasteOver();
+			return true;
+		case SDLK_n:
+			if(!shift) return false;
+			if(rowClip.empty || rowClip.kind != cellKind()) return false;
+			pasteNew();
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	/// Tint the background of selected cells. Called from a view's update()
+	/// after the rows are drawn. Mirrors the playback/wrap-bar tinting.
+	protected void renderSelection() {
+		if(!selectionEnabled || !sel.active) return;
+		for(int i = 0; i < 3; i++) {
+			if(i < sel.loCol || i > sel.hiCol) continue;
+			Voice v = voices[i];
+			for(int rowIdx = 0; rowIdx < area.height; rowIdx++) {
+				// Map each screen row to its absolute row via the surface hook,
+				// so this works for both the note column and the track column.
+				int absRow = rowAtScreenY(i, rowIdx + 1);
+				if(absRow == int.min || !sel.contains(i, absRow)) continue;
+				int y = 1 + area.y + rowIdx;
+				for(int x = v.area.x; x < v.area.x + v.area.width; x++)
+					screen.setbg(x, y, selectionBarColor);
+			}
+		}
 	}
 }
 
@@ -752,10 +1004,25 @@ final class Sequencer : Window, Undoable {
 	}
 	VoiceTable activeView;
 	//private Clip[] clip;
-	
+
+	/// Show the (generated) sequencer help live, so regenerating HELPSEQUENCER
+	/// after the registry is populated takes effect.
+	override ContextHelp contextHelp() { return ui.help.HELPSEQUENCER; }
+
 	this(Rectangle a) {
 		int h = screen.height - 10;
-		super(a,ui.help.HELPSEQUENCER);
+		super(a, ui.help.HELPSEQUENCER);
+
+		// Apply initial height: use command line if set, otherwise use minimum
+		if(initialHeight > 0) {
+			area.height = initialHeight;
+			a.height = initialHeight;
+		} else {
+			// Default to minimum height if not specified
+			area.height = minHeight;
+			a.height = minHeight;
+		}
+
 		trackmapTable = new TrackmapTable(a, seqPos);
 		sequenceTable = new SequenceTable(a, seqPos);
 		trackTable = new TrackTable(a, seqPos);
@@ -763,32 +1030,33 @@ final class Sequencer : Window, Undoable {
 		activeView = sequenceTable;
 		activeView.activate();
 		activateVoice(0);
-		
+
 		queryAppend = new QueryDialog("Insert this sequence to cursor pos: $",
-								  &insertCallback, 0x80);
-								  
-		queryCopy = new QueryDialog("Copy this sequence to cursor seq: $",
-								&copyCallback, 0x80);
-		
+							  &insertCallback, 0x80);
+
+		queryCopy = new QueryDialog("Overwrite current sequence with seq: $",
+							&copyCallback, 0x80);
+
 		// top & bottom
 		tableBot = -area.height / 2;
 		tableTop = area.height / 2;
+		anchor = area.height / 2;
 		sequenceTable.centerTo(0);
 
 		postables.length = 32;
 		foreach(ref p; postables) {
 			p = new PosDataTable;
 		}
-		
+
 	}
 
 	void activateVoice(int n) {
 		activeView.jumpToVoice(n);
 		input = activeView.input;
 	}
-	
+
 	void reset() { reset(true); }
-	
+
 	void reset(bool tostart) {
 		activeView.deactivate();
 		if(tostart) {
@@ -811,13 +1079,87 @@ final class Sequencer : Window, Undoable {
 		}
 	}
 
+	void adjustHeight(int delta) {
+		int newHeight = area.height + delta;
+		// enforce minimum and maximum height
+		if(newHeight < minHeight) {
+			newHeight = minHeight;
+			delta = newHeight - area.height;
+		}
+		if(newHeight > maxHeight) {
+			newHeight = maxHeight;
+			delta = newHeight - area.height;
+		}
+		if(delta == 0) return;
+
+		heightAdjustment += delta;
+
+		// Update area height
+		area.height = newHeight;
+
+		// Recalculate table bounds based on new height
+		tableBot = -area.height / 2;
+		tableTop = area.height / 2;
+		anchor = area.height / 2;
+
+		// Update all voice tables with new area dimensions
+		foreach(vt; voiceTables) {
+			vt.area.height = area.height;
+			foreach(v; vt.voices) {
+				v.area.height = area.height;
+			}
+		}
+
+		// Re-center and refresh display
+		activeView.centerTo(activeView.posTable.pointerOffset);
+		activeView.refresh();
+		UI.statusline.display(format("Sequencer height: %d rows", area.height));
+	}
+
+	void increaseHeight() {
+		adjustHeight(4); // increase by 4 rows at a time
+	}
+
+	void decreaseHeight() {
+		adjustHeight(-4); // decrease by 4 rows at a time
+	}
+
 	Voice[] getVoices() {
 		return activeView.voices;
 	}
 
+	// Render visualization colors after all other updates
+	void renderVisualization() {
+		if(cast(SequenceTable)activeView) {
+			(cast(SequenceTable)activeView).renderVisualization();
+		}
+	}
+
+	/// The active sequencer column determines the keyboard-shortcut context.
+	override @property string contextId() {
+		if(activeView is sequenceTable)
+			return Ctx.noteColumn;
+		// trackTable (F5) and trackmapTable (F7 overview) share track commands
+		return Ctx.trackColumn;
+	}
+
+	/// Push the current column's context into the shortcut manager.
+	private void pushContext() {
+		if(mainui !is null && mainui.sm !is null)
+			mainui.sm.setActiveContext(contextId);
+	}
+
 	override int keypress(Keyinfo key) {
-		if(key.raw >= SDLK_KP0 && key.raw <= SDLK_KP9) {
-			stepValue = key.raw - SDLK_KP0;
+		// Set cursor step value. Keypad 1-9 (Keypad 0 is reserved for "play row",
+		// handled by the note column). Ctrl+Shift+0..9 is the keypad-free
+		// equivalent for keyboards without a numeric keypad (e.g. laptops).
+		if(key.raw >= SDLK_KP_1 && key.raw <= SDLK_KP_9) {
+			stepValue = key.raw - SDLK_KP_0;
+			return OK;
+		}
+		if((key.mods & KMOD_CTRL) && (key.mods & KMOD_SHIFT) &&
+		   key.raw >= SDLK_0 && key.raw <= SDLK_9) {
+			stepValue = key.raw - SDLK_0;
 			return OK;
 		}
 		if(key.mods & KMOD_ALT) {
@@ -826,6 +1168,8 @@ final class Sequencer : Window, Undoable {
 				mainui.activateDialog(queryAppend);
 				break;
 			case SDLK_c:
+				queryCopy.setQuery(format("Overwrite current seq $%02X with seq: $",
+										  activeView.getRowData().trk.number));
 				mainui.activateDialog(queryCopy);
 				break;
 			case SDLK_RIGHT:
@@ -838,16 +1182,22 @@ final class Sequencer : Window, Undoable {
 				return activeView.keypress(key);
 			}
 		}
-		else if(key.mods & KMOD_CTRL) {
-			switch(key.raw) {
-			case SDLK_F12:
-				mainui.activateDialog(
-					new DebugDialog(activeView.activeVoice.activeRow.seq));
-				break;
-			default:
-				return activeView.keypress(key);
-			 }
-		}
+	else if(key.mods & KMOD_CTRL) {
+		switch(key.raw) {
+		case SDLK_F12:
+			mainui.activateDialog(
+				new DebugDialog(activeView.activeVoice.activeRow.seq));
+			break;
+		case SDLK_EQUALS, SDLK_KP_PLUS:
+			increaseHeight();
+			break;
+		case SDLK_MINUS, SDLK_KP_MINUS:
+			decreaseHeight();
+			break;
+		default:
+			return activeView.keypress(key);
+		 }
+	}
 		else switch(key.raw)
 			 {
 			 case SDLK_F5:
@@ -859,12 +1209,8 @@ final class Sequencer : Window, Undoable {
 				 }
 				 if(activeView != trackTable) {
 					 activateTracktable();
-					 trackTable.displayTracklist = (key.mods & KMOD_SHIFT) > 0;
-					 break;
-				 }
-				 if(key.mods & KMOD_SHIFT) {
-					 activateTracktable();
-					 trackTable.displayTracklist(true);
+					 trackTable.displayTracklist = false;
+					 pushContext();
 					 break;
 				 }
 				 goto case SDLK_F6;
@@ -874,19 +1220,21 @@ final class Sequencer : Window, Undoable {
 				 activeView.activate();
 				 // making sure cursor is not past endmark
 				 activeView.step(0);
+				 pushContext();
 				 break;
 			 case SDLK_F7:
 				 activeView.deactivate();
 				 if(activeView == trackmapTable) {
 					 activeView.toSeqStart();
 					 activeView = trackTable;
-				 } 
+				 }
 				 else {
 					 activeView.toSeqStart();
 					 activeView.centerTo(0); // scroll to upmost pos
 					 activeView = trackmapTable;
 				 }
 				 activeView.activate();
+				 pushContext();
 				 break;
 /+
 			 case SDLK_MINUS:
@@ -911,20 +1259,70 @@ final class Sequencer : Window, Undoable {
 		return OK;
 	}
 
-	override void clickedAt(int x, int y, int button) {
+	private int pressCx, pressCy;   // screen cell where the left button went down
+
+	override void clickedAt(int x, int y, int button, int clicks = 1) {
 		foreach(idx, Voice v; activeView.voices) {
 			if(v.area.overlaps(x, y)) {
 				activateVoice(cast(int)idx);
-				activeView.clickedAt(x - area.x, y - area.y, button);
+				activeView.clickedAt(x - area.x, y - area.y, button, clicks);
+				// Left button starts a drag-select anchored at the cursor the
+				// click just positioned (same scroll frame as drag motion).
+				if(button == 1) {
+					pressCx = x; pressCy = y;
+					activeView.beginDragAtCursor();
+				}
 			}
 		}
+	}
+
+	override void draggedTo(int x, int y) {
+		// Any move to a different screen cell makes this a real drag (not a
+		// click) — decided here at the screen level because one selection unit
+		// (a track) can cover many screen rows.
+		if(x != pressCx || y != pressCy)
+			activeView.markDragMoved();
+		// Extend the selection to the column/row under the pointer. If the
+		// pointer is outside all voice columns, keep the last column.
+		foreach(idx, Voice v; activeView.voices) {
+			if(v.area.overlaps(x, y)) {
+				activeView.dragTo(cast(int)idx,
+								  activeView.screenRowToAbs(cast(int)idx, y));
+				return;
+			}
+		}
+		activeView.dragToRow(activeView.screenRowToAbs(activeVoiceNum, y));
+	}
+
+	override void releasedAt(int x, int y) {
+		activeView.endDrag();
+	}
+
+	void seekPatternOffset(int offset) {
+		activeView.posTable.pointerOffset = 0;
+		foreach(voice, v; activeView.voices) {
+			int pos;
+			int lastTrack = v.tracks.trackLength - 1;
+			for(int trackIndex = 0; trackIndex <= lastTrack; trackIndex++) {
+				int rows = song.sequence(v.tracks[trackIndex]).rows;
+				if(offset < pos + rows || trackIndex == lastTrack) {
+					v.pos.trkOffset = trackIndex;
+					v.pos.seqOffset = clamp(offset - pos, 0, rows - 1);
+					v.pos.rowCounter = pos + v.pos.seqOffset;
+					break;
+				}
+				pos += rows;
+			}
+		}
+		activeView.refresh();
+		activeView.step(0);
 	}
 
 protected:
 
 	void changeSubtune(int direction) {
 		postables[song.subtune].copyFrom(activeView.posTable);
-		
+
 		refresh();
 		mainui.stop();
 		activeView.jump(0,false);
@@ -939,7 +1337,7 @@ protected:
 		refresh();
 		activeView.step(0);
 	}
-	
+
 	override void update() {
 		activeView.update();
 		input = activeView.input;
@@ -1006,7 +1404,7 @@ private:
 		if(param >= MAX_SEQ_NUM) return;
 		RowData s = activeView.getRowData();
 		Sequence fr = song.seqs[param];
-		Sequence to = s.seq; 
+		Sequence to = s.seq;
 		to.copyFrom(fr);
 		activeView.step(0);
 	}

@@ -1,9 +1,11 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Editor input primitives — Cursor, Keyinfo and the value-changed handler mixin for editable fields.
 */
 
 module ui.input;
-import derelict.sdl.sdl;
+import derelict.sdl2.sdl;
 import com.fb;
 import com.session;
 import com.util;
@@ -46,18 +48,19 @@ class Cursor {
 		int bg2, fg2;
 		int bg, fg;
 	}
-	
+
 	void set() { set(x,y); }
 	alias set refresh;
-  
+
 	void set(int nx, int ny) {
 		if(nx < 0 || ny < 0) return;
 		if(x != nx || y != ny) {
+			restore();
 			x = nx; y = ny;
-			ushort col = screen.getChar(x, y);
+			uint col = screen.getChar(x, y);
 			counter = BLINK_VAL;
-			bg = fg2 = (col >> 8) & 15;
-			fg = bg2 = (col >> 12) & 15;
+			bg = fg2 = (col >> 8) & 0xff;   // fg from bits 8-15
+			fg = bg2 = (col >> 16) & 0xff;  // bg from bits 16-23
 		}
 		screen.setColor(x,y,bg2,fg2);
 	}
@@ -68,12 +71,22 @@ class Cursor {
 		fg2 = bg;
 	}
 
+	void clear() {
+		restore();
+		x = y = -1;
+	}
+
 	void blink() {
 		if(--counter < 0) {
 			int t;
 			counter = BLINK_VAL;
 			t = bg2; bg2 = fg2; fg2 = t;
 		}
+	}
+
+	private void restore() {
+		if(x < 0 || y < 0) return;
+		screen.setColor(x, y, bg, fg);
 	}
 }
 
@@ -86,7 +99,7 @@ class Input {
 	alias x pointerX;
 	alias y pointerY;
 	alias width inputLength;
-	ubyte[] inarray, outarray; 
+	ubyte[] inarray, outarray;
 
 	this(ubyte[] p, int len) {
 		this(len);
@@ -109,7 +122,12 @@ class Input {
 	alias setCoord set;
 
 	int keypress(Keyinfo key) { return 0 ;}
-	
+
+	// Composed text from the OS (SDL_TEXTINPUT): layout/Shift/AltGr-aware
+	// characters. Only text fields (InputString) consume it; numeric/hex/note
+	// inputs ignore it and keep reading raw keys in keypress(). No-op by default.
+	void textInput(string s) {}
+
 	int keyrelease(Keyinfo key) { return 0; }
 
 	int setValue(int v) { assert(0); }
@@ -122,7 +140,7 @@ class Input {
         }
         else if(nibble >= inputLength) {
 			nibble = 0;
-			return WRAP; 
+			return WRAP;
         }
         return OK;
 	}
@@ -130,7 +148,7 @@ class Input {
 	void update() { assert(0); }
 
 	void refresh() { assert(0); }
-	
+
 	int toInt() {
 		return toInt(inarray);
 	}
@@ -138,7 +156,7 @@ class Input {
 	@property int value() {
 		return toInt(inarray);
 	}
-	
+
 	int toInt(ubyte[] ar) {
 		int v;
 		for(int i = cast(int)(ar.length-1), sh; i >= 0; i--) {
@@ -147,7 +165,7 @@ class Input {
 		}
 		return v;
 	}
-	
+
 	int toIntRange(int b, int e) {
 		return toInt(inarray[b..e]);
 	}
@@ -190,7 +208,7 @@ class InputValue : Input {
 			inarray[i] = (p[j] >> sh) & 15;
 		}
 	}
-	
+
 	override int keypress(Keyinfo key) {
 		int v;
 		if(key.mods & KMOD_CTRL) return 0;
@@ -211,7 +229,7 @@ class InputValue : Input {
 		}
 		return OK;
 	}
-	
+
 	override void update() {
 		string fmt = std.string.format("0%dX",inputLength);
         screen.cprint(x, y, 1, -1, format("%" ~ fmt,toInt()));
@@ -253,12 +271,12 @@ class InputBoundedByte : InputValue {
 			return OK;
 		}
 	}
-	
+
 	override int step(int st) {
         nibble += st;
-        if(nibble < 0) 
+        if(nibble < 0)
 			nibble = 0;
-        else if(nibble > 2) 
+        else if(nibble > 2)
 			nibble = 2;
         return OK;
 	}
@@ -267,7 +285,7 @@ class InputBoundedByte : InputValue {
 		screen.cprint(x, y, 1, -1, format("%02X ", toInt()));
 		cursor.set(x + nibble, y);
 	}
-	
+
 }
 
 class InputSingleChar : InputValue {
@@ -296,7 +314,7 @@ class InputSingleChar : InputValue {
 		}
 		return IllegalValue;
 	}
-	
+
 	override int step(int st) {
 		return OK;
 	}
@@ -324,13 +342,13 @@ class InputTrack : InputWord {
  		trk.setValue(buf[0], buf[1]);
 		valueChangedCallback = cb;
 	}
-	
+
 	void init(RowData s) {
 		trk = s.trk;
 		buf[] = valueCheck(trk.trans, trk.number);
 		super.setOutput(buf);
 	}
-	
+
 	alias init refresh;
 
 	void flush() {
@@ -339,11 +357,11 @@ class InputTrack : InputWord {
 			valueChanged();
  		trk.setValue(buf[0], buf[1]);
 	}
-	
+
 	override int setValue(int v) {
 		super.setValue(v);
 		buf[] = valueCheckNoWrap(buf[0], buf[1]);
-		super.setOutput(buf); 
+		super.setOutput(buf);
 		return OK;
 	}
 
@@ -401,11 +419,11 @@ class InputTrack : InputWord {
 	}
 
 private:
-	
+
 	ubyte[] valueCheck(int tr, int no) {
 		if(tr < 0x80) tr = 0x80;
 		if(no < 0) no = 0;
-		if(no > 0x80) no = 0x00; 
+		if(no > 0x80) no = 0x00;
 		if(no >= MAX_SEQ_NUM) no = MAX_SEQ_NUM-1;
 		return cast(ubyte[])[tr,no];
 	}
@@ -429,7 +447,7 @@ class InputString : Input {
 	override void setOutput(ubyte[] p) {
 		assert(0);
 	}
-	
+
 	void setOutput(string s) {
 		int tl = cast(int)s.length;
 		char[] str2 = std.utf.toUTF8(s.dup).dup;
@@ -441,7 +459,7 @@ class InputString : Input {
 		if(nibble >= inputLength)
 			nibble = inputLength - 1;
 	}
-	
+
 	override string toString() {
 		return toString(false);
 	}
@@ -461,9 +479,26 @@ class InputString : Input {
 		instring[nibble] = cast(char)value;
 	}
 
-	override int keypress(Keyinfo key) {
-		int i;
+	private void insertGap() {
+		instring[nibble+1 .. $] = instring[nibble .. $-1].dup;
+	}
 
+	// Character entry comes from SDL_TEXTINPUT (layout/Shift/AltGr-aware), so e.g.
+	// '$' works on every keyboard layout regardless of which key combo produces it.
+	// keypress() handles only cursor/edit control keys (below), never insertion, so
+	// there is no double entry and shortcut keycodes never become typed text.
+	override void textInput(string s) {
+		foreach(dchar c; s) {
+			// The C64 text rows are single-byte; accept printable ASCII only.
+			// '`' is the colour-escape lead-in used by the framebuffer, so skip it.
+			if(c < 0x20 || c > 0x7e || c == '`') continue;
+			insertGap();
+			setChar(c);
+			if(step(1) == WRAP) nibble = inputLength - 1;
+		}
+	}
+
+	override int keypress(Keyinfo key) {
 		switch(key.raw)
 		{
 		case SDLK_LEFT:
@@ -493,32 +528,16 @@ class InputString : Input {
 			if(nibble >= inputLength)
 				nibble = inputLength - 1;
 			break;
+		case SDLK_INSERT:
+			insertGap();
+			setChar(' ');
+			break;
 		case SDLK_RETURN:
 			return RETURN;
 		case SDLK_ESCAPE:
 			return CANCEL;
 		default:
-			void insert() {
-				instring[nibble+1 .. $] = instring[nibble .. $-1].dup;
-			}
-			if(key.raw == SDLK_INSERT) {
-				insert();
-				setChar(' ');
-			}
-			else if(key.unicode && key.unicode != '`') {
-				string old = cast(string)(instring.dup);
-				insert();
-				setChar(key.unicode);
-				try {
-					validate(instring);
-				}
-				catch(UTFException e) {
-					stderr.writeln(e.toString);
-					instring = old.dup;
-					break;
-				}
-				if(step(1) == WRAP) nibble = inputLength - 1;
-			}
+			// Printable characters arrive via textInput() (SDL_TEXTINPUT), not here.
 			break;
 		}
 		return OK;
@@ -526,7 +545,7 @@ class InputString : Input {
 
 	@property int stringLength() {
 		for(int i = inputLength - 1; i >= 0; i--) {
-			if(instring[i] != ' ') 
+			if(instring[i] != ' ')
 				return i+1;
 		}
 		return 0;
@@ -546,7 +565,7 @@ abstract class ExtendedInput : Input {
 	protected this() {
 		super(1);
 	}
-	
+
 	protected this(int w) {
 		super(w);
 	}
@@ -555,12 +574,12 @@ abstract class ExtendedInput : Input {
 	this(ValueChangedCallback cb) {
 		this(1, cb);
 	}
-	
+
 	this(int w, ValueChangedCallback cb) {
 		this.valueChangedCallback = cb;
 		super(w);
 	}
-	
+
 
 	override int step(int st) {
 		nibble += st;
@@ -596,7 +615,7 @@ abstract class ExtendedInput : Input {
 			valueChanged();
 			clearRow();
 			return WRAP;
-		default: 
+		default:
 			if(keytab == null) return WRAP;
 			int value = valueKeyReader(key, keytab);
 			if(value < 0) {
@@ -609,7 +628,7 @@ abstract class ExtendedInput : Input {
 	}
 
 protected:
-	
+
 	int valuekeyHandler(int value) {
 		if(width == 1) invalue = value;
 		else {
@@ -624,7 +643,7 @@ protected:
 		}
 
 		valueChanged();
-		
+
 		setRowValue(invalue);
 
 		memvalue = invalue;
@@ -651,7 +670,7 @@ protected:
 	override void update() {
 		assert(0);
 	}
-	
+
 	static int valueKeyReader(Keyinfo key,  const char[] keytab) {
         foreach(i, k; keytab) {
 			if(key.raw == k) {
@@ -668,14 +687,14 @@ class InputOctave : ExtendedInput {
 	this(ValueChangedCallback cb) {
 		super(1, cb);
 	}
-	
+
 	override int keypress(Keyinfo key) {
 		return super.keypress(key,"012345678");
-	}	
+	}
 
 	override void setRowValue(int value) {
 		if(element.note.value >= 3) {
-			int note = ((element.note.value + element.transpose) % 12) 
+			int note = ((element.note.value + element.transpose) % 12)
 				+ value * 12 - element.transpose;
 			if(note >= 3 && note < 0x5f)
 				element.note = cast(ubyte)note;
@@ -687,7 +706,7 @@ class InputInstrument : ExtendedInput {
 	this(ValueChangedCallback cb) {
 		super(2, cb);
 	}
-	
+
 	override void clearRow() {
 		super.clearRow();
 		element.instr = 0xc0;
@@ -723,7 +742,7 @@ class InputCmd : ExtendedInput {
 	this(ValueChangedCallback cb) {
 		super(2, cb);
 	}
-	
+
 	override void clearRow() {
 		super.clearRow();
 		element.cmd = 0;
@@ -757,7 +776,7 @@ class InputNote : ExtendedInput {
 		audio.player.playNote(emt);
 		return OK;
 	}
-	
+
 	override int keypress(Keyinfo key) {
 		if(key.mods & KMOD_CTRL || key.mods & KMOD_ALT) {
 			switch(key.raw) {
@@ -796,7 +815,7 @@ class InputNote : ExtendedInput {
 		default:
 			break;
 		}
-		
+
 		int r = super.keypress(key,"1!azsxdcvgbhnjmq2w3er5t6y7ui9o0p");
 		// r will be > 0 (in 'wrap') if valid data was entered
 		if(r) {
@@ -848,7 +867,7 @@ class InputNote : ExtendedInput {
 			break;
 		}
 	}
-	
+
 	override int step(int st) {
 		if(st >= 0) return WRAPR;
 		return WRAPL;
@@ -890,7 +909,7 @@ class InputKeyjam : ExtendedInput {
 			element.instr = cast(ubyte)(state.activeInstrument);
 		audio.player.playNote(element);
 	}
-	
+
 	override int keypress(Keyinfo key) {
 		return super.keypress(key,"1!azsxdcvgbhnjmq2w3er5t6y7ui9o0p");
 	}
@@ -910,7 +929,7 @@ final class InputSeq : ExtendedInput, Undoable {
 	int activeInputNo;
 	alias activeInputNo activeColumn;
 	enum columns = 3;
-	
+
 	this() {
 		super(1, null);
 		inputNote = new InputNote(&valueChanged);
@@ -958,7 +977,7 @@ final class InputSeq : ExtendedInput, Undoable {
 			break;
 		}
 
-		int r = activeInput.keypress(key); 
+		int r = activeInput.keypress(key);
 
 		return r;
 	}
@@ -1021,7 +1040,7 @@ final class InputSeq : ExtendedInput, Undoable {
 			foreach(inp; inputters) {
 				inp.nibble = 0;
 			}
-			
+
 			activeInputNo++;
 			if(activeInputNo >= inputters.length) {
 				activeInputNo = 0;
@@ -1030,7 +1049,7 @@ final class InputSeq : ExtendedInput, Undoable {
 			}
 			activeInput = inputters[activeInputNo];
 			activeInput.nibble = 0;
-			
+
 		}
 		else if(r == WRAPL) {
 			foreach(inp; inputters) {
@@ -1040,7 +1059,7 @@ final class InputSeq : ExtendedInput, Undoable {
 			if(activeInputNo < 0) {
 				activeInputNo = cast(int)(inputters.length - 1);
 				activeInput = inputters[activeInputNo];
-				
+
 				return WRAPL;
 			}
 			activeInput.nibble = activeInput.width - 1;
@@ -1051,11 +1070,11 @@ final class InputSeq : ExtendedInput, Undoable {
 
 	override void update() {
 		screen.cprint(pointerX, pointerY, 1, -1, element.toPlainString());
-		
+
 		assert(activeInput == inputters[activeInputNo]);
 		int xofs = [0, 2, 4, 7][activeInputNo];
 		cursor.set(pointerX + xofs + activeInput.nibble, pointerY);
-	}	
+	}
 }
 
 class InputSpecial : InputValue {
@@ -1065,12 +1084,12 @@ class InputSpecial : InputValue {
 
 	override void setOutput(ubyte[] p) {
 	}
-	
+
 	override int setValue(int v) {
 		inarray[nibble] = v & 15;
 		return OK;
 	}
-	
+
 	override void update() {
 		static immutable offsets = [0, 2, 3, 5, 6];
         screen.cprint(x, y, 1, -1, format("%01X-%02X %02X",inarray[0],toInt(inarray[1..3]),toInt(inarray[3..5])));

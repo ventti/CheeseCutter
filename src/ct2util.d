@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+ct2util CLI — compiles/optimizes a .ct song into .prg or .sid, sharing ct.build/ct.purge with the editor.
 */
 
 import com.cpu;
@@ -46,48 +48,7 @@ bool doPurge(ref Song song) {
 	return true;
 }
 
-void validate(ref Song song) {
-	explain("Checking validity...");
-	for(int i = 0; i < song.numInstr; i++) {
-		//ubyte[] instr = song.getInstrument(i);
-		int waveptr = song.wavetablePointer(i);
-		int pulseptr = song.pulsetablePointer(i);
-		int filtptr = song.filtertablePointer(i);
-		if(!song.tWave.isValid(waveptr)) {
-			throw new ValidateException(format("Error: instrument %d is not valid (wavetable does not wrap).", i));
-		}
-		
-		if(!song.tPulse.isValid(pulseptr)) {
-			throw new ValidateException(format("Cannot save; pulse %d is not valid.", pulseptr));
-		}
-		
-		if(!song.tFilter.isValid(filtptr)) {
-			throw new ValidateException(format("Cannot save; filter %d is not valid.", filtptr));
-		}
-
-		song.seqIterator((int seqno, Sequence s, Element e) {
-				if(e.cmd.value >= 0x80 && e.cmd.value <= 0x9f) {
-					int idx = song.chordIndexTable[e.cmd.value & 0x1f];
-					for(int i = idx; i < 128; i++) {
-						if(song.chordTable[i] >= 0x80) return;
-					}
-					throw new ValidateException(format("sequence $%02x, could not find end for chord %x. The song has a 8x command pointing to nonexistant chord program.", seqno, e.cmd.value & 0x1f));
-					
-				}
-			});
-		
-	}
-}
-
-class ValidateException : Exception {
-	this(string msg) {
-		super(msg);
-	}
-
-	override string toString() {
-		return "Validation error: " ~ msg;
-	}
-}
+// validate() and ValidateException now live in ct.build (shared with the editor).
 
 int main(string[] args) {
 	int relocAddress = 0x1000, zpAddress = 0;
@@ -105,8 +66,9 @@ int main(string[] args) {
 	speeds.length = 32;
 	masks.length = 32;
 	void printheader() {
-		enum hdr = "CheeseCutter 2 utilities" ~ com.util.versionInfo;
+		enum hdr = com.util.APP_NAME ~ " " ~ com.util.APP_VERSION ~ " utilities" ~ com.util.versionInfo;
 		writefln(hdr);
+		writefln("Based on " ~ com.util.UPSTREAM_NAME ~ " " ~ com.util.UPSTREAM_VERSION ~ ".");
 		writefln("\nUsage: \t%s <command> <options> <infile> <-o outfile>",args[0]);
 		writefln("\t%s import <infile> <infile2> <-o outfile>",args[0]);
 		writefln("\t%s init <binaryfile> <-o outfile>",args[0]);
@@ -264,31 +226,32 @@ int main(string[] args) {
 		case Command.ExportPRG, Command.ExportSID:
 			insong = new Song;
 			insong.open(infn);
-			if(singleSubtune >= 1) {
-				for(int i = 0; i < ct.base.SUBTUNE_MAX; i++) {
-					if(i == singleSubtune - 1) continue;
-					insong.subtunes.clear(i);
-				}
-				insong.subtunes.swap(0, singleSubtune - 1);
-				defaultTune = 1;
-			}
-			if(!doPurge(insong)) {
-				writeln("Aborting");
-				return -1;
-			}
+			// Build options from the parsed flags and call the shared export core.
+			// ct2util's prg has always been the bare player+data blob (executable
+			// = false); the editor adds the self-running variant.
+			ExportOptions opts;
+			opts.relocAddress = relocAddress;
+			opts.zpAddress = zpAddress;
+			opts.singleSubtune = singleSubtune;
+			opts.defaultSubtune = defaultTune;
+			opts.executable = false;
+			ubyte[] data;
 			try {
-				validate(insong);
+				if(command == Command.ExportSID)
+					data = exportSid(insong, opts, verbose);
+				else
+					data = exportPrg(insong, false, opts, verbose);
 			}
 			catch(ValidateException e) {
 				writeln(e);
 				writeln("Aborting");
 				return -1;
 			}
-				
-				
-			ubyte[] data = doBuild(insong, relocAddress, zpAddress,
-								   command == Command.ExportSID,
-								   defaultTune, verbose);
+			catch(PurgeException e) {
+				writeln(e);
+				writeln("Aborting");
+				return -1;
+			}
 			std.file.write(outfn, data);
 			break;
 		case Command.Import:

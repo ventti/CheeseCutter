@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Shared utilities and app identity — APP_NAME/APP_VERSION (string-imported from `Version`) and PET-string helpers.
 */
 
 module com.util;
@@ -10,13 +12,21 @@ import std.array;
 
 alias char* PetString;
 
+enum APP_NAME = "CheeseCutter-Extended";
+// Single source of truth for the version: the repo-root `Version` file, read at
+// compile time (string import; the Makefiles add -J. and `make` also reads it
+// for dist/tarball names). Bump the version by editing `Version` only.
+enum APP_VERSION = import("Version").strip;
+enum UPSTREAM_NAME = "CheeseCutter";
+enum UPSTREAM_VERSION = "2.9";
+
 //private auto regexFn = regex("[^a-zA-Z0-9_\\-\\.]");
 
 
 string versionInfo() {
 	version(DEV)
-		return " (" ~__DATE__ ~ " git)";
-	return " (" ~__DATE__ ~ ")";
+		return " (" ~__DATE__ ~ " " ~ __TIME__[0..5] ~ " git)";
+	return " (" ~__DATE__ ~ " " ~ __TIME__[0..5] ~ ")";
 }
 
 struct Clip {
@@ -68,6 +78,14 @@ int paddedStringLength(string s, char padchar) {
 	return 0;
 }
 
+char[32] paddedString32(string s) {
+	char[32] value = ' ';
+	int len = cast(int)s.length;
+	if(len > 32) len = 32;
+	value[0..len] = s[0..len];
+	return value;
+}
+
 void hexdump(ubyte[] buf, int rowlen) {
 	hexdump(buf, rowlen, false);
 }
@@ -76,7 +94,7 @@ void hexdump(ubyte[] buf, int rowlen, bool prrow) {
 	int c, r;
 	if(prrow)
 		writef("%02x: ", 0);
-	
+
 	foreach(b; buf) {
 		writef("%02X ", b);
 		c++;
@@ -228,11 +246,11 @@ string fnClean(string fn) {
 bool fnIsSane(string fn) {
 	return matchAll(fn,regexFn).empty;
 }*/
-string fnClean(string fn) 
+string fnClean(string fn)
 {
 	return tr(fn,"a-zA-Z0-9._-","_","c");
 }
-bool fnIsSane(string fn) 
+bool fnIsSane(string fn)
 {
 	return (fn == fnClean(fn));
 }

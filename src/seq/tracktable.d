@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Track editor tables (TrackVoice / BaseTrackTable / TrackTable) layered over the sequence tables.
 */
 
 module seq.tracktable;
@@ -9,11 +11,13 @@ import seq.seqtable;
 import com.fb;
 import com.session;
 import com.util;
+import com.selection;
 import ui.ui;
 import ui.dialogs;
 import ui.input;
-import derelict.sdl.sdl;
+import derelict.sdl2.sdl;
 import ct.base;
+import std.array : replicate;
 
 
 class TrackVoice : SeqVoice {
@@ -59,6 +63,8 @@ class TrackVoice : SeqVoice {
 		void printTrack() {
 			if(!displayTracklist) return;
 
+			screen.cprint(area.x - 1, scry, 1, 0,
+						  replicate(" ", area.width + 1));
 			screen.cprint(area.x - 1, scry, 1, 0,
 						  " " ~ formatTrackValue(wseq.track.smashedValue));
 
@@ -174,7 +180,9 @@ protected:
 
 abstract class BaseTrackTable : VoiceTable, Undoable {
 	QueryDialog queryClip;
-	
+
+	protected Clip[] clip;
+    
 	this(Rectangle a, PosDataTable pi) {
 		super(a, pi);
 		queryClip = new QueryDialog("Copy number of tracks to clipboard: $",
@@ -187,6 +195,10 @@ abstract class BaseTrackTable : VoiceTable, Undoable {
 	}
 	
 	override int keypress(Keyinfo key) {
+		// Block-selection commands first. When no selection is active and the
+		// clipboard is empty/foreign, copy/paste fall through to the legacy
+		// number-prompt track copy/paste below (no regression).
+		if(handleSelectionKey(key)) return OK;
 		if(key.mods & KMOD_CTRL) {
 			switch(key.raw)
 			{
@@ -204,7 +216,7 @@ abstract class BaseTrackTable : VoiceTable, Undoable {
 					jump(Jump.toEnd,true);
 				}
 				return OK;
-			case SDLK_DELETE:
+			case SDLK_DELETE, SDLK_BACKSPACE:
 				saveState(true);
 				if(key.mods & KMOD_SHIFT) {
 					for(int i = 0; i < voices.length; i++) {
@@ -273,12 +285,12 @@ abstract class BaseTrackTable : VoiceTable, Undoable {
 		}
 		else switch(key.raw)
 			 {
-			 case SDLK_INSERT:
+			 case SDLK_INSERT, SDLK_RETURN:
 				 saveState(false);
 				 auto v = (cast(TrackVoice)activeVoice);
 				 v.trackInsert(true);
 				 return OK;
-			 case SDLK_DELETE:	
+			 case SDLK_DELETE, SDLK_BACKSPACE:	
 				 saveState(false);
 				 auto v = (cast(TrackVoice)activeVoice);
 				 v.trackDelete(true);
@@ -426,11 +438,13 @@ abstract class BaseTrackTable : VoiceTable, Undoable {
 		UndoValue v;
 
 		v.trackValue = (cast(InputTrack)input).trk.dup;
-		v.track = (cast(InputTrack)input).trk;
 
 		if(allVoices) {
+			// Snapshot each voice's FULL tracklist (not the cursor-relative
+			// getTracklist slice): a block selection or insert can touch tracks
+			// above the cursor, so a slice-from-cursor would lose them on undo.
 			for(int i = 0; i < voices.length; i++) {
-				auto tl = getTracklist(voices[i]);
+				auto tl = voices[i].tracks;
 				auto t = TracklistStore(tl.deepcopy, tl);
 				v.trackLists ~= t;
 			}
@@ -454,8 +468,6 @@ abstract class BaseTrackTable : VoiceTable, Undoable {
 			t.source.overwriteFrom(t.store);
 		}
 
-		v.track = v.trackValue;
-
 		posTable.copyFrom(v.posTable);
 		refresh();
 		// make sure cursor not past track end
@@ -465,6 +477,95 @@ abstract class BaseTrackTable : VoiceTable, Undoable {
 	override protected UndoValue createRedoState(UndoValue value) {
 		return createState(value.allVoices);
 	}
+
+	// ----------------------------------------------------------------
+	// Block-selection surface hooks (track column). Cells are 2-byte Track
+	// entries (trans, number) addressed by absolute track offset (trkOffset).
+	// ----------------------------------------------------------------
+
+	override bool selectionEnabled() { return true; }
+	protected override ClipKind cellKind() { return ClipKind.track; }
+	protected override int cellSize() { return 2; }
+
+	protected override int activeRowAbs() {
+		return activeVoice.activeRow.trkOffset;
+	}
+
+	protected override int rowAtScreenY(int voiceIdx, int localY) {
+		// In the track column the displayed grid is still the note grid (one
+		// screen row per song row); selection units are whole tracks. So map a
+		// screen row to its song row (same as the note column) and return the
+		// track offset that song row belongs to. This highlights all of a
+		// selected track's rows and lets a drag pick the track under the pointer.
+		int rowIdx = localY - 1;
+		if(rowIdx < 0 || rowIdx >= area.height) return int.min;
+		int songRow = voices[voiceIdx].pos.rowCounter + rowIdx - anchor;
+		return trackAtSongRow(voices[voiceIdx], songRow);
+	}
+
+	// Keep the selection within the valid track range (no spilling above the
+	// first track or past the end mark).
+	protected override int clampSelRow(int col, int row) {
+		int last = voices[col].tracks.trackLength - 1;
+		if(row < 0) row = 0;
+		if(row > last) row = last;
+		return row;
+	}
+
+	private int trackAtSongRow(Voice v, int songRow) {
+		if(songRow < 0) return int.min;
+		int pos = 0;
+		int last = v.tracks.trackLength - 1;
+		for(int ti = 0; ti <= last; ti++) {
+			int rows = song.sequence(v.tracks[ti]).rows;
+			if(songRow < pos + rows) return ti;
+			pos += rows;
+		}
+		return int.min;   // past the song's end
+	}
+
+	protected override ubyte[] readCellBytes(int voiceIdx, int absRow) {
+		Voice v = voices[voiceIdx];
+		if(absRow < 0 || absRow >= v.tracks.trackLength) return null;
+		return [cast(ubyte)v.tracks[absRow].trans,
+				cast(ubyte)v.tracks[absRow].number];
+	}
+
+	protected override void blankCellAt(int voiceIdx, int absRow) {
+		Voice v = voices[voiceIdx];
+		if(absRow < 0 || absRow >= v.tracks.trackLength) return;
+		v.tracks[absRow].setValue(0xa0, 0);
+	}
+
+	// Paste from the cursor track down, clipped to the tracklist end mark
+	// (overflow dropped). mergeOnly writes only into empty (number==0) slots.
+	protected override void pasteColumn(int voiceIdx, int clipCol, bool mergeOnly) {
+		Voice v = voices[voiceIdx];
+		int start = v.activeRow.trkOffset;
+		for(int r = 0; r < rowClip.rows; r++) {
+			int dst = start + r;
+			if(dst >= v.tracks.trackLength) break;     // stop at end mark
+			if(mergeOnly && v.tracks[dst].number != 0) continue;
+			ubyte[] cell = rowClip.cell(clipCol, r);
+			v.tracks[dst].setValue(cell[0], cell[1]);
+		}
+	}
+
+	// Insert clipboard-many blank tracks at the cursor, then fill them.
+	protected override void pasteNewColumn(int voiceIdx, int clipCol) {
+		auto tv = cast(TrackVoice)voices[voiceIdx];
+		int at = tv.activeRow.trkOffset;
+		for(int r = 0; r < rowClip.rows; r++)
+			tv.trackInsert(true);
+		for(int r = 0; r < rowClip.rows; r++) {
+			ubyte[] cell = rowClip.cell(clipCol, r);
+			voices[voiceIdx].tracks[at + r].setValue(cell[0], cell[1]);
+		}
+	}
+
+	// Block edits only touch tracklists; reuse the all-voices tracklist undo.
+	protected override void saveSelState() { saveState(true); }
+	protected override void afterMutate() { refresh(); step(0, 0, 0); }
 }
 
 

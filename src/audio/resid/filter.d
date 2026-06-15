@@ -1,3 +1,7 @@
+/*
+Filter-parameter tables bridging D to the ReSID 6581/8580 filter curves.
+*/
+
 module audio.resid.filter;
 
 struct Filterparams {

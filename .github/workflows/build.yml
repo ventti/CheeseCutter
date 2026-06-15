@@ -1,0 +1,116 @@
+name: Build binaries
+
+on:
+  push:
+    branches: [develop, master]
+    paths:
+      - "src/**"
+      - "Makefile*"
+      - ".github/workflows/build.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "Makefile*"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+
+jobs:
+  windows:
+    name: Windows x64 (mingw-w64)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSYS2 / mingw-w64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            make
+            git
+            mingw-w64-x86_64-ldc
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-SDL2
+            mingw-w64-x86_64-curl
+
+      - name: Build the ACME assembler (for src/c64/player.bin)
+        run: |
+          git clone --depth 1 https://github.com/meonwax/acme.git /tmp/acme
+          make -C /tmp/acme/src
+          # mingw gcc emits acme.exe; fall back to a bare name just in case.
+          cp /tmp/acme/src/acme.exe /mingw64/bin/ 2>/dev/null || cp /tmp/acme/src/acme /mingw64/bin/acme.exe
+          acme --version
+
+      - name: Build
+        run: make -f Makefile.win release
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp ccutter.exe ct2util.exe dist/
+          # Bundle every mingw runtime DLL the executables actually depend on
+          # (SDL2, curl + its TLS/zlib deps, libstdc++, libgcc, winpthread, ...).
+          for exe in ccutter.exe ct2util.exe; do
+            for dll in $(ldd "$exe" | grep -i '/mingw64/bin/' | awk '{print $3}'); do
+              cp -u "$dll" dist/
+            done
+          done
+          cp README.md LICENSE.md dist/ 2>/dev/null || true
+          cp -r tunes dist/tunes
+          ls -l dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cheesecutter-win64
+          path: dist
+
+  linux:
+    name: Linux x64 (ldc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ldc acme libsdl2-dev libcurl4-openssl-dev g++ make
+
+      - name: Build
+        run: make -j release
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp ccutter ct2util dist/
+          cp README.md LICENSE.md dist/ 2>/dev/null || true
+          cp -r tunes dist/tunes
+          ls -l dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cheesecutter-linux64
+          path: dist
+
+  macos:
+    name: macOS (Apple Silicon, ldc)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install ldc acme sdl2
+
+      - name: Build
+        run: make -j -f Makefile.mac release LIBSPATH="$(brew --prefix)/lib"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cheesecutter-macos
+          path: CheeseCutter-Extended.app

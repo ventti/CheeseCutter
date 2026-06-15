@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+ContextHelp data type backing the F12 per-context help pages.
 */
 
 module ui.help;
@@ -15,10 +17,12 @@ struct ContextHelp {
 ContextHelp HELPMAIN = ContextHelp("Main help", 
 ["
 Escape (x2).....Quit program
-F10.............Open the Load song dialog
-F11.............Open the Save song dialog
-F9..............Open the About dialog
+Alt-Return......Toggle fullscreen
+F9..............Open the Load song dialog
+F10.............Open the Save song dialog
+F11.............Open the About dialog
 Ctrl-F11........Quick save song (doesn't ask a filename)
+Ctrl-F12........Save screenshot
 
 `+dPlayback\n
 F1..............Play from playback mark
@@ -29,20 +33,22 @@ F3..............Play from cursor position
 F4..............Stop playback
 F8..............Fast forward (w/ Shift = Fast forward more)
 Scroll Lock.....Start/stop tracking (works only when playing)
+Ctrl-F5.........Start/stop tracking (works only when playing)
 Ctrl-1,2,3......Toggle voices on/off
-Ctrl-F9.........Show/hide playback info (works only when playing)
+Ctrl-F9.........Cycle playback visualization
+Ctrl-F2.........Toggle interpolation
+Ctrl-F3.........Toggle SID type (6581/8580)
+Ctrl-F8.........Select next SID filter preset
+Ctrl-Shift-F8...Select previous SID filter preset
 
 `+dSong variables\n
 Ctrl-Keypad - +.........Decrease/increase default song speed
 [ ] (AltGr-8 / AltGr-9).Decrease/increase default song speed
 Alt-Keypad - +..........Decrease/increase multispeed framecall counter 
 { } (AltGr-7 / AltGr-0).Decrease/increase multispeed framecall counter
-Ctrl-F3.................Toggle SID type (6581/8580)
-Ctrl-F8.................Select next SID filter preset
-Ctrl-Shift-F8...........Select previous SID filter preset
 Alt-T...................Edit title / author / release info
-Ctrl-Alt-C..............Clear sequences (press TWICE to activate)
-Ctrl-Alt-O..............Optimize (clear unused sequences & data)
+Ctrl-Alt-C..............Clear all sequences (asks for confirmation)
+Ctrl-Alt-O..............Optimize song (clear unused sequences & data)
 ", "
 `+dMoving between tables\n
 Tab.....................Move cursor between subwindows
@@ -50,26 +56,28 @@ Ctrl-Tab................Move cursor between main windows
                         (sequencer, instrument table, subtables)
 Alt-V...................Jump to Sequencer
 Alt-I...................Jump to Instrument table
-Alt-M...................Jump to Cmd table
+Alt-W...................Jump to Wave table
 Alt-P...................Jump to Pulse table
 Alt-F...................Jump to Filter table
+Alt-M...................Jump to Cmd table
 Alt-D...................Jump to Chord table
 Alt-1, 2, 3.............Jump to voice 1, 2 or 3
-Alt-4-8 can also move between tables (in the aforementioned order,
-so Alt-4 = Sequencer, Alt-5 = Ins, ...)
+Alt-4-9 can also move between tables:
+Alt-4 = Ins, Alt-5 = Wave, Alt-6 = Pulse, Alt-7 = Filter,
+Alt-8 = Cmd, Alt-9 = Chord
 
 `+dInstrument table functions\n
-Ctrl-L..................Load current insturment from disk
+Ctrl-L..................Load current instrument from disk
 Ctrl-S..................Save current instrument to disk
 Ctrl-D..................Delete current instrument
 Ctrl-C..................Copy instrument to clipboard
 Ctrl-V..................Paste instrument from clipboard
 
 `+dPlayer reference\n
-Check out the player reference guide from the CheeseCutter homepage.
+Check out the bundled CheeseCutter-Extended user guide.
 
-`+dCheeseCutter homepage:
-http://theyamo.kapsi.fi/ccutter
+`+dAbout:
+CheeseCutter-Extended 0.1.0, based on CheeseCutter 2.9
 
 "]);
 
@@ -135,19 +143,23 @@ Enter...................Grab the instrument value in the current row
 
 `+dIn the track column (F5)
 
+Up/Down.................Previous/next track in active voice
+PageUp/PageDown.........Previous/next track in active voice
 Ctrl-F..................Find next unused sequence starting from current value
 < >.....................Select previous/next sequence
 Ctrl-Q/A................Transpose all tracks up/down from cursor down
+Hex digits..............Edit transpose/sequence value
 ", "`+dIn the track column (F5) (cont.)
 
-Ctrl-C..................Ask for a number and copy the N of tracks into clipboard
-Ctrl-V..................Paste copied tracks from the clipboard
-Space...................Write the cached sequence number to the track value
-Insert/Delete...........Insert empty track (A000) or delete track from cursor
-                        pos down
+Insert/Return...........Insert a track at cursor
+Delete/Backspace........Delete track at cursor
 Ctrl-Enter..............Insert a track to end of voice and move cursor there
 Ctrl-Insert/Delete......Insert/delete track to end of voice and move cursor there
 Ctrl-Shift-Insert/Del...Insert/delete a track for all voices
+Ctrl-C or Alt-Z.........Ask for a number and copy tracks into clipboard
+Ctrl-V..................Ask to paste copied tracks as insert or overwrite
+Ctrl-I/O................Paste copied tracks as insert/overwrite
+Alt-B...................Paste copied tracks as insert
 Ctrl-Alt-1..............Swap voice's track with voice 1's tracks from crsr down
 Ctrl-Alt-2..............Swap voice's track with voice 2's tracks from crsr down
 Ctrl-Alt-3..............Swap voice's track with voice 3's tracks from crsr down
@@ -164,4 +176,3 @@ ContextHelp genPlayerContextHelp(string title, char*[] descriptions) {
 	ContextHelp ctx = ContextHelp(title, [text]);
 	return ctx;
 }
-

@@ -44,6 +44,7 @@
 #include "output.h"
 #include "platform.h"
 #include "section.h"
+#include "tree.h"
 
 
 // Constants
@@ -152,6 +153,10 @@ char* acme_assemble(const char* src, const int *length, char *error) {
 	Mnemo_init();
 	Output_init(fill_value);
 	Section_init();
+	// The keyword trees are now fully built; freeze them so a subsequent
+	// acme_assemble() call (re-running the inits above) cannot re-add the
+	// static nodes and corrupt the trees into a cycle.
+	Tree_freeze();
 	if(!setjmp(exception_env)) {
 		if(do_actual_work()) {
 			return Output_get_final_data(length);

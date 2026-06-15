@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Serializes the song model to .ct data (dumpData).
 */
 
 /** date to source dumper. very ugly quick and dirty hack

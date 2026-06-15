@@ -49,9 +49,23 @@ void add_node_to_tree(node_t** tree, node_t* node_to_add) {
 // fields.
 }
 
+// The predefined keyword tables are immutable and built from *static* node
+// structs. add_node_to_tree() links those structs in place, so re-adding them
+// on a second acme_assemble() call (re-running the *_init() functions) would
+// corrupt the tree into a cycle and hang. The keyword trees only need building
+// once per process, so freeze them after the first init cycle; per-assembly
+// state (labels, output, dynabufs) is reset separately on every call.
+static int trees_frozen = 0;
+
+void Tree_freeze(void) {
+	trees_frozen = 1;
+}
+
 // Add predefined tree items to given tree. The PREDEF* macros set HashValue
 // to 1 in all entries but the last. The last entry contains 0.
 void Tree_add_table(node_t** tree, node_t* table_to_add) {
+	if(trees_frozen)
+		return;  // keyword trees already built; do not re-add the static nodes
 	// Caution when trying to optimise this. :)
 	while(table_to_add->hash_value)
 		add_node_to_tree(tree, table_to_add++);

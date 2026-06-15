@@ -1,38 +1,94 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Text-mode framebuffer — Video/Screen abstraction, character-cell rendering and the Visualizer interface.
 */
 
 module com.fb;
-import derelict.sdl.sdl;
+import derelict.sdl2.sdl;
 import std.string : indexOf;
 import com.util;
 
-immutable SDL_Color[] PALETTE = [
-	{ 0,0,0 },       
-	{ 63 << 2,63 << 2,63 << 2 },
-	{ 26 << 2,13 << 2,10 << 2 },
-	{ 28 << 2,41 << 2,44 << 2 },
-	{ 27 << 2,15 << 2,33 << 2 },
-	{ 22 << 2,35 << 2,16 << 2 },
-	{ 13 << 2,10 << 2,30 << 2 },
-	{ 46 << 2,49 << 2,27 << 2 },
-	{ 27 << 2,19 << 2,9 << 2 },
-	{ 16 << 2,14 << 2,0 << 2 },
-	{ 38 << 2,25 << 2,22 << 2 },
-	{ 17 << 2,17 << 2,17 << 2 },
-	{ 27 << 2,27 << 2,27 << 2 },
-	{ 38 << 2,52 << 2,33 << 2 },
-	{ 27 << 2,23 << 2,45 << 2 },
-	{ 37 << 2,37 << 2,37 << 2 } ];
+SDL_Color[] PALETTE = [
+	{ 0x00, 0x00, 0x00 },       // 0
+	{ 0xfe, 0xfe, 0xfe },       // 1
+	{ 0x81, 0x33, 0x37 },       // 2
+	{ 0x75, 0xce, 0xc8 },       // 3
+	{ 0x8d, 0x3b, 0x97 },       // 4
+	{ 0x55, 0xac, 0x4d },       // 5
+	{ 0x2d, 0x2b, 0x9a },       // 6
+	{ 0xed, 0xf0, 0x71 },       // 7
+	{ 0x8d, 0x50, 0x29 },       // 8
+	{ 0x54, 0x37, 0x00 },       // 9
+	{ 0xc4, 0x6c, 0x71 },       // 10
+	{ 0x49, 0x49, 0x49 },       // 11
+	{ 0x7b, 0x7b, 0x7b },       // 12
+	{ 0xa9, 0xfe, 0x9f },       // 13
+	{ 0x6f, 0x6d, 0xeb },       // 14
+	{ 0xb1, 0xb1, 0xb1 },       // 15
+
+	// Brightness gradient colors (16-31): from mid-blue #303090 to black #000000
+	// Used for ADSR envelope visualization
+	{ 0x18, 0x18, 0x48 },  // 16: Brightest (step 15/15, halved)
+	{ 0x16, 0x16, 0x42 },  // 17: step 14/15
+	{ 0x14, 0x14, 0x3C },  // 18: step 13/15
+	{ 0x12, 0x12, 0x36 },  // 19: step 12/15
+	{ 0x10, 0x10, 0x30 },  // 20: step 11/15
+	{ 0x0E, 0x0E, 0x2A },  // 21: step 10/15
+	{ 0x0C, 0x0C, 0x24 },  // 22: step 9/15
+	{ 0x0A, 0x0A, 0x1E },  // 23: step 8/15
+	{ 0x08, 0x08, 0x18 },  // 24: step 7/15
+	{ 0x06, 0x06, 0x12 },  // 25: step 6/15
+	{ 0x04, 0x04, 0x0C },  // 26: step 5/15
+	{ 0x03, 0x03, 0x09 },  // 27: step 4/15
+	{ 0x02, 0x02, 0x06 },  // 28: step 3/15
+	{ 0x01, 0x01, 0x04 },  // 29: step 2/15
+	{ 0x01, 0x01, 0x03 },  // 30: step 1/15
+	{ 0x00, 0x00, 0x00 }   // 31: Darkest (step 0/15) - black
+];
 
 immutable FONT_X = 8, FONT_Y = 14;
 __gshared ubyte[] font;
-immutable int mode, border = 1;
+
+// Separate 8x8 PETSCII font used only by the About-splash scroller (see
+// Video.drawSplash()). Glyphs are MSB-left bitmap rows like `font`, but 8 tall.
+immutable SCROLL_FONT_Y = 8;
+__gshared ubyte[] scrollfont;
+
+// Splash artwork: raw 320x200 array of PALETTE indices (see tools/mk-splash.py),
+// shown by Video.drawSplash() in place of the text grid while splashActive.
+immutable SPLASH_W = 320, SPLASH_H = 200, SPLASH_SCALE = 2;
+immutable ubyte[] splashData = cast(immutable(ubyte)[])import("splash.dat");
+
+// About-splash scroller: a right-to-left PETSCII scroller drawn over the bottom
+// of the artwork. Text is light gray (PALETTE 15) by default; an inline control
+// byte 0x00..0x0f changes the colour to that C64 palette index for what follows.
+immutable double SCROLL_SPEED = 50.0;    // 1 scaled px (1 font px) per 50Hz tick
+immutable ubyte SCROLL_DEFAULT_COL = 1;
+// Scroller row position: pixels below the bottom edge of the artwork (the image
+// already has static credits baked into its own bottom rows, so the scroller
+// sits in the black margin beneath it). Band height = SCROLL_FONT_Y*SPLASH_SCALE.
+immutable int SCROLL_ROW_OFFSET = SPLASH_SCALE * 8;
+immutable string scrollText =
+	"   \x0dCHEESECUTTER EXTENDED " ~ APP_VERSION ~
+	"   \x01 - A MODERNIZED FORK OF \x0dTHE POPULAR EDITOR" ~
+	"               \x01(C) 2009-17 ABADDON - RELEASED UNDER THE GNU GPL" ~
+	"               \x01(C) 2025-26 EXTENSIONS PRODUCED BY VENT" ~
+	"               \x01RESID ENGINE BY DAG LEM & ANTTI LANKILA" ~
+        "               \x01ORIGINAL MACOSX AND D2 PORT BY RUK 2013" ~
+	"               \x01PARTS OF RESID INTERFACE BY CADAVER / COVERT BITOPS" ~
+	"               \x01INCLUDES ACME ASSEMBLER 0.91 BY MARCO BAYE" ~
+	"               \x01LIBSDL2 BY THE SDL TEAM" ~
+	"               \x01VISIT \x0dhttps://github.com/ventti/CheeseCutter\x01 FOR MORE INFORMATION" ~
+	"               \x0fPRESS ANY KEY TO RETURN TO CUT SOME CHEESE ...        ";
+
+int mode; // 0 = compact (default), >0 = wide
+immutable int border = 1;
 private bool isDirty = false;
 
 immutable CHECKX = "assert(x >= 0 && x < width);";
 immutable CHECKY = "assert(y >= 0 && y < height);";
-immutable CHECKS = "assert(x + y >= 0 && x + y < width*height);";
+immutable CHECKS = "assert(x >= 0 && y >= 0 && x + y * width >= 0 && x + y * width < width*height);";
 
 static this() {
 	void[] arr;
@@ -40,34 +96,45 @@ static this() {
 	// realign font data
 	immutable rawfont = import("font.psf");
 	for(int i=0;i<256;i++) {
-		font[i*16..i*16+14] = cast(ubyte[])rawfont[i*FONT_Y+4..i*FONT_Y+4+FONT_Y];
+		font[i*16..i*16+FONT_Y] = cast(ubyte[])rawfont[i*FONT_Y+4..i*FONT_Y+4+FONT_Y];
+	}
+	// PSF1 8x8 PETSCII font for the splash scroller (4-byte header, 8 bytes/glyph).
+	scrollfont.length = 256*SCROLL_FONT_Y;
+	immutable rawpet = import("petscii.psf");
+	for(int i=0;i<256;i++) {
+		scrollfont[i*SCROLL_FONT_Y..i*SCROLL_FONT_Y+SCROLL_FONT_Y] =
+			cast(ubyte[])rawpet[4+i*SCROLL_FONT_Y..4+i*SCROLL_FONT_Y+SCROLL_FONT_Y];
 	}
 }
 
 abstract class Video {
 	protected {
-		SDL_Surface* surface;
+		//SDL_Surface* surface;
+    SDL_Window* window;
+    SDL_Renderer* renderer;
+    SDL_Texture* texture;
 		bool useFullscreen;
 		Screen screen;
 		Visualizer vis;
 		const int requestedWidth, requestedHeight;
 		int height, width; // resolution of window
-		int displayHeight, displayWidth; // resolution of the monitor
+		//int displayHeight, displayWidth; // resolution of the monitor
 		SDL_Rect rect;
 	}
-	
+
 	this(int wx, int wy, Screen scr, int fs) {
-		const SDL_VideoInfo* vidinfo = SDL_GetVideoInfo();
+		//const SDL_VideoInfo* vidinfo = SDL_GetVideoInfo();
 		screen = scr;
-		displayHeight = vidinfo.current_h;
-		displayWidth = vidinfo.current_w;
+		//displayHeight = vidinfo.current_h;
+		//displayWidth = vidinfo.current_w;
 		requestedHeight = wy;
 		requestedWidth = wx;
+
 	}
 
 	~this() {
-		if(surface !is null)
-			SDL_FreeSurface(surface);
+    if(window !is null)
+      SDL_DestroyWindow(window);
 	}
 
 	abstract void drawVisualizer(int);
@@ -80,17 +147,71 @@ abstract class Video {
 	}
 
 	void toggleFullscreen() {
-		useFullscreen ^= 1; 
+		useFullscreen ^= 1;
 		enableFullscreen(useFullscreen);
 	}
+
+	bool isFullscreen() { return useFullscreen; }
 
 	void scalePosition(ref int x, ref int y) {
 		x -= rect.x;
 		y -= rect.y;
+    /+
 		x *= cast(float)requestedWidth / width;
 		y *= cast(float)requestedHeight / height;
+    +/
 	}
-		
+
+	void saveScreenshot(string filename) {
+		import std.stdio : writefln;
+		import std.datetime.systime : Clock;
+		import std.format : format;
+		import std.string : toStringz;
+
+		// Generate filename if not provided
+		if(filename == "") {
+			auto now = Clock.currTime();
+			filename = format("screenshot_%04d%02d%02d_%02d%02d%02d.bmp",
+				now.year, now.month, now.day, now.hour, now.minute, now.second);
+		}
+
+		// Create a surface to capture the renderer content
+		SDL_Surface* surface = SDL_CreateRGBSurface(0, width, height, 32,
+			0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
+
+		if(surface is null) {
+			writefln("Error: Could not create surface for screenshot");
+			return;
+		}
+
+		// Read pixels from renderer
+		SDL_RenderReadPixels(renderer, null, SDL_PIXELFORMAT_ARGB8888, surface.pixels, surface.pitch);
+
+		// Save to BMP file using SDL_SaveBMP_RW
+		SDL_RWops* rw = SDL_RWFromFile(filename.toStringz(), "wb");
+		if(rw !is null) {
+			if(SDL_SaveBMP_RW(surface, rw, 1) == 0) {
+				writefln("Screenshot saved: %s", filename);
+			} else {
+				writefln("Error saving screenshot: %s", SDL_GetError());
+			}
+		} else {
+			writefln("Error opening file for screenshot: %s", SDL_GetError());
+		}
+
+		SDL_FreeSurface(surface);
+	}
+
+	// When set, updateFrame() blits the splash image instead of the text grid.
+	// Toggled by AboutDialog (ui.dialogs). Declared as a trailing field and with
+	// no new virtual method so the class layout/vtable stays compatible with
+	// objects compiled before this change (the repo has no dep tracking).
+	bool splashActive;
+	// When set (only while the user-opened About dialog is active, not the
+	// startup splash), drawSplash() also draws the scroller. Trailing data field,
+	// no new virtual method, for the same vtable-compatibility reason as above.
+	bool splashScroll;
+
 	abstract void updateFrame();
 }
 
@@ -104,286 +225,256 @@ class VideoStandard : Video {
 		width = requestedWidth;
 		height = requestedHeight;
 		useFullscreen = fs;
-		int sdlflags = SDL_SWSURFACE;
-		sdlflags |= fs ? SDL_FULLSCREEN : 0;
-		surface = SDL_SetVideoMode(width, height, 0, sdlflags); 
-		if(surface is null) {
+
+		// Create window with proper dimensions and fullscreen flag
+		SDL_WindowFlags flags = cast(SDL_WindowFlags)0;
+		if(fs) {
+			flags = SDL_WINDOW_FULLSCREEN_DESKTOP;
+		}
+
+		SDL_CreateWindowAndRenderer(width, height, flags, &window, &renderer);
+		if(window is null || renderer is null) {
 			throw new DisplayError("Unable to initialize graphics mode.");
 		}
-		SDL_SetPalette(surface, SDL_PHYSPAL|SDL_LOGPAL, 
-					   cast(SDL_Color *)PALETTE, 0, 16);
-		vis = new Oscilloscope(surface, 500, 14);
+
+		SDL_SetWindowTitle(window, com.util.APP_NAME);
+		SDL_StartTextInput();
+		SDL_RaiseWindow(window);
+
 		screen.refresh();
 	}
 
 	override void drawVisualizer(int n) {
-		SDL_LockSurface(surface);
-		vis.draw(n);
-		SDL_UnlockSurface(surface);
 	}
 
 	override void clearVisualizer() {
-		SDL_LockSurface(surface);
-		vis.clear();
-		SDL_UnlockSurface(surface);
 	}
-	
-	override void updateFrame() {
-		int x, y;
-		int a,b,c;
-		Uint16* bptr = &screen.data[0];
-		Uint16* cptr = &screen.olddata[0];
-		Uint32* sptr = cast(Uint32 *)surface.pixels;
-		Uint32* sp;
-		Uint8* bp;
-		Uint8 ubg, ufg;
-		
-		if (!isDirty) return;
-		isDirty = false;
 
-		SDL_LockSurface(surface);
-  
-		for(y = 0;y < screen.height; y++) {
-			for(x = 0; x < screen.width; x++) {
-				if(*bptr != *cptr) {
-					*cptr = *bptr;
-					sp = sptr;
-					a = *bptr & 255;
-					bp = &font[a * 16];
-					ufg = (*bptr >> 8) & 15;
-					ubg = (*bptr >> 12);
-					auto fgcolor = getColor(surface, ufg),
-						bgcolor = getColor(surface, ubg);
-					for(c = 4; c < 18; c++, bp++) {
-						b = *bp;
-						if(b & 0x80) *(sp++) = fgcolor;
-						else *(sp++) = bgcolor;
-						if(b & 0x40) *(sp++) = fgcolor;
-						else *(sp++) = bgcolor;
-						if(b & 0x20) *(sp++) = fgcolor;
-						else *(sp++) = bgcolor;
-						if(b & 0x10) *(sp++) = fgcolor;
-						else *(sp++) = bgcolor;
-						if(b & 0x08) *(sp++) = fgcolor;
-						else *(sp++) = bgcolor;
-						if(b & 0x04) *(sp++) = fgcolor;
-						else *(sp++) = bgcolor;
-						if(b & 0x02) *(sp++) = fgcolor;
-						else *(sp++) = bgcolor;
-						if(b & 0x01) *(sp++) = fgcolor;
-						else *(sp++) = bgcolor;
-						sp += width - 8;
-					}
-				}
-				sptr += 8;
-				bptr++;
-				cptr++;
-			}
-			sptr += width*13;
+	private SDL_Texture* splashTexture;
+
+	// Scroller state. scrollCells is the message expanded into one entry per
+	// drawn glyph (control bytes consumed into the active colour); built lazily.
+	private struct SCell { ubyte g; ubyte col; }
+	private SCell[] scrollCells;
+	private int scrollTotalW;            // total scroller width in font-space px
+	private double scrollX = 0;          // left edge offset, font-space px
+	private uint scrollLastMs = 0;       // for frame-rate-independent advance
+
+	private void buildScrollCells() {
+		ubyte col = SCROLL_DEFAULT_COL;
+		foreach(ubyte ch; cast(immutable(ubyte)[])scrollText) {
+			if(ch < 0x10) { col = ch; continue; }
+			scrollCells ~= SCell(ch, col);
 		}
-		SDL_UnlockSurface(surface);
-		SDL_Flip(surface);
-	}
-}
-
-class VideoYUV : Video {
-	private SDL_Overlay* overlay;
-	private int correctedHeight, correctedWidth;
-	
-	this(int wx, int wy, Screen scr, int fs) {
-		super(wx, wy, scr, fs);
-		calcAspect();
-		enableFullscreen(fs > 0);
+		scrollTotalW = cast(int)scrollCells.length * 8;
+		scrollX = -SPLASH_W;             // start fully off the right edge
 	}
 
-	~this() {
-		if(overlay !is null)
-			SDL_FreeYUVOverlay(overlay);
-	}
-
-	private void calcAspect() {
-		correctedHeight = displayHeight;
-		correctedWidth = displayWidth;
-		if(cast(float)displayHeight / displayWidth < 0.75) { // wide screen
-			correctedWidth = cast(int)(correctedHeight / 0.75);
-			correctedHeight = displayHeight;
+	// Draw the right-to-left PETSCII scroller across the bottom of the splash
+	// rect `splash`, scaled at SPLASH_SCALE and clipped to the splash width.
+	private void drawScroller(SDL_Rect splash) {
+		if(scrollCells.length == 0) {
+			buildScrollCells();
+			if(scrollCells.length == 0) return;
 		}
-		else {
-			correctedWidth = displayWidth;
-			correctedHeight = cast(int)(correctedWidth * 0.75);
-		}
-	}
-
-	override void drawVisualizer(int n) {
-		SDL_LockSurface(surface);
-		vis.draw(n);
-		SDL_UnlockSurface(surface);
-	}
-
-	override void clearVisualizer() {
-		SDL_LockSurface(surface);
-		vis.clear();
-		SDL_UnlockSurface(surface);
-	}
-	
-	override void resizeEvent(int nw, int nh) {
-		if(useFullscreen)
+		uint now = SDL_GetTicks();
+		uint dt = now - scrollLastMs;
+		// A long gap means a fresh open (or the first frame): restart from the
+		// right edge and don't advance, so each About open scrolls from scratch.
+		if(scrollLastMs == 0 || dt > 500) {
+			scrollLastMs = now;
+			scrollX = -SPLASH_W;
 			return;
-
-		width = nw; height = nh;
-
-		if(surface !is null)
-			SDL_FreeSurface(surface);
-
-		surface = SDL_SetVideoMode(nw, nh, 0, SDL_SWSURFACE | SDL_RESIZABLE);
-		if(surface is null) {
-			throw new DisplayError("Unable to initialize graphics mode.");
 		}
-		
-		createOverlay(nw, nh);
-		screen.refresh();
+		scrollX += SCROLL_SPEED * dt / 1000.0;
+		scrollLastMs = now;
+		if(scrollX >= scrollTotalW) scrollX = -SPLASH_W;
+
+		immutable bandH = SCROLL_FONT_Y * SPLASH_SCALE;
+		int bandY = splash.y + splash.h + SCROLL_ROW_OFFSET;
+		SDL_Rect clip = { splash.x, bandY, splash.w, bandH };
+		SDL_RenderSetClipRect(renderer, &clip);
+
+		int rightEdge = splash.x + splash.w;
+		int first = cast(int)(scrollX / 8);
+		if(first < 0) first = 0;
+		for(int ci = first; ci < cast(int)scrollCells.length; ci++) {
+			int gx = splash.x + cast(int)((ci*8 - scrollX) * SPLASH_SCALE);
+			if(gx >= rightEdge) break;
+			SCell cell = scrollCells[ci];
+			ubyte* bp = &scrollfont[cell.g * SCROLL_FONT_Y];
+			SDL_SetRenderDrawColor(renderer, PALETTE[cell.col].r,
+								   PALETTE[cell.col].g, PALETTE[cell.col].b, 255);
+			for(int row = 0; row < SCROLL_FONT_Y; row++, bp++) {
+				ubyte b = *bp;
+				for(int colb = 0; colb < 8; colb++) {
+					if(b & (0x80 >> colb)) {
+						SDL_Rect px = { gx + colb*SPLASH_SCALE,
+										bandY + row*SPLASH_SCALE,
+										SPLASH_SCALE, SPLASH_SCALE };
+						SDL_RenderFillRect(renderer, &px);
+					}
+				}
+			}
+		}
+		SDL_RenderSetClipRect(renderer, null);
 	}
 
-	override protected void enableFullscreen(bool fs) {
-		if(fs) { // enable aspect corr. if in fullscreen
-			width = correctedWidth;
-			height = correctedHeight;
+	// Not an override: kept off the base Video vtable so stale objects keep
+	// calling updateFrame() at the right slot (no dep tracking in this repo).
+	void drawSplash() {
+		// Lazily upload the 320x200 indexed artwork into an ARGB texture, then
+		// blit it centered at SPLASH_SCALE with a black margin.
+		if(splashTexture is null) {
+			splashTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
+											  SDL_TEXTUREACCESS_STATIC, SPLASH_W, SPLASH_H);
+			auto buf = new Uint32[SPLASH_W * SPLASH_H];
+			foreach(i, idx; splashData) {
+				auto col = PALETTE[idx];
+				buf[i] = (0xff << 24) | (col.r << 16) | (col.g << 8) | col.b;
+			}
+			SDL_UpdateTexture(splashTexture, null, buf.ptr,
+							  SPLASH_W * cast(int)Uint32.sizeof);
 		}
-		else {
-			width = requestedWidth;
-			height = requestedHeight;
-		}
-
-		int sdlflags = SDL_SWSURFACE;
-		useFullscreen = fs; 
-		sdlflags |= fs ? SDL_FULLSCREEN : SDL_RESIZABLE;
-		if(!fs)
-			surface = SDL_SetVideoMode(requestedWidth, requestedHeight, 0, sdlflags);
-		else surface = SDL_SetVideoMode(displayWidth, displayHeight, 0, sdlflags);
-		if(surface is null) {
-			throw new DisplayError("Unable to initialize graphics mode.");
-		}
-		vis = new Oscilloscope(surface, 500, 14);
-		SDL_SetPalette(surface, SDL_PHYSPAL|SDL_LOGPAL, 
-					   cast(SDL_Color *)PALETTE, 0, 16);
-		createOverlay(width, height);
-		screen.refresh();
+		SDL_Rect dst;
+		dst.w = SPLASH_W * SPLASH_SCALE;
+		dst.h = SPLASH_H * SPLASH_SCALE;
+		dst.x = (width - dst.w) / 2;
+		dst.y = (height - dst.h) / 2;
+		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+		SDL_RenderClear(renderer);
+		SDL_RenderCopy(renderer, splashTexture, null, &dst);
+		if(splashScroll) drawScroller(dst);
+		SDL_RenderPresent(renderer);
 	}
 
 	override void updateFrame() {
 		int x, y;
 		int a,b,c;
-		static Uint32[32] pixbuf;
-		Uint16* bptr = &screen.data[0];
-		Uint16* cptr = &screen.olddata[0];
+
+		if(splashActive) { drawSplash(); return; }
+
+		Uint32* bptr = &screen.data[0];
+		Uint32* cptr = &screen.olddata[0];
+		// Uint32* sptr = cast(Uint32 *)surface.pixels;
 		Uint32* sp;
 		Uint8* bp;
 		Uint8 ubg, ufg;
-		
-		if (!isDirty) return;
+		int outx, outy;
+
+			if (!isDirty) return;
 		isDirty = false;
 
-		SDL_LockYUVOverlay(overlay);
-	
-		// clear bottom stripe if necessary (mode = 800x600)
-		/+if(video.resolution == Resolution.Res800x600)+/
-		{
-			pixbuf[] = 0;
-			for(x = 0; x < screen.width; x++) {
-				for(y = 0; y < 12; y++) {
-					RGBBlock2YUV(pixbuf, x * 8, screen.height * 14 + y);
-				}
+        SDL_Rect rect;
+        rect.x = 0;
+        rect.y = 0;
+        rect.w = width;
+        rect.h = height;
+        //SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+        //SDL_RenderDrawRect(renderer, &rect);
+		//SDL_LockSurface(surface);
+        SDL_RenderClear(renderer);
+
+			// Draw a unified header background across the full window width (top bar)
+			{
+				int headerBg = screen.getbg(screen.width - 1, 0);
+				SDL_SetRenderDrawColor(renderer, PALETTE[headerBg].r,
+							   PALETTE[headerBg].g,
+							   PALETTE[headerBg].b, 255);
+				SDL_Rect topbar;
+				topbar.x = 0;
+				topbar.y = 0;
+				topbar.w = width;
+				topbar.h = FONT_Y; // one text row height
+				SDL_RenderFillRect(renderer, &topbar);
 			}
-		}
-	
 		for(y = 0;y < screen.height; y++) {
 			for(x = 0; x < screen.width; x++) {
-				if(*bptr != *cptr) {
+				//if(*bptr != *cptr) {
+                if(true) {
 					*cptr = *bptr;
+					//sp = sptr;
 					a = *bptr & 255;
 					bp = &font[a * 16];
-					ufg = (*bptr >> 8) & 15;
-					ubg = (*bptr >> 12);
-					auto fgcolor = getColor(surface, ufg),
-						bgcolor = getColor(surface, ubg);
-					for(c = 4; c < 18; c++, bp++) {
-						sp = &pixbuf[0];
+					ufg = (*bptr >> 8) & 0xff;  // 8 bits for fg
+					ubg = (*bptr >> 16) & 0xff; // 8 bits for bg
+                    /+
+                     auto fgcolor = getColor(surface, ufg),
+                     bgcolor = getColor(surface, ubg);
+                     +/
+                    rect.x = x * 8;
+                    rect.y = y * FONT_Y;
+                    rect.h = FONT_Y;
+                    rect.w = 8;
+                    SDL_SetRenderDrawColor(renderer, PALETTE[ubg].r,
+                                           PALETTE[ubg].g,
+                                           PALETTE[ubg].b, 255);
+                    SDL_RenderFillRect(renderer, &rect);
+
+                    SDL_SetRenderDrawColor(renderer, PALETTE[ufg].r,
+                                           PALETTE[ufg].g,
+                                           PALETTE[ufg].b, 255);
+                    int yy = y * FONT_Y;
+					for(c = 4; c < 4 + FONT_Y; c++, bp++) {
+                        int xx = x * 8;
 						b = *bp;
-						if(b & 0x80) *(sp++) = fgcolor;
-						else *(sp++) = bgcolor;
-						if(b & 0x40) *(sp++) = fgcolor;
-						else *(sp++) = bgcolor;
-						if(b & 0x20) *(sp++) = fgcolor;
-						else *(sp++) = bgcolor;
-						if(b & 0x10) *(sp++) = fgcolor;
-						else *(sp++) = bgcolor;
-						if(b & 0x08) *(sp++) = fgcolor;
-						else *(sp++) = bgcolor;
-						if(b & 0x04) *(sp++) = fgcolor;
-						else *(sp++) = bgcolor;
-						if(b & 0x02) *(sp++) = fgcolor;
-						else *(sp++) = bgcolor;
-						if(b & 0x01) *(sp++) = fgcolor;
-						else *(sp++) = bgcolor;
-						RGBBlock2YUV(pixbuf, x * 8, y * 14 + c - 4);
+						if(b & 0x80) {
+                            SDL_RenderDrawPoint(renderer, xx, yy);
+                        }
+                        xx++;
+						if(b & 0x40) {
+                            SDL_RenderDrawPoint(renderer, xx, yy);
+                        }
+                        xx++;
+						if(b & 0x20) {
+                            SDL_RenderDrawPoint(renderer, xx, yy);
+                        }
+                        xx++;
+						if(b & 0x10) {
+                            SDL_RenderDrawPoint(renderer, xx, yy);
+                        }
+                        xx++;
+						if(b & 0x08) {
+                            SDL_RenderDrawPoint(renderer, xx, yy);
+                        }
+                        xx++;
+						if(b & 0x04) {
+                            SDL_RenderDrawPoint(renderer, xx, yy);
+                        }
+                        xx++;
+						if(b & 0x02) {
+                            SDL_RenderDrawPoint(renderer, xx, yy);
+                        }
+                        xx++;
+						if(b & 0x01) {
+                            SDL_RenderDrawPoint(renderer, xx, yy);
+                        }
+                        xx++;
 						sp += width - 8;
+                        yy++;
 					}
+
 				}
+				//sptr += 8;
 				bptr++;
 				cptr++;
 			}
+			//sptr += width*13;
 		}
-		SDL_UnlockYUVOverlay(overlay);
-		SDL_DisplayYUVOverlay(overlay, &rect);
+			//SDL_UnlockSurface(surface);
+			//SDL_Flip(surface);
+    SDL_RenderPresent(renderer);
 	}
 
-	private	void RGBBlock2YUV(const Uint32[] source, int x, int y) {
-		void RGB_to_YUV(Uint8 *rgb, Uint8* yuv) {
-			yuv[0] = cast(ubyte)(0.299*rgb[0] + 0.587*rgb[1] + 0.114*rgb[2]);
-			yuv[2] = cast(ubyte)((rgb[2]-yuv[0])*0.565 + 128);
-			yuv[1] = cast(ubyte)((rgb[0]-yuv[0])*0.713 + 128);
-		}
-
-		static Uint8[3] yuv;
-		static Uint8*[3] plane;
-		plane[0] = overlay.pixels[0] + overlay.pitches[0] * y + x;
-		plane[1] = overlay.pixels[1] + overlay.pitches[1] * y / 2 + x / 2;
-		plane[2] = overlay.pixels[2] + overlay.pitches[2] * y / 2 + x / 2;
-		for(int xc = 0; xc < 8 && xc < overlay.w; xc++) {
-			RGB_to_YUV(cast(Uint8*)&source[xc], cast(ubyte*)&yuv);
-			*(plane[0]++) = yuv[0];
-			if(xc % 2 == 0 && y % 2 == 0) {
-				*(plane[1]++) = yuv[2];
-				*(plane[2]++) = yuv[1];
-			}
-		}
-	}
-
-	private void createOverlay(int scaledx, int scaledy) {
-		if(overlay !is null)
-			SDL_FreeYUVOverlay(overlay);
-		overlay = SDL_CreateYUVOverlay(requestedWidth, requestedHeight, SDL_YV12_OVERLAY, surface);
-		if(overlay is null) {
-			throw new DisplayError("Couldn't initialize YUV overlay.");
-		}
-		rect.w = cast(ushort)scaledx;
-		rect.h = cast(ushort)scaledy;
-		rect.x = rect.y = 0;
-
-		if(useFullscreen) {
-			rect.x = cast(short)(displayWidth/2 - scaledx/2);
-			rect.y = cast(short)(displayHeight/2 - scaledy/2);
-		}
-	}
 }
 
 class Screen {
-	Uint16[] data;
-	private Uint16[] olddata;
+	Uint32[] data;
+	private Uint32[] olddata;
 	immutable int width, height;
 	alias width w;
 	alias height h;
-	
+
 	this(int xchars, int ychars) {
 		width = xchars;
 		height = ychars;
@@ -391,13 +482,13 @@ class Screen {
 		olddata.length = xchars * ychars;
 		refresh();
 	}
-	
-	Uint16 getChar(int x, int y) {
+
+	Uint32 getChar(int x, int y) {
 		mixin(CHECKS);
 		return data[x + y * width];
 	}
 
-	void setChar(int x, int y, Uint16 c) {
+	void setChar(int x, int y, Uint32 c) {
 		mixin(CHECKS);
 		data[x + y * width] = c;
 		isDirty = true;
@@ -405,20 +496,20 @@ class Screen {
 
 	void setColor(int x, int y, int fg, int bg) {
 		mixin(CHECKS);
-		Uint16* s = &data[x + y * width];
+		Uint32* s = &data[x + y * width];
 		*s &= 0xff;
-		*s |= (fg << 8) | (bg << 12);
+		*s |= (fg << 8) | (bg << 16);  // bg now at bit 16 (8 bits available)
 		isDirty = true;
 	}
 
 	int getbg(int x, int y) {
-		return getChar(x, y) >> 12;
+		return (getChar(x, y) >> 16) & 0xff;  // Extract 8 bits from position 16
 	}
-	
+
 	void setbg(int x, int y, int bg) {
-		Uint16* s = &data[x + y * width];
-		*s &= 0xfff;
-		*s |= (bg << 12);
+		Uint32* s = &data[x + y * width];
+		*s &= 0xff00ff;  // Clear bg bits (16-23)
+		*s |= (bg << 16);
 		isDirty = true;
 	}
 
@@ -428,8 +519,8 @@ class Screen {
 
 	void clrtoeol(int x, int y, int bg) {
 		mixin(CHECKY);
-		Uint16* s = &data[x + y * width];
-		Uint16 v = cast(Uint16)(0x20 | (bg << 12));
+		Uint32* s = &data[x + y * width];
+		Uint32 v = cast(Uint32)(0x20 | (bg << 16));
 		while(x++ < width) *s++ = v;
 		isDirty = true;
 	}
@@ -449,49 +540,54 @@ class Screen {
 		bool skipbg, skipfg;
 		if(bg < 0) { skipbg = true; bg = 0; }
 		if(fg < 0) { skipfg = true; fg = 0; }
-		Uint16[] s = data[x + y * width .. x + y * width + txt.length];
-		Uint16 col = cast(Uint16)((fg << 8) | (bg << 12));
+		Uint32[] s = data[x + y * width .. x + y * width + txt.length];
+		Uint32 col = cast(Uint32)((fg << 8) | (bg << 16));
 		foreach(i, char c; txt) {
 			if(skipbg)
-				col = cast(Uint16)((fg << 8) | (s[i] & 0xf000));
+				col = cast(Uint32)((fg << 8) | (s[i] & 0xff0000));
 			if(skipfg)
-				col = cast(Uint16)((bg << 12) | (s[i] & 0x0f00));
-	
-			s[i] = cast(Uint16)(c | col);
+				col = cast(Uint32)((bg << 16) | (s[i] & 0xff00));
+
+			s[i] = cast(Uint32)(c | col);
 		}
 		isDirty = true;
 	}
 
 	void fprint(int x, int y, string str) {
 		mixin(CHECKS);
-		assert(str.length < 256);
-		Uint16[] outb = data[x + y * width .. $];
+		// Removed assertion - string length is arbitrary, buffer bounds are what matter
+		Uint32[] outb = data[x + y * width .. $];
+		if(outb.length == 0) return; // Nothing to write - at or past end of line
+		
 		int bg = 0, fg = 0;
 		int idx;
-		while(idx < str.length) {
+		while(idx < str.length && outb.length > 0) {  // Check buffer bounds
 			int getcol(char c) {
 				return cast(int)(c == '+' ? -1 : "0123456789abcdef".indexOf(c));
 			}
 			if(str[idx] == '`') {
+				// Safety check for color codes
+				if(idx + 2 >= str.length) break;
 				bg = getcol(str[idx + 1]);
 				fg = getcol(str[idx + 2]);
 				idx += 3;
 				continue;
 			}
-			if(bg >= 0) {
-				outb[0] &= 0x0fff;
-				outb[0] |= bg << 12;
-			}
-			if(fg >= 0) {
-				outb[0] &= 0xf0ff;
-				outb[0] |= fg << 8;
-			}
-			outb[0] &= 0xff00;
-			outb[0] |= str[idx] & 255;
-			outb = outb[1 .. $];
-			idx++;
+		if(bg >= 0) {
+			outb[0] &= 0xff00ff;  // Clear bg bits (16-23)
+			outb[0] |= bg << 16;
 		}
+		if(fg >= 0) {
+			outb[0] &= 0xff00ff;  // Clear fg bits (8-15)
+			outb[0] |= fg << 8;
+		}
+		outb[0] &= 0xffffff00;  // Clear character bits
+		outb[0] |= str[idx] & 255;
+		outb = outb[1 .. $];
+		idx++;
 	}
+	isDirty = true;
+}
 }
 
 interface Visualizer {
@@ -503,7 +599,7 @@ private class Oscilloscope : Visualizer {
 	private SDL_Surface* surface;
 	private short* samples;
 	private const short xconst, yconst;
-	enum width = 960/4, height = 3*14;
+	enum width = 960/4, height = 3*FONT_Y;
 
 	this(SDL_Surface* surface, short xpos, short ypos) {
 		this.surface = surface;
@@ -518,7 +614,7 @@ private class Oscilloscope : Visualizer {
 		SDL_FillRect(surface, new SDL_Rect(xconst, yconst,
                                            width, height), 0);
 	}
-	
+
 	void draw(int frames) {
 		float smpofs;
 		float n = frames * 50.0f;
@@ -528,7 +624,7 @@ private class Oscilloscope : Visualizer {
 			coll = getColor(surface, 5);
 
 		clear();
-		
+
 		smpofs = 0.0f;
 		import audio.audio;
 		int oldposition = height / 2 + samples[cast(int)smpofs]  / 768;
@@ -566,17 +662,17 @@ class DisplayError : Error {
 }
 
 void enableKeyRepeat() {
-	SDL_EnableKeyRepeat(200, 10);
+  //	SDL_EnableKeyRepeat(200, 10);
 }
 
 void disableKeyRepeat() {
-	SDL_EnableKeyRepeat(0, 0);
+	//SDL_EnableKeyRepeat(0, 0);
 }
 
 Uint16 readkey() {
 	SDL_Event evt;
 	bool loop = true;
-	
+
 	while(loop) {
 		while(SDL_PollEvent(&evt)) {
 			if(evt.type == SDL_QUIT) {
@@ -590,11 +686,11 @@ Uint16 readkey() {
 		}
 		SDL_Delay(50);
 	}
-	return evt.key.keysym.unicode;
+	return cast(Uint16)evt.key.keysym.unicode;
 }
 
 private int getColor(SDL_Surface* s, int c) {
-	return PALETTE[c].b << s.format.Bshift | 
+	return PALETTE[c].b << s.format.Bshift |
 		(PALETTE[c].g << s.format.Gshift) |
 		(PALETTE[c].r << s.format.Rshift);
 }

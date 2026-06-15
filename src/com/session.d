@@ -1,5 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Editor session state — the undo/redo stack (Undoable) plus editor and tracklist state.
 */
 
 module com.session;
@@ -9,6 +11,7 @@ import com.util;
 import ui.ui;
 import seq.sequencer;
 import std.typecons;
+import com.util;
 
 interface Undoable {
 	void undo(UndoValue);
@@ -27,11 +30,16 @@ struct UndoValue {
 	// undo data needed by sequencer
 	Array array;
 	Sequence seq;
+	Sequence[] seqSources;
+	ubyte[][] seqData;
 	// undo data needed by track editor
 	TracklistStore[] trackLists;
 	ushort trackValue;
-	Track track;
 	ubyte[][] tableData;
+	char[32][48] insLabels;
+	bool hasInsLabels;
+	char[32] songTitle, songAuthor, songRelease;
+	bool hasSongInfo;
 	int subtuneNum;
 	PosDataTable posTable;
 	bool allVoices;
@@ -52,6 +60,10 @@ struct EditorState {
 	bool displayHelp = true;
 	bool keyjamStatus = false;
 	bool allowInstabNavigation = true;
+	// Song edited since the last load/save: any undoable change sets it (see
+	// insertUndo / executeUndo / executeRedo); UI.saveCallback / loadCallback
+	// reset it. Drives the unsaved-changes warning in the quit confirmation.
+	bool songModified = false;
 	string filename;
 	auto undoQueue = Queue!UndoState();
 	auto redoQueue = Queue!UndoState();
@@ -64,6 +76,8 @@ EditorState state;
 
 void insertUndo(Undoable undoable, UndoValue value) {
 	state.undoQueue.insert(UndoState(undoable, value));
+	state.redoQueue.clear();
+	state.songModified = true;
 }
 
 void executeUndo() {
@@ -73,6 +87,7 @@ void executeUndo() {
 	auto redo = makeRedoOrUndo(u);
 	state.redoQueue.insert(redo);
 	u.func.undo(u.value);
+	state.songModified = true;
 }
 
 void executeRedo() {
@@ -82,6 +97,7 @@ void executeRedo() {
 	auto undo = makeRedoOrUndo(r);
 	state.undoQueue.insert(undo);
 	r.func.undo(r.value);
+	state.songModified = true;
 }
 
 private UndoState makeRedoOrUndo(UndoState state) {

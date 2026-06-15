@@ -1,806 +1,97 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+UI facade — owns the main UI object and visualizer mode, and re-exports the window/bar modules.
 */
 
 module ui.ui;
-import derelict.sdl.sdl;
+
+// Façade re-exports so the existing `import ui.ui;` users keep seeing the
+// window / status-bar / toplevel types after the split.
+public import ui.window;
+public import ui.statusbar;
+public import ui.toplevel;
+import ui.keymap;
+
+import derelict.sdl2.sdl;
 import std.conv;
 import main;
 import ct.base;
+import ct.build;
 import com.session;
 import ct.purge;
 import ui.help;
 import ui.input;
 import audio.player;
+static import audio.render;
 import ui.tables;
 import ui.dialogs;
 import seq.fplay;
 import com.fb;
 import com.util;
+import com.shortcuts;
+import ui.shorthelp;
+import ui.menubar;
+import ui.palette;
 import seq.sequencer;
 import audio.audio;
 import std.string;
 import std.file;
 import std.stdio;
 import audio.audio, audio.timer, audio.callback;
+static import audio.remote;
 
-enum PAGESTEP = 16;
-enum CONFIRM_TIMEOUT = 90;
-enum UPDATE_RATE = 2; // 50 / n times per second
+package enum PAGESTEP = 16;
+package enum CONFIRM_TIMEOUT = 90;
+package enum UPDATE_RATE = 2; // 50 / n times per second
 
-private int tickcounter1, tickcounter3 = -1;
-private int clearcounter, optimizecounter, escapecounter, restartcounter;
+package int tickcounter1;
 
-struct Rectangle {
-	int x, y;
-	int height, width;
-	alias height h;
-	alias width w;
-	
-	string toString() {
-		return format("%d %d %d %d",x, y, h, w);
-	}
-	
-	bool overlaps(int cx, int cy) {
-		return cx >= x && cx < x + width && cy >= y && cy < y + height;
-	}
-	
-	Rectangle relativeTo(int scrx, int scry) {
-		return Rectangle(scrx - x, scry - y);
-	}
-}
+enum VisMode { None, Regs, Oscilloscope }
 
-abstract class Window {
-	Rectangle area;
-	Input input;
-	protected ContextHelp help;
-	
-	this(Rectangle a) {
-		this(a, ui.help.HELPMAIN);
-	}
-
-	this(Rectangle a, ContextHelp ctx) {
-		contextHelp = ctx;
-		area = a;
-	}
-
-	abstract void update();
-	int keypress(Keyinfo key) { return 0; }
-	int keyrelease(Keyinfo key) { return 0; }
-	void refresh() {}
-	void deactivate() {}
-	void activate() { refresh(); }
-	void clickedAt(int scrx, int scry, int button) {}
-
-protected:
-
-	@property void contextHelp(ContextHelp h) { help = h; }
-	@property ContextHelp contextHelp() { return help; }
-	
-	final void drawFrame() { drawFrame(area); }
-	
-	static void drawFrame(Rectangle a) {
-		int x,y;
-		for(y=a.y;y<a.y+a.height;y++) {
-			screen.setChar(a.x-1,y,0);
-			screen.setChar(a.x,y, 0x500|216);
-			screen.setChar(a.x+a.width-1,y, 0x500|216);
-			screen.setChar(a.x+a.width,y,0);
-			screen.data[a.x+1 + y * screen.width .. a.x + a.width - 1 + y * screen.width] = 0x00;
-			screen.setColor(a.x+a.width+1,y+1,11,0);
-		}
-		for(x=a.x;x<a.x+a.width;x++) {
-			screen.setChar(x,a.y, 0x0500|192);
-			screen.setChar(x,a.y+a.height-1, 0x0500|192);
-			screen.setColor(x+2,a.y+a.height, 11, 0);
-		}
-
-		screen.setChar(a.x,a.y,0x500 | 201);
-		screen.setChar(a.x+a.width-1,a.y,0x500 | 215);
-		screen.setChar(a.x,a.y+a.height-1,0x500 | 195);
-		screen.setChar(a.x+a.width-1,a.y+a.height-1,0x500 | 212);
-	}
-
-	final void drawRuler(int y) {
-		for(int x = area.x;x < area.x + area.width; x++) {
-			screen.setChar(x, area.y + y, 0x0500|192);
-		}
-	}
-
-}
-
-struct Hotspot {
-	Rectangle area;
-	void delegate(int) callback;
-}
-
-class WindowSwitcher : Window {
-	Window[] windows;
-	char[] hotkeys;
-	Window activeWindow;
-	int activeWindowNum;
-	
-	this(Rectangle s, Window[] w) {
-		super(s);
-		windows = w;
-		activeWindowNum = 0;
-		activateWindow();
-	}
-	
-	this(Rectangle s, Window[] w, string h) {
-		this(s, w);
-		hotkeys = cast(char[])h;
-	}
-	
-	this(Rectangle s, Window[] w, char[] h) {
-		this(s, w);
-		hotkeys = h;
-	}
-
-	this(Rectangle s, Window[] w, char[] h, int mk) {
-		this(s, w);
-		hotkeys = h;
-	}
-
-	void activateWindow() {
-		activateWindow(activeWindowNum);
-	}
-	
-	void activateWindow(ulong n){
-		activateWindow(cast(int)n);
-	}
-	
-	void activateWindow(int n) {
-		if(activeWindow !is null)
-			activeWindow.deactivate();
-		activeWindow = windows[n];
-		activeWindow.activate();
-		activeWindowNum = n;
-		input = activeWindow.input;
-		refresh();
-	}
-
-	override void update() {
-		activeWindow.update();
-	}
-
-	override void activate() {
-		activeWindow.activate();
-	}
-
-	override void deactivate() {
-		activeWindow.deactivate();
-	}
-
-	override void refresh() {
-		foreach(w; windows) w.refresh();
-	}
-	
-	override int keypress(Keyinfo key) {
-		if(key.mods & KMOD_ALT) {
-			foreach(i, hk; hotkeys) {
-				if(key.raw == hk) {
-					activeWindowNum = cast(int)i;
-					activateWindow();
-					return OK;
-				}
-			}
-		}
-		switch(key.raw) {
-		case SDLK_TAB:
-			key.mods & KMOD_SHIFT ? activeWindowNum-- : activeWindowNum++ ;
-			/+
-			if(activeWindowNum < 0) activeWindowNum = cast(int)(windows.length - 1);
-			if(activeWindowNum >= windows.length)
-				activeWindowNum %= windows.length;
-				+/
-			activeWindowNum = umod(activeWindowNum, 0, cast(int)windows.length - 1);
-			activateWindow();
-			return OK;
-		default: 
-			return activeWindow.keypress(key);
-		}
-		assert(0);
-	}
-
-	override ContextHelp contextHelp() { 
-		return activeWindow.contextHelp();
-	}
-
-	override void clickedAt(int scrx, int scry, int button) {
-		//	activateAt(scrx - activeWindow.area.x, scry - activeWindow.area.y);
-	}
-}
-
-class Infobar : Window {
-	private {
-		const int x1, x2;
-		int idx;
-	}
-	InputString inputTitle, inputAuthor, inputReleased;
-	
-	this(Rectangle a) {
-		super(a);
-		x1 = area.x;
-		x2 = x1 + (com.fb.mode > 0 ? 64 : 48);
-	}
-
-	override void update() {
-		int headerColor = state.keyjamStatus ? 14 : 12;
-		if(escapecounter) headerColor = 7;
-	  
-		screen.clrtoeol(0, headerColor);
-
-		enum hdr = "CheeseCutter 2.9" ~ com.util.versionInfo;
-		screen.cprint(4, 0, 1, headerColor, hdr);
-		screen.cprint(screen.width - 14, 0, 1, headerColor, "F12 = Help");
-		int c1 = audio.player.isPlaying ? 13 : 12;
-		screen.fprint(x1,area.y,format("`05Time: `0%x%02d:%02d / $%02x",
-									   c1,audio.timer.min, audio.timer.sec,
-									   audio.callback.linesPerFrame & 255));
-		
-		screen.fprint(x1 + 19,area.y,
-				   format("`05Oct: `0d%d  `05Spd: `0d%X  `05St: `0d%d ",
-						  state.octave, song.speed, seq.sequencer.stepValue));
-		screen.fprint(x2+3, area.y+1,
-				   format("`05Rate: `0d%-1d*%dhz  `05SID: `0d%s%s    ",
-						  song.multiplier, audio.player.ntsc ? 60 : 50,
-						  audio.player.usefp ? audio.player.curfp.id : audio.player.sidtype ? "8580" : "6581",
-						  audio.player.badline ? "&0fb" : " "));
-		screen.fprint(x1,area.y+1,format("`05Filename: `0d%s", state.filename.leftJustify(38)));
-		//screen.fprint(x2,area.y,format("`05  `b1T`01itle: `0d%-32s", std.string.toString(cast(char *)song.title))); 
-		screen.fprint(x2,area.y,
-					  format("`05%s `0d%-32s", (["  `b1T`01itle:", " `01Author:", "`01Release:" ])[idx],
-							 song.title));
-		screen.fprint(x2,area.y+2,format("`05 Player: `0d%s", ztos(song.playerID)));
-	}
-
-	override void refresh() {
-		inputTitle = new InputString(cast(string)(song.title), cast(int)(song.title.length));
-		inputReleased = new InputString(cast(string)(song.release), cast(int)( song.release.length));
-		inputAuthor = new InputString(cast(string)(song.author), cast(int)(song.author.length));
-		input = ([ inputTitle, inputAuthor, inputReleased ])[idx];
-		input.setCoord(x2 + 9,area.y);
-	}
-	
-	override void activate() {
-		idx = 0;
-		refresh();
-	}
-
-	override void deactivate() {
-		outputStrings();
-	}
-
-	private void outputStrings() {
-		song.title[0..32] = (cast(InputString)inputTitle).toString(true)[0..32];
-		song.release[0..32] = (cast(InputString)inputReleased).toString(true)[0..32];
-		song.author[0..32] = (cast(InputString)inputAuthor).toString(true)[0..32];
-	}
-	
-	override int keypress(Keyinfo key) {
-		int r = input.keypress(key);
-		if(r == RETURN) {
-			idx++; 
-			if(idx > 2) {
-				idx = 0;
-				return RETURN;
-			}
-			outputStrings();
-			refresh();
-		}
-		else if(r == CANCEL) {
-			idx = 0; update();
-			return RETURN;
-		}
-		return OK;
-	}
-}
-
-class Statusline : Window {
-	int counter;
-	string message;
-	
-	this(Rectangle a) {
-		super(a);
-	}
-
-	void display(string msg) {
-		message = msg;
-		counter = CONFIRM_TIMEOUT;
-		screen.clrtoeol(2, 0);
-		update();
-	}
-	
-	override void deactivate() {
-		counter = 0;
-		update();
-	}
-
-	override void update() {
-		if(counter)
-			screen.fprint(4, 2, "`0f " ~ message);
-		else screen.clrtoeol(2, 0);
-	}
-
-	void timerEvent() {
-		if(counter > 0) {
-			--counter;
-			if(!counter) update();
-		}
-	}
-}
-
-final private class Toplevel : WindowSwitcher {
-	InputKeyjam inputKeyjam;
-	InsTable instable;
-	CmdTable cmdtable;
-	WindowSwitcher bottomTabSwitcher;
-	WaveTable wavetable;
-	PulseTable pulsetable;
-	FilterTable filtertable;
-	ChordTable chordtable;
-	Sequencer sequencer;
-	Fplay fplay;
-	UI ui;
-	Hotspot[] hotspots;
-	bool followplay;
-
- 	this(UI ui) {
-		this.ui = ui;
-		int zone1x = 0;
-		int zone2x = screen.width / 2 + zone1x - 1;
-		int zone1y = 4;
-		int zone1h = screen.height / 2 - 5;
-		int zone2y = screen.height / 2;
-		int zone2h = screen.height - zone2y - 5;
-
-		inputKeyjam = new InputKeyjam();
-		sequencer = new Sequencer(Rectangle(zone1x, zone1y, screen.height - 10, zone2x - zone1x));
-		fplay = new Fplay(Rectangle(zone1x, zone1y, screen.height - 10, zone2x - zone1x));
-		instable = new InsTable(Rectangle(zone2x, zone1y, zone1h, 3 + 8 * 3 + 12));
-
-		int tx = zone2x;
-		wavetable = new WaveTable(Rectangle(tx, zone2y, zone2h, 8));
-		tx += com.fb.border + 8;
-		pulsetable = new PulseTable(Rectangle(tx, zone2y, zone2h, 14));
-		tx += com.fb.border + 14;
-		filtertable = new FilterTable(Rectangle(tx, zone2y, zone2h, 14));
-		tx += com.fb.border + 14;
-		cmdtable = new CmdTable(Rectangle(tx, zone2y, zone2h, 10));
-		tx += com.fb.border + 10;
-
-		Rectangle ca;
-
-		if(com.fb.mode == 0) {
-			ca = Rectangle(tx - 6, zone1y, zone1h, 6);
-		}
-		else ca = Rectangle(tx, zone2y, zone2h, 6);
-		chordtable = new ChordTable(ca);
-		bottomTabSwitcher = new WindowSwitcher(Rectangle(zone2x, zone2y, zone2h,
-														 tx + com.fb.border + 10),
-											   [cast(Window)wavetable, pulsetable,
-												filtertable, cmdtable, chordtable],
-											   "wpfmd");
-
-		/+
-		super(Rectangle(), [cast(Window)sequencer, instable, 
-							wavetable, pulsetable, filtertable, 
-							cmdtable, chordtable], null);
-		+/
-
-		super(Rectangle(), [cast(Window)sequencer, instable, 
-					   bottomTabSwitcher]);
-		{
-			int x1 = 4;
-			int x2 = x1 + (com.fb.mode > 0 ? 64 : 48);
-			int y1 = screen.height - 4;
-			
-			hotspots = [ 
-				Hotspot(Rectangle(x2 + 3, y1, 1, 30), (int b){ 
-						ui.activateDialog(UI.infobar); 
-					}),
-				Hotspot(Rectangle(x2 + 18, y1 + 1, 1, 10), (int b){ 
-						b > 1 ? audio.player.toggleSIDModel() : audio.player.nextFP(); 
-					}),
-				Hotspot(Rectangle(x2 + 3, y1 + 1, 1, 14), (int b) {
-						b == 1 ? audio.player.incMultiplier() : audio.player.decMultiplier(); 
-					}) 
-				];
-		}
-		refresh();
-	}
-
-	override void clickedAt(int x, int y, int b) {
-		foreach(idx, win; windows) { 
-			if(win.area.overlaps(x, y)) {
-				activateWindow(idx);
-				activeWindow.clickedAt(x, y, b);
-			}
-		}
-		foreach(idx, win; bottomTabSwitcher.windows) {
-			if(win.area.overlaps(x, y)) {
-				bottomTabSwitcher.activateWindow(idx);
-				bottomTabSwitcher.activeWindow.clickedAt(x, y, b);
-				break;
-			}
-		}
-		foreach(idx, spot; hotspots) {
-			if(spot.area.overlaps(x, y))
-				spot.callback(b);
-		}
-	}
-
-	override int keypress(Keyinfo key) {
-		switch(key.unicode) {
-		case ']':
-			if(song.speed < 32) 
-				song.speed = song.speed + 1;
-			return OK;
-		case '[':
-			if(song.speed > 0) 
-				song.speed = song.speed - 1;
-			return OK;
-		case '{':
-			audio.player.setMultiplier(song.multiplier - 1);
-			return OK;
-		case '}':
-			audio.player.setMultiplier(song.multiplier + 1);
-			return OK;
-/+
-		case '(':
-			if(octave > 0)
-				octave--;
-			return OK;
-	 	case ')':
-			 if(octave < 6)
-			 	octave++;
-			return OK;+/
-		default:
-			break;
-		}
-
-		if(key.mods & KMOD_ALT) {
-			switch(key.raw)
-			{
-			case SDLK_v:
-				activateWindow(0);
-				break;
-			case SDLK_1:
-				if(!(key.mods & KMOD_CTRL)) {
-					activateWindow(0);
-					sequencer.activateVoice(0);
-				}
-				break;
-			case SDLK_2:
-				if(!(key.mods & KMOD_CTRL)) {
-					activateWindow(0);
-					sequencer.activateVoice(1);
-				}
-				break;
-			case SDLK_3:
-				if(!(key.mods & KMOD_CTRL)) {
-					activateWindow(0);
-					sequencer.activateVoice(2);
-				}
-				break;
-			case SDLK_4:
-			case SDLK_i:
-				activateWindow(1);
-				break;
-			case SDLK_5, SDLK_w:
-				activateWindow(2);
-				key.key = SDLK_w;
-				activeWindow.keypress(key);
-				return OK;
-			case SDLK_6, SDLK_p:
-				activateWindow(2);
-				key.key = SDLK_p;
-				activeWindow.keypress(key);
-				return OK;
-			case SDLK_7, SDLK_f:
-				activateWindow(2);
-				key.key = SDLK_f;
-				activeWindow.keypress(key);
-				return OK;
-			case SDLK_8, SDLK_m:
-				activateWindow(2);
-				key.key = SDLK_m;
-				activeWindow.keypress(key);
-				return OK;
-			case SDLK_9, SDLK_d:
-				activateWindow(2);
-				key.key = SDLK_d;
-				activeWindow.keypress(key);
-				return OK;
-			case SDLK_t:
-				ui.activateDialog(UI.infobar);
-				return OK;
-			case SDLK_KP0:
-				clearSeqs();
-				return OK;
-			case SDLK_KP_PERIOD:
-				optimizeSong();
-				return OK;
-			case SDLK_o:
-				if(key.mods & KMOD_CTRL) {
-					optimizeSong();
-					return OK;
-				}
-				break;
-			case SDLK_n:
-				if(key.mods & KMOD_CTRL) {
-					return OK;
-				}
-				break;
-			case SDLK_c:
-				if(key.mods & KMOD_CTRL) {
-					clearSeqs();
-					return OK;
-				}
-				break;
-			case SDLK_h:
-				state.displayHelp ^= 1;
-				UI.statusline.display("Help texts " ~ (state.displayHelp ? "enabled." : "disabled."));
-				break;
-			default:
-				break;
-			}
-		}
-		else if(key.mods & KMOD_CTRL) {
-			switch(key.raw)
-			{
-			 case SDLK_PLUS:
-			 case SDLK_KP_PLUS:
-				 song.speed = clamp(song.speed + 1, 0, 31);
-				 break;
-			 case SDLK_MINUS:
-			 case SDLK_KP_MINUS:
-				 song.speed = clamp(song.speed - 1, 0, 31);
-				 break;
-			case SDLK_TAB:
-				key.mods & KMOD_SHIFT ? activeWindowNum-- : activeWindowNum++ ;
-				if(activeWindowNum < 0) activeWindowNum = cast(int)( windows.length - 1);
-				if(activeWindowNum >= windows.length)
-					activeWindowNum %= windows.length;
-				activateWindow();
-				return OK;
-			case SDLK_z:
-				com.session.executeUndo();
-				return OK;
-			case SDLK_r:
-				com.session.executeRedo();
-				refresh();
-				return OK;
-			default:
-				break;
-			}
-		}
-		else if(!key.mods & KMOD_SHIFT) {
-			switch(key.raw)
-			 {
-			 case SDLK_KP_DIVIDE:
-				 if(state.octave > 0)
-					 state.octave--;
-				 break;
-			 case SDLK_KP_MULTIPLY:
-				 if(state.octave < 6)
-					 state.octave++;
-				 break;
-			case SDLK_PLUS:
-			case SDLK_KP_PLUS:
-				if(state.allowInstabNavigation) {
-					instable.stepRow(1);
-					state.activeInstrument = instable.row;
-				}
-				break;
-			case SDLK_MINUS:
-			case SDLK_KP_MINUS:
-				if(state.allowInstabNavigation) {
-					instable.stepRow(-1);
-					state.activeInstrument = instable.row;
-				}
-				break;
-			 default:
-				 break;
-			 }
-		}
-		else if(key.mods & KMOD_SHIFT) {
-			version(OSX) {
-				if(key.raw == SDLK_EQUALS && state.allowInstabNavigation) {
-					instable.stepRow(1);
-					state.activeInstrument = instable.row;
-				}
-			}
-		}
-		if(state.keyjamStatus == true) {
-			inputKeyjam.keypress(key);
-		}
-		else {
-			int r = activeWindow.keypress(key);
-			if(r == RETURN || r == CANCEL) {
-				assert(0);
-			}
-		}
-		return OK;
-	}	
-
-	override int keyrelease(Keyinfo key) {
-		if(state.keyjamStatus == true) {
-			inputKeyjam.keyrelease(key);
-		}
-		return activeWindow.keyrelease(key);
-	}
-
-	override void refresh() {
-		foreach(t; windows) {
-			t.refresh();
-			t.update();
-		}
-		bottomTabSwitcher.refresh();
-		// needed because 'input' might be messed by a subdialog
-		activeWindow.activate();
-	}
-	
-	override void update() {
-		foreach(t; windows) {
-			t.update();
-		}
-	}
-
-	bool fplayEnabled() { return followplay; }
-
-	void activateByCoord(int x, int y) {
-		foreach(idx, win; windows) { 
-			if(win.area.overlaps(x, y)) {
-				activateWindow(idx);
-			}
-		}
-		foreach(idx, win; bottomTabSwitcher.windows) {
-			if(win.area.overlaps(x, y)) {
-				bottomTabSwitcher.activateWindow(idx);
-				break;
-			}
-		}
-	}
-
-
-	void timerEvent() {
-		fplay.timerEvent();
-	}
-
-	Window windowByCoord(int x, int y) {
-		foreach(idx, win; windows ~ bottomTabSwitcher.windows) {
-			if(win.area.overlaps(x, y))
-				return win;
-		}
-		return null;
-	}
-
-	void playFromCursor() {
-		Voice[] v = sequencer.getVoices();
-		auto d1 = v[0].activeRow;
-		auto d2 = v[1].activeRow;
-		auto d3 = v[2].activeRow;
-		audio.player.start([d1.trkOffset,d2.trkOffset,d3.trkOffset],
-					  [d1.seqOffset,d2.seqOffset,d3.seqOffset]);
-		fplay.startFromCursor();
-	}
-	
-	void reset() {
-		sequencer.reset();
-		sequencer.resetMark();
-	}
-
-	void startFp() {
-		followplay = true;
-		windows[0] = fplay;
-		if(activeWindow == sequencer)
-			activateWindow(0);
-	}
-
-	void startFp(int mode) {
-		startFp();
-		if(activeWindow == fplay)
-			fplay.start(mode);
-	}
-
-	void startPlayback(int j) {
-		fplay.start(j);
-	}
-
-	private void stopFp() {
-		followplay = false;
-		windows[0] = sequencer;
-		activateWindow(activeWindowNum);
-	}
-
-	void stopPlayback() {
-		fplay.stop();
-		if(followplay) {
-			stopFp();
-			followplay = false;
-			activate();
-			sequencer.reset(false);
-		}
-	}
-
-	private void optimizeSong() {
-		if(++optimizecounter > 1) {
-			refresh();
-			// TODO: VALIDATION HERE BEFORE PURGING... PurgeExpception should be useless if validate covers all errorcases
-			try {
-				(new Purge(song,true)).purgeAll();
-			}
-			catch(PurgeException e) {
-				UI.statusline.display(e.toString);
-				optimizecounter = 0;
-				return;
-				
-			}
-			
-			refresh();
-			UI.statusline.display("Song data optimized.");
-			optimizecounter = 0;
-		}
-		else {
-			UI.statusline.display("Press again to confirm song data optimization...");
-			tickcounter3 = 0;
-		}
-	}
-
-	private void clearSong() {
-		if(++restartcounter > 1) {
-			//song.open(cast(ubyte[])import("player.bin"));
-			sequencer.reset();
-			refresh();
-			clearcounter = 0;
-			//savedialog.setFilename("");
-			state.filename = "";
-			UI.statusline.display("Editor restarted.");
-		}
-		else {
-			UI.statusline.display("Press again to confirm editor cold start...");
-			tickcounter3 = 0;
-		}
-	}
-
-	private void clearSeqs() {
-		if(++clearcounter > 1) {
-			song.clearSeqs();
-			sequencer.reset();
-			clearcounter = 0;
-			UI.statusline.display("Sequence data cleared.");
-		}
-		else {
-			UI.statusline.display("Press again to confirm sequence data clearing...");
-			tickcounter3 = 0;
-		}
-	}
-}
- 
 final class UI {
 	private {
 		Window dialog = null;
 		//bool printSIDDump = false;
-		enum VisMode { None, Regs, Oscilloscope }
-		int vismode;
-		AboutDialog aboutdialog;
-		FileSelectorDialog loaddialog, savedialog;
 	}
+	// Widened to package so the ui.keymap free functions (split out of UI) can
+	// reach the dialogs / vismode the shortcut callbacks drive.
+	package {
+		int vismode = VisMode.Regs;
+		AboutDialog aboutdialog;
+		FileSelectorDialog loaddialog, savedialog, exportsavedialog;
+		ExportOptionsDialog exportDialog, renderDialog;
+		ExportOptions exportOpts;
+	}
+	enum SPLASH_DURATION_MS = 2500;
 	static Statusline statusline;
 	static Infobar infobar;
 	static Toplevel toplevel;
+	MenuBar menubar;
+	CommandPalette palette;
 	bool exitRequested = false;
+	// Constructed at runtime in the ctor (NOT via a field initializer): a
+	// `= new` field initializer is evaluated with CTFE and baked into shared
+	// .init memory, which corrupts the manager's associative arrays at runtime.
+	ShortcutManager sm;
+	// Wall-clock deadline (SDL ticks) for auto-dismissing the startup splash;
+	// 0 once dismissed. Keeps the Esc-Esc-y quit chord usable. Declared as the
+	// trailing instance field so earlier field offsets stay binary-compatible
+	// with objects compiled before this change (no dep tracking in this repo).
+	uint splashDeadlineMs;
 
 	this() {
+		sm = new ShortcutManager();
 		statusline = new Statusline(Rectangle(0, 2, 1));
 		toplevel = new Toplevel(this);
 
 		infobar = new Infobar(Rectangle(4, screen.height - 4, 1, screen.width - 8));
-	
+
 		int dialog_width = screen.width - 32;
 		int dialog_height = screen.height - 10;
+		// Cap dialog dimensions to reasonable sizes
+		if(dialog_width > 120) dialog_width = 120;
+		if(dialog_height > 50) dialog_height = 50;
 		int dialog_x = screen.width / 2 - dialog_width / 2;
 		int dialog_y = screen.height / 2 - dialog_height / 2;
 
@@ -808,9 +99,15 @@ final class UI {
 												  dialog_width), &loadCallback, &importCallback);
 		savedialog = new SaveFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
 												  dialog_width), &saveCallback);
+		exportsavedialog = new SaveFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
+												  dialog_width), &saveExportCallback, "Export song");
+		exportDialog = new ExportOptionsDialog(&exportConfirm, false);
+		renderDialog = new ExportOptionsDialog(&exportConfirm, true);
 
 		int aboutdlg_width = screen.width - 18;
-		int aboutdlg_height = 12;
+		int aboutdlg_height = 13;
+		// Cap dialog width to reasonable size (prevent overflow in fprint)
+		if(aboutdlg_width > 100) aboutdlg_width = 100;
 		int aboutdlg_x = screen.width / 2 - aboutdlg_width / 2;
 		int aboutdlg_y = screen.height / 2 - aboutdlg_height / 2;
 
@@ -820,11 +117,47 @@ final class UI {
 
 		audio.player.setMultiplier(song.multiplier);
 
-		if(com.fb.mode > 0)
-			state.shortTitles = false;
+		//if(com.fb.mode > 0)
+		//	state.shortTitles = false;
 		toplevel.activate();
+
+		// Initialize and register keyboard shortcuts (now free functions in
+		// ui.keymap; registerShortcuts also runs the context and menu-label
+		// passes, mirroring the previous in-class ordering).
+		ui.keymap.registerShortcuts(this);
+		// Seed the active context from the initially active window (mainui is not
+		// assigned yet during construction, so the WindowSwitcher push is skipped).
+		sm.setActiveContext(toplevel.contextId);
+		// Generate the F12 help pages from the now-populated registry.
+		ui.help.HELPMAIN = genMainHelp(sm);
+		ui.help.HELPSEQUENCER = genSequencerHelp(sm);
+
+		// Build the top-bar menu (also from the now-populated registry); its ctor
+		// asserts every global command category is reachable from a menu.
+		menubar = new MenuBar(sm);
+		palette = new CommandPalette(this, sm);
+
+		// Pop the splash on startup; it auto-dismisses after SPLASH_DURATION_MS
+		// (see timerEvent) and any key also clears it.
 		activateDialog(aboutdialog);
+		splashDeadlineMs = SDL_GetTicks() + SPLASH_DURATION_MS;
+
 		update();
+	}
+	
+	package void toggleFollowMode() {
+		if(!audio.player.isPlaying) return;
+		if(toplevel.fplayEnabled()) {
+			stop(false);
+			seqPos.copyFrom(fplayPos);
+			toplevel.stopFp();
+			statusline.display("Tracking off.");
+		}
+		else {
+			stop(false);
+			toplevel.startFp();
+			statusline.display("Tracking on.");
+		}
 	}
 
 	@property Window activeWindow() {
@@ -836,19 +169,50 @@ final class UI {
 		return activeWindow.input;
 	}
 
+	// True while a free-text field (InputString) is focused — the song-info
+	// Title/Author/Release bar and the instrument description. Every printable
+	// key (including ones that share a keycode with a shortcut, e.g. '$' = Shift-4)
+	// must reach the field, so global shortcuts are suppressed while it is active.
+	// Numeric/hex/note inputs are NOT InputString, so shortcuts still work there.
+	@property bool textInputActive() {
+		return cast(InputString)activeInput !is null;
+	}
+
+	// OS-composed text (SDL_TEXTINPUT) routed to the focused text field. Ignored
+	// unless a text field is active, so it never disturbs the sequencer/tables.
+	void textInput(string s) {
+		if(textInputActive)
+			activeInput.textInput(s);
+	}
+
+	@property VisMode currentVisMode() {
+		return cast(VisMode)vismode;
+	}
+
 	void timerEvent(int n) {
+		// Auto-dismiss the startup splash once its deadline passes.
+		if(splashDeadlineMs != 0 && SDL_GetTicks() >= splashDeadlineMs) {
+			splashDeadlineMs = 0;
+			if(dialog is aboutdialog) closeDialog();
+		}
 		Exception e = audio.callback.getException();
 		if(e !is null) {
 			writeln("error" ~ e.toString());
 			audio.player.stop();
 			statusline.display(e.toString());
 		}
-		if((tickcounter3 >= 0) && ++tickcounter3 > 20) {
-			clearcounter = optimizecounter = escapecounter = restartcounter = 0;
-			infobar.update();
-			tickcounter3 = -1;
-		}
 		statusline.timerEvent();
+		// Draw the menu bar on EVERY timer event, not inside the tick-gated
+		// block below: tickcounter1 only advances from player frame ticks
+		// (audio.timer.readTick()), so while the editor sits idle the gated
+		// block never runs. Gated, the dropdown was painted exactly once (by
+		// the keypress update); when the statusline timeout then cleared row 2
+		// it blacked out the dropdown's focused first row until the next
+		// keypress, and the hover tooltip could never appear while idle.
+		// Drawing here — right after statusline.timerEvent() and before the
+		// frame is presented — repaints any statusline clear in the same
+		// cycle and lets the tooltip dwell timer fire on wall clock.
+		drawMenu();
 		tickcounter1 += n;
 		if(tickcounter1 >= UPDATE_RATE) {
 			infobar.update();
@@ -863,7 +227,7 @@ final class UI {
 					screen.cprint(x, 2, 15, 0, "V2:");
 					screen.cprint(x, 3, 15, 0, "V3:");
 					screen.cprint(x+26, 1, 15, 0, "$D415 16 17 18");
-					
+
 					for(int i = 0; i < 7; i++) {
 						screen.cprint(x+3+i*3, 1, 5,0, format("%02X", audio.audio.sidreg[i]));
 						screen.cprint(x+3+i*3, 2, 5,0, format("%02X", audio.audio.sidreg[i+7]));
@@ -875,6 +239,16 @@ final class UI {
 					}
 				}
 				update();  // TESTME: just do video.updateFrame()
+
+				// Apply playback row tinting only when no dialog is covering
+				// the tables. Dialogs must remain visually authoritative.
+				if(dialog is null) {
+					if(toplevel.followplay && toplevel.fplay) {
+						toplevel.fplay.renderVisualization();
+					} else if(toplevel.sequencer) {
+						toplevel.sequencer.renderVisualization();
+					}
+				}
 			}
 		}
 		if(vismode == VisMode.Oscilloscope &&
@@ -885,18 +259,24 @@ final class UI {
 	void update() {
 		infobar.update();
 		toplevel.update();
+		drawMenu();
 		if(dialog)
 			dialog.update();
 	}
 
-	private void F1orF2(Keyinfo key, bool fromStart) {
+	// Draws the top-bar menu (row 0) and, when focused, its dropdown. Called
+	// after every header/content repaint so the periodic infobar refresh never
+	// erases the bar. The dropdown is drawn last so it overlays the tables.
+	private void drawMenu() {
+		if(menubar is null) return;
+		menubar.drawBar();
+		menubar.drawDropdown();
+		if(palette !is null) palette.draw();
+	}
+
+	package void F1orF2(Keyinfo key, bool fromStart) {
 		if(audio.player.isPlaying) {
-			if(key.mods & KMOD_SHIFT) { // already playing, reinit tracking
-				stop(false);
-				toplevel.startFp();
-				return;
-			}
-			else if(toplevel.fplayEnabled()) { // drop tracking
+			if(!(key.mods & KMOD_SHIFT) && toplevel.fplayEnabled()) { // drop tracking
 				stop(false);
 				seqPos.copyFrom(fplayPos);
 				toplevel.stopFp();
@@ -926,191 +306,64 @@ final class UI {
 	}
 
 	int keypress(Keyinfo key) {
-		/+ old buggy coldstart code
-		if(key.mods & KMOD_ALT && key.mods & KMOD_CTRL && key.raw == SDLK_KP0) {
-			if(++restartcounter > 1) {
-				song = new Song();
-				toplevel.sequencer.reset();
-				refresh();
-				clearcounter = 0;
-				UI.statusline.display("Editor restarted.");
-				savedialog.setFilename("");
-				// TODO: find out why tracklist is not erased
-				filename = "";
-			}
-			else {
-				UI.statusline.display("Press again to confirm editor cold start...");
-				tickcounter3 = 0;
-			}
+
+		bool skip_imm_keypress = false; //workaround for F11 - crapchars in savedialog
+
+		// The command palette, when open, gets every key first (like the menu
+		// bar, it is an overlay, not a dialog).
+		if(palette !is null && palette.active) {
+			palette.keypress(key);
 			return OK;
 		}
-		else+/
-		
-		bool skip_imm_keypress = false; //workaround for F11 - crapchars in savedialog
-		if(key.mods & KMOD_ALT) {
-			switch(key.raw) 
-			{
-			case SDLK_RETURN:
-				video.toggleFullscreen();
-				//update();
-				break;
-			case SDLK_KP_PLUS:
-				audio.player.setMultiplier(song.multiplier + 1);
-				break;
-			case SDLK_KP_MINUS:
-				audio.player.setMultiplier(song.multiplier - 1);
-				break;
-			case SDLK_F12:
-				audio.player.dumpFrame();
-				break;
-			default:
-				break;
+		// The top-bar menu, when focused, gets every key first (it is not a
+		// dialog, so it never goes through the dialog/closeDialog path — a menu
+		// item callback may itself open a dialog and must not be torn down).
+		if(menubar.active) {
+			// Typing a printable character morphs the menu into the command
+			// palette, seeded with that character ("Esc, then type"). Space is
+			// excluded: it toggles the focused menu checkbox.
+			if(key.unicode > 0x20 && key.unicode < 0x7f
+			   && !(key.mods & (KMOD_CTRL | KMOD_ALT | KMOD_GUI))) {
+				menubar.close();
+				palette.open("" ~ cast(char)key.unicode);
+				return OK;
 			}
+			menubar.keypress(key);
+			return OK;
 		}
-		else if(key.mods & KMOD_CTRL) {
-			switch(key.raw)
-			{
-			case SDLK_1:
-				audio.player.toggleVoice(0);
-				break;
-			case SDLK_2:
-				audio.player.toggleVoice(1);
-				break;
-			case SDLK_3:
-				audio.player.toggleVoice(2);
-				break;
-			case SDLK_F11:
-				string s = savedialog.filename;
-				if(s == "")
-					statusline.display("Cannot Quicksave; give filename first by doing a regular save.");
+		// Esc opens the menu bar (it no longer quits; quit is File > Quit). Not
+		// while a dialog is up, and not while editing the song-info fields.
+		if(!dialog && key.raw == SDLK_ESCAPE && key.mods == 0
+		   && activeWindow != infobar) {
+			menubar.openMenu();
+			return OK;
+		}
+
+		// Check if shortcut manager handles this keypress, but NOT while a free-text
+		// field is being edited (the description / song-info fields) — there every
+		// printable key must reach the field, not trigger a shortcut.
+		if(!dialog && !textInputActive) {
+			//auto sm = getShortcutManager();
+			if(sm.handleKeypress(key)) {
+
+				// Shortcut was handled
+				// Special case: F11 saves dialog needs skip_imm_keypress
+				if(key.raw == SDLK_F11 && key.mods == 0) {
+					skip_imm_keypress = true;
+				}
 				else {
-					saveCallback(s);
-					statusline.display(format("Saved \"%s\".",s));
+					return OK;
 				}
-				break;
-			case SDLK_F12:
-				break;
-			case SDLK_F2:
-				audio.player.interpolate ^= 1;
-				audio.player.init();
-				break;
-			case SDLK_F3:
-				song.sidModel ^= 1;
-				audio.player.setSidModel(song.sidModel);
-				break;
-				/+
-			case SDLK_F4, SDLK_b:
-				audio.player.badline ^= 1;
-				audio.player.init();
-				break;
-				+/
-			case SDLK_F8:
-				key.mods & KMOD_SHIFT ? audio.player.prevFP() : audio.player.nextFP();
-				break;
-			case SDLK_F9:
-				/+
-				if(printSIDDump) {
-					screen.clrtoeol(55, 1, 0);
-					screen.clrtoeol(55, 2, 0);
-					screen.clrtoeol(55, 3, 0);
-				}
-				printSIDDump = !printSIDDump;
-				+/
-				vismode = umod(vismode + 1, 0, VisMode.max);
-				screen.clrtoeol(55, 1, 0);
-				screen.clrtoeol(55, 2, 0);
-				screen.clrtoeol(55, 3, 0);
-				video.clearVisualizer();
-				break;
-			case SDLK_SPACE:
-				if(song.ver < 7) break;
-				state.keyjamStatus ^= 1;
-				enableKeyjamMode(state.keyjamStatus);
-				statusline.display("Keyjam " ~ (state.keyjamStatus ? "enabled." : "disabled.")
-								   ~ " Press Ctrl-Space to toggle.");
-				break;
-			default:
-				break;
 			}
 		}
-		else switch(key.raw) 
-			 {
-			 case SDLK_ESCAPE:
-				 if(dialog || activeWindow == infobar)
-					 break;
-				 if(++escapecounter > 1) {
-					 activateDialog(new ConfirmationDialog("Really exit (y/n)? ", (int param) {
-								 if(param != 0) return;
-								 audio.player.stop();
-								 exitRequested = true;
-							 }));
-					 return OK;
-				 }
-				 tickcounter3 = 0;
-				 break;
-			 case SDLK_PRINT:
-			 	 audio.player.dumpFrame();
-			 	 break;
-			 case SDLK_F1:
-				 F1orF2(key, false);
-				 break;
-			 case SDLK_F2:
-				 F1orF2(key, true);
-				 break;
-			 case SDLK_F3:
-				 toplevel.playFromCursor();
-				 break;
-			 case SDLK_SCROLLOCK:
-				 if(!audio.player.isPlaying) break;
-				 if(toplevel.fplayEnabled()) {
-					 stop(false);
-					 seqPos.copyFrom(fplayPos);
-					 toplevel.stopFp();
-					 statusline.display("Tracking off.");
-				 }
-				 else {
-					 stop(false);
-					 toplevel.startFp();
-					 statusline.display("Tracking on.");
-				 }
-				 break;
-			 case SDLK_F4:
-				 if(toplevel.fplayEnabled()) 
-					 seqPos.copyFrom(fplayPos);
-				 stop();
-				 if(toplevel.fplayEnabled())
-					 toplevel.stopFp();
-				 break;
-			 case SDLK_F8:
-				 if(key.mods & KMOD_SHIFT)
-					 audio.player.fastForward(25);
-				 else
-					 audio.player.fastForward(5);
-				 break;
-			 case SDLK_F9:
-				 activateDialog(aboutdialog);
-				 break;
-			 case SDLK_F10:
-				 activateDialog(loaddialog);
-				 break;
-			 case SDLK_F11:
-				 activateDialog(savedialog);
-				 skip_imm_keypress = true;
-				 break;	
-			 case SDLK_F12:
-				 int helpdlg_width = screen.width - 10;
-				 int helpdlg_height = 36;
-				 int helpdlg_x = screen.width / 2 - helpdlg_width / 2;
-				 int helpdlg_y = screen.height / 2 - helpdlg_height / 2;
-				 HelpDialog helpdialog = 
-					 new HelpDialog(Rectangle(helpdlg_x, helpdlg_y,
-											  helpdlg_height,
-											  helpdlg_width), activeWindow.contextHelp);
-				 activateDialog(helpdialog);
-				 break;
-			 default:
-				 break;
-			 }
+		
+		// Handle Alt+key shortcuts that might not be in shortcut manager
+		// (context-dependent or special cases)
+		if(key.mods & KMOD_ALT && !(key.mods & KMOD_CTRL)) {
+			// These are handled by shortcut manager or by toplevel
+		}
+		
+		// Check for active input field or dialog - they get priority
 		int r;
 		if(dialog && !skip_imm_keypress) {
 			if(key.mods & KMOD_ALT) return OK;
@@ -1121,23 +374,58 @@ final class UI {
 			}
 		}
 		else {
+			// Pass to toplevel which handles window-specific shortcuts
 			toplevel.keypress(key);
 		}
 		return OK;
-	}	
+	}
 
 	int keyrelease(Keyinfo key) {
 		toplevel.keyrelease(key);
 		return OK;
 	}
 
-	void clickedAt(int x, int y, int b) {
+	void clickedAt(int x, int y, int b, int clicks = 1) {
+		if(activeInput !is null && activeInput.cursor !is null)
+			activeInput.cursor.clear();
+		// The palette, while open, owns the whole screen (click outside closes).
+		if(palette.active) {
+			palette.clickedAt(x, y, b, clicks);
+			return;
+		}
+		// The menu bar owns row 0, and the whole screen while it is focused.
+		if(menubar.active || (!dialog && y == 0)) {
+			menubar.clickedAt(x, y, b, clicks);
+			return;
+		}
 		if(dialog)
-			dialog.clickedAt(x, y, b);
-		else toplevel.clickedAt(x, y, b);
+			dialog.clickedAt(x, y, b, clicks);
+		else toplevel.clickedAt(x, y, b, clicks);
 	}
 
-	private void saveCallback(string s) {
+	// While the menu bar is focused it owns drag + release (the highlight follows
+	// the drag; the action fires on release). Otherwise they route to the toplevel
+	// (the active window owns the drag); never to a dialog.
+	void draggedTo(int x, int y) {
+		if(menubar.active) { menubar.draggedTo(x, y); return; }
+		if(dialog || palette.active) return;
+		toplevel.draggedTo(x, y);
+	}
+
+	void releasedAt(int x, int y) {
+		if(menubar.active) { menubar.releasedAt(x, y); return; }
+		if(dialog || palette.active) return;
+		toplevel.releasedAt(x, y);
+	}
+
+	// Mouse moved with no button held. Only the focused menu bar reacts: its
+	// highlight cursor follows the pointer. Returns true if a redraw is needed.
+	bool hoverAt(int x, int y) {
+		if(!menubar.active) return false;
+		return menubar.hoverAt(x, y, false);
+	}
+
+	package void saveCallback(string s) {
 		try {
 			song.save(s);
 		}
@@ -1151,6 +439,7 @@ final class UI {
 		auto ind = 1 + fn.lastIndexOf(DIR_SEPARATOR);
 		fn = fn[ind..$];
 		state.filename = fn;
+		state.songModified = false;
 
 		// sync load filesel to save filesel
 		if(loaddialog.directory != savedialog.directory) {
@@ -1160,6 +449,60 @@ final class UI {
 			}
 			loaddialog.fsel.fpos.reset();
 		}
+	}
+
+	// Propose an export filename from the current .ct(2) file (or a default).
+	package string proposeExportName(string ext) {
+		string fn = state.filename.strip();
+		if(fn.length == 0) return "song" ~ ext;
+		auto dot = fn.lastIndexOf('.');
+		if(dot > 0) fn = fn[0 .. dot];
+		return fn ~ ext;
+	}
+
+	// Step 1 of "Export song": the options dialog confirmed; stash the options and
+	// open the save-file dialog (the same one used for saving a song), proposing
+	// the right extension for the chosen format.
+	private void exportConfirm(ExportOptions o) {
+		exportOpts = o;
+		string ext;
+		final switch(o.format) {
+		case ExportFormat.Psid:         ext = ".sid"; break;
+		case ExportFormat.Wav:          ext = ".wav"; break;
+		case ExportFormat.Flac:         ext = ".flac"; break;
+		case ExportFormat.FullPrg:
+		case ExportFormat.OptimizedPrg: ext = ".prg"; break;
+		}
+		exportsavedialog.setDirectory(getcwd());
+		exportsavedialog.setFilename(proposeExportName(ext));
+		activateDialog(exportsavedialog);
+	}
+
+	// Step 2: build and write the export using the stashed options + format. Data
+	// formats go through ct.build; audio formats are rendered offline by the audio
+	// engine (ct.build has no audio dependency) and written via audio.render.
+	private void saveExportCallback(string s) {
+		try {
+			if(isAudioFormat(exportOpts.format)) {
+				stop();   // the render takes over the audio engine
+				statusline.display("Rendering audio...");
+				short[] pcm = audio.player.renderPcm(exportOpts.singleSubtune,
+													 exportOpts.durationSec, exportOpts.wavSampleRate);
+				audio.render.writeAudioFile(s, pcm, exportOpts);
+			}
+			else {
+				ubyte[] data = ct.build.exportSong(song, audio.player.ntsc != 0, exportOpts);
+				std.file.write(s, data);
+			}
+		}
+		catch(Exception e) {
+			stderr.writeln(e.toString);
+			statusline.display("Could not write export! " ~ e.msg);
+			return;
+		}
+		string fn = s.strip();
+		auto ind = 1 + fn.lastIndexOf(DIR_SEPARATOR);
+		statusline.display(format("Exported \"%s\".", fn[ind .. $]));
 	}
 
 	void importCallback(string s) {
@@ -1172,7 +515,7 @@ final class UI {
 
 	private void loadCallback(string s, bool doImport) {
 		stop();
-		
+
 		if(std.file.exists(s) == 0 || std.file.isDir(s)) {
 			statusline.display("File not found or not accessible: " ~ s);
 			return;
@@ -1190,33 +533,38 @@ final class UI {
 			statusline.display("Error: " ~ e.toString);
 			return;
 		}
-		
+
+		// A new song image means the resident remote-backend copy is stale.
+		if(audio.remote.isActive())
+			audio.remote.markReload();
+
 		refresh();
 		// all voices ON
 		audio.player.setVoicon(0,0,0);
-		
+
 		string fn = s.strip();
 		auto ind = 1 + fn.lastIndexOf(DIR_SEPARATOR);
 		fn = fn[ind .. $];
 		state.filename = fn;
 		infobar.refresh();
-		
+
 		// sync save filesel to load filesel in case dir was changed
-		foreach(d; [loaddialog, savedialog]) {
+		// (exportsavedialog too, so the export is offered in the loaded .ct's dir)
+		foreach(d; [loaddialog, savedialog, exportsavedialog]) {
 			d.setFilename(fn);
 			d.setDirectory(getcwd());
 		}
 		savedialog.fsel.fpos = loaddialog.fsel.fpos;
-	
+
 		// set variables
 		audio.player.setSidModel(song.sidModel);
 		audio.player.setFP(song.fppres);
 		audio.player.setMultiplier(song.multiplier);
-		
+
 		enableKeyjamMode(false);
 
 		toplevel.reset();
-		
+
 		if(doImport) {
 			statusline.display("Song data imported.");
 		}
@@ -1224,6 +572,32 @@ final class UI {
 		import com.session;
 		com.session.state.undoQueue.clear();
 		com.session.state.redoQueue.clear();
+		// A plain load matches the file on disk; an import alters the current
+		// song without touching its file.
+		com.session.state.songModified = doImport;
+	}
+
+	// Start a fresh, empty project. Round-trips a blank Song through the normal
+	// load path so every view and dialog rebinds exactly as for a file load
+	// (replacing the global `song` reference would leave the voices bound to the
+	// old data), then drops the temp file and presents it as an unnamed,
+	// unmodified song.
+	package void newSong() {
+		import std.path : buildPath;
+		string tmp = buildPath(tempDir(), "cc-new.ct");
+		try {
+			(new Song()).save(tmp);
+		}
+		catch(Exception e) {
+			statusline.display("Could not start a new song: " ~ e.msg);
+			return;
+		}
+		loadCallback(tmp);
+		try { std.file.remove(tmp); } catch(Exception e) {}
+		state.filename = "";
+		foreach(d; [loaddialog, savedialog, exportsavedialog])
+			d.setFilename("");
+		statusline.display("New song.");
 	}
 
 	void activateDialog(Window d) {
@@ -1232,7 +606,7 @@ final class UI {
 		dialog = d;
 		d.activate();
 	}
-	
+
 	void closeDialog() {
 		if(dialog) dialog.deactivate();
 		dialog = null;
@@ -1272,10 +646,6 @@ final class UI {
 	}
 
 	static void activateInstrument(int ins) {
-		if(ins > 47) ins = 47;
-		if(ins < 0) ins = 0;
-		toplevel.instable.seekRow(ins);
-		state.activeInstrument = ins;
-		toplevel.refresh();
+		toplevel.activateInstrument(ins);
 	}
 }

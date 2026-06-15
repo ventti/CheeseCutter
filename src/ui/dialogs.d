@@ -1,14 +1,18 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
+
+Modal dialogs — query / confirm / string-entry and the help viewer (QueryDialog family).
 */
 
 module ui.dialogs;
-import derelict.sdl.sdl;
+import derelict.sdl2.sdl;
 import main;
 import com.fb;
 import com.util;
 import com.session;
 private import ct.base;
+import ct.build : ExportOptions, ExportFormat, isAudioFormat;
+import audio.render : flacAvailable;
 import ui.help;
 import ui.ui;
 import ui.input;
@@ -31,6 +35,13 @@ abstract class QueryDialogBase(T) : Window {
 		query = s;
 		callback = fp;
 		frameWidth = cast(int)query.length;
+	}
+
+	// Replace the prompt text (e.g. to embed live state); keeps the frame and
+	// the input-field position in sync with the new length.
+	void setQuery(string s) {
+		query = s;
+		frameWidth = cast(int)s.length;
 	}
 
 	override void update() {
@@ -162,6 +173,12 @@ class HelpDialog : Window {
 
 	override int keypress(Keyinfo key) {
 		int k = key.unicode;
+		if(key.raw == SDLK_F12 && key.mods == 0) {
+			if(title != ui.help.HELPMAIN.title) {
+				mainui.activateDialog(new HelpDialog(area, ui.help.HELPMAIN));
+			}
+			return OK;
+		}
 		if(k == SDLK_SPACE ||
 		   k == SDLK_PLUS ||
 			k == SDLK_RIGHT ||
@@ -222,46 +239,43 @@ class DebugDialog : Window {
 	}
 }
 
+// The splash / about screen. Rendering is owned by Video.drawSplash(); this
+// dialog just toggles video.splashActive while it is the active dialog. The
+// artwork (CheeseCutterEXT.png -> src/font/splash.dat) already carries the
+// credits, so there is no text to draw here.
 class AboutDialog : Window {
-	string LOGO =
-"           ___                                    ___   ___                   
-   ______/  /____________________________________\\  \\__\\  \\_______________ 
-  /  ___/     /  -__/  -__/__ --/  -__|  ___\\  \\  \\   __\\   __\\  -__\\    _\\
- /_____/__/__/_____/_____/_____/______|______\\_____\\_____\\_____\\_____\\___\\/
-\\_____\\__\\__\\_____\\_____\\_____\\______|______/_____/_____/_____/_____/___/
-
-";
+	// Set by the caller before opening to request the scroller. The startup
+	// splash leaves it false so it shows the artwork only; the F11/Alt-S handler
+	// sets it true. Reset on deactivate so the intent does not leak to a later open.
+	bool withScroller;
 
 	this(Rectangle a) {
 		super(a);
 	}
-  
-	override void update() {
-		string[] logo = std.string.splitLines(LOGO);
-		int y;
 
-		drawFrame(area);
-		y = area.y + 1;
-		foreach(line; logo) {
-
-			screen.cprint(area.x + 1, y, 1, 0, 
-						  std.array.replicate(" ", area.width-2));
-
-			screen.fprint(area.x + 1, y, "`01" ~ line.center(area.width-2));
-			y++;
-		}
-		screen.cprint(area.x + 1, y++,15, 0,"(C) 2009-17 Abaddon + contributors".center(area.width-2));
-		screen.cprint(area.x + 1, y++,15, 0,"reSID engine by Dag Lem".center(area.width-2));
-		screen.cprint(area.x + 1, y++,15, 0,"Released under GNU GPL".center(area.width-2));
-		screen.fprint(area.x + 1, y++," ".center(area.width-2));
+	override void activate() {
+		video.splashActive = true;
+		video.splashScroll = withScroller;
 	}
-  
+
+	override void deactivate() {
+		video.splashActive = false;
+		video.splashScroll = false;
+		withScroller = false;
+		screen.refresh(); // force a full cell redraw so the editor reappears
+	}
+
+	override void update() {
+		// no-op: Video.drawSplash() renders the image every frame while active.
+	}
+
+	override void clickedAt(int scrx, int scry, int button, int clicks = 1) {
+		mainui.closeDialog();
+	}
+
 	override int keypress(Keyinfo key) {
 		if(key.mods) return OK;
-		if(key.unicode == SDLK_ESCAPE ||
-			key.unicode == SDLK_SPACE ||
-			key.unicode == SDLK_RETURN) return RETURN;
-		return OK;
+		return RETURN; // any unmodified key dismisses the splash
 	}
 }
 
@@ -280,6 +294,13 @@ class FileSelector : Window {
 	private File[] filelist;
 	string directory;
 	alias area filearea;
+	private int lastClickNum = -1;
+	private uint lastClickTicks;
+	// Type-ahead: typing jumps to the first entry whose name starts with the
+	// typed prefix (case-insensitive); the buffer expires after a short pause.
+	private enum TYPEAHEAD_TIMEOUT_MS = 1000;
+	private string typeahead;
+	private uint typeaheadDeadline;
 	
 	this(Rectangle a) {
 		super(a);
@@ -301,6 +322,13 @@ class FileSelector : Window {
 
 	void reset() {
 		fpos.offset = fpos.pos = 0;
+		lastClickNum = -1;
+		typeahead = "";
+	}
+
+	/// The live type-ahead prefix, "" once it has expired (for the dialog header).
+	@property string typeaheadDisplay() {
+		return SDL_GetTicks() <= typeaheadDeadline ? typeahead : "";
 	}
 
 	override void update() { 
@@ -371,10 +399,80 @@ class FileSelector : Window {
 		case SDLK_END:
 			cursorEnd();
 			return WRAP;
+		case SDLK_BACKSPACE:
+			if(typeaheadDisplay.length) {
+				typeahead = typeahead[0 .. $ - 1];
+				typeaheadDeadline = SDL_GetTicks() + TYPEAHEAD_TIMEOUT_MS;
+				if(typeahead.length && jumpToPrefix(typeahead))
+					return WRAP;
+			}
+			break;
 		default:
+			// Type-ahead: printable chars accumulate a prefix and jump to the
+			// first matching entry. An expired buffer restarts from scratch.
+			if(key.unicode >= 0x20 && key.unicode < 0x7f
+			   && !(key.mods & (KMOD_CTRL | KMOD_ALT | KMOD_GUI))) {
+				uint now = SDL_GetTicks();
+				if(now > typeaheadDeadline) typeahead = "";
+				typeahead ~= cast(char)key.unicode;
+				typeaheadDeadline = now + TYPEAHEAD_TIMEOUT_MS;
+				if(jumpToPrefix(typeahead))
+					return WRAP;
+			}
 			break;
 		}
 		return OK;
+	}
+
+	// Move the cursor to the first entry whose displayed name starts with
+	// `prefix` (case-insensitive). Keeps the cursor visible by scrolling.
+	private bool jumpToPrefix(string prefix) {
+		foreach(i, f; filelist) {
+			auto ind = 1 + f.name.lastIndexOf(DIR_SEPARATOR);
+			string nm = f.name[ind .. $];
+			if(nm.length >= prefix.length
+			   && icmp(nm[0 .. prefix.length], prefix) == 0) {
+				int n = cast(int)i;
+				if(n < area.height) {
+					fpos.offset = 0;
+					fpos.pos = n;
+				}
+				else {
+					fpos.offset = n - (area.height - 1);
+					fpos.pos = area.height - 1;
+				}
+				return true;
+			}
+		}
+		return false;
+	}
+
+	int mouseClick(int x, int y, int button) {
+		if(button != SDL_BUTTON_LEFT) return OK;
+		if(y < area.y || y >= area.y + area.height) return OK;
+
+		int row = y - area.y;
+		int clickedNum = fpos.offset + row;
+		if(clickedNum < 0 || clickedNum >= filelist.length) return OK;
+
+		uint now = SDL_GetTicks();
+		bool doubleClick = clickedNum == lastClickNum &&
+			now - lastClickTicks <= 500;
+
+		fpos.pos = row;
+		lastClickNum = clickedNum;
+		lastClickTicks = now;
+
+		if(doubleClick && filelist[clickedNum].isdir) {
+			fileHandler();
+			return WRAPR;
+		}
+
+		return WRAP;
+	}
+
+	override void clickedAt(int x, int y, int button, int clicks = 1) {
+		mouseClick(x, y, button);
 	}
 	
 	char[][] listdir(string udir) {
@@ -498,6 +596,21 @@ class DialogString : Window {
 	}
 	alias setString setOutputString;
 
+	bool containsPoint(int x, int y) {
+		return y == input.y &&
+			x >= input.x &&
+			x < input.x + input.inputLength;
+	}
+
+	override void clickedAt(int x, int y, int button, int clicks = 1) {
+		if(button != SDL_BUTTON_LEFT || y != input.y) return;
+
+		int n = x - input.x;
+		if(n < 0) n = 0;
+		if(n >= input.inputLength) n = input.inputLength - 1;
+		input.nibble = n;
+	}
+
 	override void update() {
 		input.update();
 	}
@@ -514,6 +627,10 @@ class FileSelectorDialog : WindowSwitcher {
 	private string header;
 	private char[][] filelist;
 	Rectangle filearea;
+	// Metadata preview of the focused .ct/.ct2 file (title/author/release).
+	// update() runs ~25x/s, so the header read is cached per selected path.
+	private string previewPath;
+	private SongInfo previewInfo;
 	
 	this(Rectangle a, string h, CB cb) {
 		header = h;
@@ -574,8 +691,12 @@ class FileSelectorDialog : WindowSwitcher {
 		drawFrame(area);
 		x = area.x + 3;
 		y = area.y + 2;
-		screen.cprint(x,area.y,1,0," " ~ header ~ " ");
+		string hdr = " " ~ header ~ " ";
+		if(fsel.typeaheadDisplay.length)
+			hdr ~= "- find: " ~ fsel.typeaheadDisplay ~ " ";
+		screen.cprint(x,area.y,1,0,hdr);
 
+		drawPreview(x, area.y + area.height - 4);
 		screen.fprint(x,area.y+area.height-3,format("`0fDirectory: `0d%s",sdir.toString()));
 		
 		string f = sfile.toString();
@@ -589,6 +710,56 @@ class FileSelectorDialog : WindowSwitcher {
 			fsel.update();
 		}
 		input = activeWindow.input;
+	}
+
+	// Draw the focused entry's song metadata on the spare row above the
+	// Directory/Filename rows; nothing is drawn for dirs / non-.ct files
+	// (update() has already space-filled the row).
+	private void drawPreview(int x, int y) {
+		string sel = fsel.selected;
+		if(sel != previewPath) {
+			previewPath = sel;
+			previewInfo = SongInfo.init;
+			try {
+				if(sel != "." && sel != ".." && std.file.exists(sel)
+				   && !std.file.isDir(sel))
+					previewInfo = readSongInfo(sel);
+			}
+			catch(Exception e) {}
+		}
+		if(!previewInfo.valid) return;
+		int limit = area.x + area.width - 3;
+		void seg(string s, int fg) {
+			if(x >= limit || s.length == 0) return;
+			if(x + cast(int)s.length > limit) s = s[0 .. limit - x];
+			screen.cprint(x, y, fg, 0, s);
+			x += cast(int)s.length;
+		}
+		seg("    Title: ", 15); seg(previewInfo.title, 13);
+		seg("  Author: ", 15);  seg(previewInfo.author, 13);
+		seg("  Release: ", 15); seg(previewInfo.release, 13);
+	}
+
+	override void clickedAt(int x, int y, int button, int clicks = 1) {
+		if(button != SDL_BUTTON_LEFT) return;
+
+		if(y >= fsel.area.y && y < fsel.area.y + fsel.area.height &&
+		   x >= fsel.area.x && x < fsel.area.x + fsel.area.width + 5) {
+			activateWindow(0);
+			int r = fsel.mouseClick(x, y, button);
+			if(r == WRAPR)
+				sdir.setString(getcwd());
+			if(r == WRAP) {
+				int ind = cast(int) (1 + fsel.getSelected().lastIndexOf(DIR_SEPARATOR));
+				sfile.setString(cast(string)(fsel.getSelected()[ind..$]));
+			}
+			return;
+		}
+
+		if(sfile.containsPoint(x, y)) {
+			activateWindow(2);
+			sfile.clickedAt(x, y, button, clicks);
+		}
 	}
 
 	override int keypress(Keyinfo key) {
@@ -656,13 +827,9 @@ class LoadFileDialog : FileSelectorDialog {
 	}
 
 	private bool shouldUpgrade(string fn) {
-		try {
-		    Song newsong = new Song();
-		    newsong.open(fn);
-		    return SONG_REVISION > newsong.ver;
-		}
-		catch(Exception e) { return false; }
-		return true;
+		// Header-only read; no need to construct a full Song just for `ver`.
+		auto info = readSongInfo(fn);
+		return info.valid && SONG_REVISION > info.ver;
 	}
 
 	private void confirmCallback(int param) {
@@ -682,8 +849,8 @@ class LoadFileDialog : FileSelectorDialog {
 }
 
 class SaveFileDialog : FileSelectorDialog {
-	this(Rectangle a, CB cb) {
-		super(a, "Save Song", cb);
+	this(Rectangle a, CB cb, string header = "Save Song") {
+		super(a, header, cb);
 		activateWindow(2);
 	}
 
@@ -714,6 +881,342 @@ class SaveFileDialog : FileSelectorDialog {
 		else if(activeWindow == sfile) { // pressed RETURN in file dialog
 			string filename = getcwd() ~ DIR_SEPARATOR ~ sfile.toString();
 			processFileCallback(filename);
+		}
+	}
+}
+
+// Single "Export song" popup: pick the output format (Full player .prg /
+// Optimized .prg / PSID) and the options ct2util exposes on the command line plus
+// the executable-PRG display toggles. Options that don't apply to the chosen
+// format are shown greyed and skipped. On Return it hands the gathered
+// ExportOptions (including .format) to onConfirm, which opens the save-file
+// dialog; Esc cancels.
+class ExportOptionsDialog : Window {
+	alias void delegate(ExportOptions) ConfirmCB;
+
+	private {
+		ConfirmCB onConfirm;
+		int sel;
+		// Working values (assembled into ExportOptions on confirm). singleSubtune
+		// is held as 0 = "all" here; defaultSubtune is 1-based.
+		ExportFormat fFormat = ExportFormat.FullPrg;
+		int fAddr = 0x1000, fZp = 0, fSingle = 0, fDef = 1;
+		bool fExe = true, fInfo = true, fRaster = true, fTimer = true;
+		int fDur = 180, fFade = 5;       // audio: render length / fade-out, seconds
+		bool fNorm = false;              // audio: peak-normalize
+		int fBits = 16;                  // audio: WAV bit depth (8/16/24, 32 = float)
+		int fRate = 48000;               // audio: sample rate (Hz)
+		string fFlac = "--best";         // audio: editable flac encoder flags
+		// Selectable formats, in cycle order. Flac is only offered when the `flac`
+		// CLI is present (we transcode WAV->FLAC through it).
+		ExportFormat[] formats;
+		// Mode + presentation, chosen in the ctor: Export (.prg/PSID) vs Render
+		// (.wav/.flac). The row set, format list, title and width differ per mode.
+		bool audioMode;
+		Row[] rows;
+		string dlgTitle;
+		int frameW, lblW;
+	}
+
+	this(ConfirmCB cb, bool audioMode) {
+		super(Rectangle(0, 0, 1));
+		this.onConfirm = cb;
+		this.audioMode = audioMode;
+		if(audioMode) {
+			fFormat = ExportFormat.Wav;
+			formats = [ExportFormat.Wav];
+			if(flacAvailable())
+				formats ~= ExportFormat.Flac;
+			rows = [Row("Format", 'F'), Row("Render subtune", 's'),
+					Row("Duration (sec)", 'u'), Row("Fade-out (sec)", 'o'),
+					Row("Normalize", 'N'), Row("WAV bit depth", 'B'),
+					Row("Sample rate (Hz)", 'H'), Row("FLAC options", 'C')];
+			dlgTitle = " Render audio ";
+			frameW = 60; lblW = 20;
+		}
+		else {
+			fFormat = ExportFormat.FullPrg;
+			formats = [ExportFormat.FullPrg, ExportFormat.OptimizedPrg,
+					   ExportFormat.Psid];
+			rows = [Row("Format", 'F'), Row("Relocate output to address", 'a'),
+					Row("Relocate zero page", 'z'), Row("Export single subtune", 's'),
+					Row("Set the default subtune", 'd'), Row("Executable (player + UI)", 'E'),
+					Row("  Show title/author/release", 'I'), Row("  Raster-time meter", 'R'),
+					Row("  Playback timer", 'T')];
+			dlgTitle = " Export song ";
+			frameW = 48; lblW = 29;
+		}
+	}
+
+	// kind codes: F=format a=addr(hex16) z=zp(hex8) s=single(dec) d=default(dec),
+	// E/I/R/T = executable / show-info / raster-meter / timer toggles,
+	// u=audio duration (dec sec) o=audio fade-out (dec sec), N=normalize toggle,
+	// B=WAV bit depth (cycle) H=sample rate (cycle) C=FLAC options (text).
+	// Labels mirror the ct2util command-line option descriptions. The active row
+	// set is chosen per mode in the ctor (see `rows`).
+	private enum FLAC_MAX = 30;     // max editable FLAC-options length (fits the box)
+	private struct Row { string label; char kind; }
+
+	// Which options apply to the currently selected format. Inapplicable rows are
+	// shown greyed and skipped by the cursor.
+	private bool enabled(char kind) {
+		if(audioMode) {
+			// Bit depth + sample rate apply to both WAV and the intermediate WAV
+			// that feeds flac; the FLAC-options text only when rendering FLAC.
+			if(kind == 'C') return fFormat == ExportFormat.Flac;
+			return kind == 'F' || kind == 's' || kind == 'u' || kind == 'o'
+				|| kind == 'N' || kind == 'B' || kind == 'H';
+		}
+		final switch(fFormat) {
+		case ExportFormat.FullPrg:
+			// Verbatim current-subtune image: no relocate / zp / subtune select and
+			// no executable toggle (it IS the player+UI); display toggles apply.
+			return kind == 'F' || kind == 'I' || kind == 'R' || kind == 'T';
+		case ExportFormat.OptimizedPrg:
+			if(kind == 'd') return false;                        // PSID-only
+			if(kind == 'I' || kind == 'R' || kind == 'T') return fExe;
+			return true;                                          // F, a, z, s, E
+		case ExportFormat.Psid:
+			return kind == 'F' || kind == 'a' || kind == 'z'
+				|| kind == 's' || kind == 'd';                    // no shim/UI
+		case ExportFormat.Wav:
+		case ExportFormat.Flac:
+			return false;                                         // handled above
+		}
+	}
+
+	private string valStr(char kind) {
+		switch(kind) {
+		case 'F':
+			final switch(fFormat) {
+			case ExportFormat.FullPrg:      return "Full player .prg";
+			case ExportFormat.OptimizedPrg: return "Optimized .prg";
+			case ExportFormat.Psid:         return "PSID (.sid)";
+			case ExportFormat.Wav:          return "Audio (.wav)";
+			case ExportFormat.Flac:         return "Audio (.flac)";
+			}
+		case 'a': return format("$%04X", fAddr);
+		case 'z': return fZp == 0 ? "$00 (default)" : format("$%02X", fZp);
+		case 's': return fSingle == 0
+					? ((fFormat == ExportFormat.FullPrg || isAudioFormat(fFormat)) ? "current" : "all")
+					: format("%d", fSingle);
+		case 'd': return format("%d", fDef);
+		case 'E':
+			if(isAudioFormat(fFormat)) return "n/a";
+			if(fFormat == ExportFormat.FullPrg) return "yes";
+			if(fFormat == ExportFormat.Psid) return "n/a";
+			return fExe ? "yes" : "no";
+		case 'I': return fInfo ? "yes" : "no";
+		case 'R': return fRaster ? "yes" : "no";
+		case 'T': return fTimer ? "yes" : "no";
+		case 'u': return format("%d", fDur);
+		case 'o': return format("%d", fFade);
+		case 'N': return fNorm ? "yes (-1 dBFS)" : "no";
+		case 'B': return fBits == 32 ? "32-bit float" : format("%d-bit", fBits);
+		case 'H': return format("%d", fRate);
+		case 'C': return fFlac;
+		default: return "";
+		}
+	}
+
+	override void activate() { sel = 0; }
+
+	override void update() {
+		int fw = frameW;
+		int h = cast(int)rows.length + 6;
+		int x = screen.width / 2 - (fw + 2) / 2;
+		int y = screen.height / 2 - h / 2;
+		drawFrame(Rectangle(x, y, h, fw + 2));
+		screen.cprint(x + 2, y, 1, 0, dlgTitle);
+		foreach(i, row; rows) {
+			int ry = y + 2 + cast(int)i;
+			bool on = enabled(row.kind);
+			int fg, bg;
+			if(cast(int)i == sel) { fg = 1; bg = 4; }        // selected: white on purple
+			else if(on)           { fg = 15; bg = 0; }       // normal
+			else                  { fg = 11; bg = 0; }       // greyed / disabled
+			string v = valStr(row.kind);
+			if(row.kind == 'C' && cast(int)i == sel) v ~= "_";   // text-field cursor
+			string line = format(" %s%s", row.label.leftJustify(lblW), v);
+			screen.cprint(x + 2, ry, fg, bg, line.leftJustify(fw - 2));
+		}
+		screen.cprint(x + 2, y + h - 3, 12, 0, "Up/Down: Navigate   Left/Right: Change value");
+		screen.cprint(x + 2, y + h - 2, 12, 0, "Return: OK   Esc: Cancel");
+	}
+
+	private void clampAll() {
+		if(fAddr < 0) fAddr = 0; if(fAddr > 0xffff) fAddr = 0xffff;
+		if(fZp < 0) fZp = 0; if(fZp > 0xff) fZp = 0xff;
+		if(fSingle < 0) fSingle = 0; if(fSingle > SUBTUNE_MAX) fSingle = SUBTUNE_MAX;
+		if(fDef < 1) fDef = 1; if(fDef > SUBTUNE_MAX) fDef = SUBTUNE_MAX;
+		if(fDur < 1) fDur = 1; if(fDur > 3600) fDur = 3600;
+		if(fFade < 0) fFade = 0; if(fFade > 30) fFade = 30;
+	}
+
+	// delta < 0 reduces the value, delta > 0 increases it (bound to < / >).
+	// Toggles flip regardless of direction; Format cycles.
+	private void adjust(char kind, int delta) {
+		switch(kind) {
+		case 'F': {
+			// Cycle within the available formats (Flac present only if `flac` is).
+			int n = cast(int)formats.length;
+			int cur = 0;
+			foreach(i, f; formats) if(f == fFormat) { cur = cast(int)i; break; }
+			fFormat = formats[((cur + delta) % n + n) % n];
+			// flac can't encode 32-bit float; fall back to 24-bit for it.
+			if(fFormat == ExportFormat.Flac && fBits == 32) fBits = 24;
+			break;
+		}
+		case 'E': fExe = !fExe; break;
+		case 'I': fInfo = !fInfo; break;
+		case 'R': fRaster = !fRaster; break;
+		case 'T': fTimer = !fTimer; break;
+		case 'N': fNorm = !fNorm; break;
+		case 'B': {
+			int[] depths = (fFormat == ExportFormat.Flac) ? [8, 16, 24] : [8, 16, 24, 32];
+			int bi = 0;
+			foreach(i, d; depths) if(d == fBits) { bi = cast(int)i; break; }
+			int bn = cast(int)depths.length;
+			fBits = depths[((bi + delta) % bn + bn) % bn];
+			break;
+		}
+		case 'H': {
+			static immutable int[] rates = [22050, 44100, 48000];
+			int hi = 0;
+			foreach(i, r; rates) if(r == fRate) { hi = cast(int)i; break; }
+			int hn = cast(int)rates.length;
+			fRate = rates[((hi + delta) % hn + hn) % hn];
+			break;
+		}
+		case 'C': break;   // text field; edited via keypress, not adjusted
+		case 's':
+			fSingle += delta;
+			if(fSingle < 0) fSingle = SUBTUNE_MAX;
+			else if(fSingle > SUBTUNE_MAX) fSingle = 0;
+			break;
+		case 'd':
+			fDef += delta;
+			if(fDef < 1) fDef = SUBTUNE_MAX;
+			else if(fDef > SUBTUNE_MAX) fDef = 1;
+			break;
+		case 'a': fAddr = (fAddr + delta * 0x100) & 0xffff; break;
+		case 'z': fZp = (fZp + delta) & 0xff; break;
+		case 'u': fDur += delta; clampAll(); break;
+		case 'o': fFade += delta; clampAll(); break;
+		default: break;
+		}
+	}
+
+	private void editDigit(char kind, int uc) {
+		int hex = -1;
+		if(uc >= '0' && uc <= '9') hex = uc - '0';
+		else if(uc >= 'a' && uc <= 'f') hex = uc - 'a' + 10;
+		else if(uc >= 'A' && uc <= 'F') hex = uc - 'A' + 10;
+		if(hex < 0) return;
+		switch(kind) {
+		case 'a': fAddr = ((fAddr << 4) | hex) & 0xffff; break;
+		case 'z': fZp = ((fZp << 4) | hex) & 0xff; break;
+		case 's': if(hex <= 9) { fSingle = fSingle * 10 + hex; if(fSingle > SUBTUNE_MAX) fSingle = hex; } break;
+		case 'd': if(hex <= 9) { fDef = fDef * 10 + hex; if(fDef > SUBTUNE_MAX) fDef = hex; } break;
+		case 'u': if(hex <= 9) { fDur = fDur * 10 + hex; if(fDur > 3600) fDur = hex; } break;
+		case 'o': if(hex <= 9) { fFade = fFade * 10 + hex; if(fFade > 30) fFade = hex; } break;
+		default: break;
+		}
+		clampAll();
+	}
+
+	private void backspace(char kind) {
+		switch(kind) {
+		case 'a': fAddr >>= 4; break;
+		case 'z': fZp >>= 4; break;
+		case 's': fSingle /= 10; break;
+		case 'd': fDef /= 10; break;
+		case 'u': fDur /= 10; break;
+		case 'o': fFade /= 10; break;
+		default: break;
+		}
+		clampAll();
+	}
+
+	// Move the cursor by `dir`, skipping disabled rows.
+	private void move(int dir) {
+		int n = cast(int)rows.length;
+		int i = sel;
+		foreach(_; 0 .. n) {
+			i = (i + dir + n) % n;
+			if(enabled(rows[i].kind)) { sel = i; return; }
+		}
+	}
+
+	override int keypress(Keyinfo key) {
+		if(key.mods & KMOD_ALT) return OK;
+		if(!enabled(rows[sel].kind)) move(1);   // keep cursor on an active row
+		char kind = rows[sel].kind;
+		// Navigation + confirm/cancel, common to every row.
+		switch(key.raw) {
+		case SDLK_ESCAPE:
+			return CANCEL;
+		case SDLK_RETURN:
+			ExportOptions o;
+			o.format = fFormat;
+			o.relocAddress = fAddr;
+			o.zpAddress = fZp;
+			o.singleSubtune = (fSingle == 0) ? -1 : fSingle;
+			o.defaultSubtune = fDef;
+			// Only the optimized .prg honours the toggle; full-player is always the
+			// executable player+UI (dispatched by format), PSID is never executable.
+			o.executable = (fFormat == ExportFormat.OptimizedPrg) ? fExe
+						 : (fFormat == ExportFormat.FullPrg);
+			o.showInfo = fInfo;
+			o.showRastertime = fRaster;
+			o.showTimer = fTimer;
+			o.durationSec = fDur;
+			o.fadeSec = fFade;
+			o.normalize = fNorm;
+			o.wavBits = fBits;
+			o.wavSampleRate = fRate;
+			o.flacOptions = fFlac;
+			onConfirm(o);   // opens the save-file dialog; keep loop from closing it
+			return OK;
+		case SDLK_UP:
+			move(-1);
+			return OK;
+		case SDLK_DOWN:
+			move(1);
+			return OK;
+		default:
+			break;
+		}
+		// The FLAC-options row is a free-text field: it consumes printable keys
+		// (incl. Space and '-') and Backspace, rather than the value adjusters.
+		if(kind == 'C') {
+			if(key.raw == SDLK_BACKSPACE) {
+				if(fFlac.length) fFlac = fFlac[0 .. $ - 1];
+				return OK;
+			}
+			int uc = key.unicode;
+			if(uc >= 0x20 && uc < 0x7f && fFlac.length < FLAC_MAX)
+				fFlac ~= cast(char)uc;
+			return OK;
+		}
+		// Value rows: Left/Right (or '<'/'>'), Space, Backspace and digit entry.
+		switch(key.raw) {
+		case SDLK_LEFT:
+			adjust(kind, -1);
+			return OK;
+		case SDLK_RIGHT:
+		case SDLK_SPACE:
+			adjust(kind, +1);
+			return OK;
+		case SDLK_BACKSPACE:
+			backspace(kind);
+			return OK;
+		default:
+			// '<' / '>' (the keys the footer advertises) mirror Left / Right.
+			if(key.unicode == '<') { adjust(kind, -1); return OK; }
+			if(key.unicode == '>') { adjust(kind, +1); return OK; }
+			editDigit(kind, key.unicode);
+			return OK;
 		}
 	}
 }

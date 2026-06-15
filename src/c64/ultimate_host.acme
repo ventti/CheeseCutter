@@ -1,0 +1,492 @@
+;;; ----------------------------------------------------------------------
+;;; ultimate_host.acme
+;;;
+;;; Self-running host shim for C64 Ultimate (1541U / Ultimate64) playback
+;;; and for the exported standalone .prg (Shift+F10). CheeseCutter's player
+;;; is normally driven frame-by-frame by the host (the D side calls
+;;; init/play/mplay in the emulated CPU). On real hardware nobody provides
+;;; that tick, so this small, separate stub installs a VIC raster IRQ and
+;;; dispatches to the *unmodified* player entry points. It also exposes a
+;;; tiny control block in RAM that the host pokes over the REST writemem API
+;;; to start/stop/keyjam.
+;;;
+;;; The whole live song image (player + data) lives at $0e00..~$f83d and
+;;; deliberately uses RAM under BASIC/KERNAL ROM, so we run in all-RAM
+;;; mode ($01 = $35: ROM banked out, IO still mapped for the SID at $d400)
+;;; and take the hardware IRQ vector at $fffe (no KERNAL available).
+;;;
+;;; Display (black screen, light-grey text, lowercase/mixed charset):
+;;;   row 0  CheeseCutter-Extended <ver>
+;;;   row 1  Player: <playerID>
+;;;   row 3  <title>
+;;;   row 4  <author>
+;;;   row 5  <release>
+;;;   row 7  Time: MM:SS / $RR   (live, like CheeseCutter's Time/raster line)
+;;; The border is flipped to dark green for the duration of each player call,
+;;; so its height is a live raster-time meter; black otherwise.
+;;;
+;;; Symbols prepended by ct/build.d before assembly:
+;;;   INITADDR, PLAYADDR, MPLAYADDR  - player jump table ($1000/$1003/$1006)
+;;;   SUBNOTE, SUBMPLAY             - keyjam entry points (from song.offsets)
+;;;   SHTRANSADDR                   - per-voice transpose table base
+;;;   NEWKEYJAM                     - 1 if song.ver > 7 (use SUBNOTE/SUBMPLAY)
+;;;   FRAMERATE                     - frames per second (50 PAL / 60 NTSC)
+;;;   STARTMODE                     - initial ctrl_mode: 1 auto-play (standalone
+;;;                                   .prg), 0 wait for the host's Play (--vice/--ultimate)
+;;; The player is driven by a VIC raster IRQ on NUMSLOTS pre-defined lines per
+;;; frame (one player call per line: PLAY on the first/lowest line, MPLAY on the
+;;; rest). ct/build.d pokes the line table (numslots/rasline_lo/rasline_hi at
+;;; $0816) with the lines evenly spaced and centred on the screen. This is a
+;;; plain $d012 compare IRQ -- no cycle-stable raster.
+;;; ----------------------------------------------------------------------
+
+COL_BLACK	= 0
+COL_GREEN	= 5		; the C64 "green" is a dark green
+COL_LTGREY	= 15
+
+;;; Screen cells of the live digits in the "Time: MM:SS / $RR" row (row 7).
+SCR_ROW7	= $0400 + 7*40
+CELL_MIN10	= SCR_ROW7 + 6
+CELL_MIN1	= SCR_ROW7 + 7
+CELL_SEC10	= SCR_ROW7 + 9
+CELL_SEC1	= SCR_ROW7 + 10
+CELL_RASH	= SCR_ROW7 + 15
+CELL_RASL	= SCR_ROW7 + 16
+
+;;; ----------------------------------------
+;;; BASIC autostart: "10 SYS 2112". run_prg does a RUN, which jumps here.
+;;; ----------------------------------------
+		* = $0801
+		!8 $0b,$08		; link to next BASIC line ($080b)
+		!8 $0a,$00		; line number 10
+		!8 $9e			; SYS token
+		!8 $32,$31,$31,$32	; "2112"  -> $0840
+		!8 $00			; end of line
+		!8 $00,$00		; end of program
+
+;;; ----------------------------------------
+;;; Control block at a fixed RAM address. The host pokes these bytes via
+;;; POST /v1/machine:writemem?address=0810. Keep in sync with the CTRL_*
+;;; constants in src/audio/ultimate.d.
+;;; ----------------------------------------
+		* = $0810
+ctrl_mode	!8 0		; mode the IRQ runs each tick: 0 stop, 1 play, 2 keyjam
+ctrl_req	!8 0		; one-shot host request (cleared by the shim):
+				;   1 = restart (jsr init, then play)
+				;   2 = keyjam trigger (jsr subnoteplay, then keyjam)
+				;   3 = stop (silence)
+ctrl_subtune	!8 0		; A value passed to init
+ctrl_kjnote	!8 0		; keyjam note
+ctrl_kjvoice	!8 0		; keyjam voice (0..2)
+ctrl_kjinstr	!8 0		; keyjam instrument
+
+;;; ----------------------------------------
+;;; Raster-line table at a fixed RAM address, poked by ct/build.d. The player
+;;; is called once per raster IRQ on these NUMSLOTS lines (evenly spaced and
+;;; centred on the screen). rasline_lo = $d012 value, rasline_hi = bit 8 (for
+;;; lines > 255). 16 slots reserved (max multiplier).
+;;; ----------------------------------------
+numslots	!8 1		; number of player calls (raster lines) per frame
+rasline_lo	!fill 16, 0	; low 8 bits of each raster compare line
+rasline_hi	!fill 16, 0	; bit 8 of each raster compare line (0/1)
+
+;;; ----------------------------------------
+;;; Installer. Entered from BASIC (SYS 2112) with ROM still mapped.
+;;; ----------------------------------------
+		* = $0840
+install
+		sei
+		lda #$35		; ROM out (BASIC+KERNAL), IO in
+		sta $01
+
+		jsr setup_screen
+
+		lda #$7f
+		sta $dc0d		; disable all CIA #1 IRQ sources
+		sta $dd0d		; disable all CIA #2 IRQ/NMI sources
+		lda $dc0d		; ack pending
+		lda $dd0d
+
+		lda #<irqhandler	; hardware IRQ vector (RAM, KERNAL is out)
+		sta $fffe
+		lda #>irqhandler
+		sta $ffff
+		lda #<nmihandler	; keep NMI harmless
+		sta $fffa
+		lda #>nmihandler
+		sta $fffb
+
+		lda #0
+		sta rasidx		; start at slot 0 (the PLAY / frame-boundary line)
+		sta fcnt
+		sta secs
+		sta mins
+		sta rasval
+		sta rasacc
+
+		;; program the first raster compare line (slot 0)
+		lda rasline_lo
+		sta $d012
+		lda $d011
+		and #$7f		; clear raster bit 8; keep DEN/RSEL/YSCROLL
+		ldy rasline_hi
+		beq install_nohi
+		ora #$80
+install_nohi
+		sta $d011
+		lda #$01		; enable VIC raster IRQ
+		sta $d01a
+		lda #$ff		; ack any pending VIC IRQ
+		sta $d019
+
+		lda ctrl_subtune
+		jsr INITADDR		; init the player (silent first frame)
+!if STARTMODE = 0 {
+		jsr silence		; host-driven: stay quiet until REQ_RESTART (user Play)
+}
+		lda #STARTMODE
+		sta ctrl_mode		; STARTMODE: 1 = auto-play (standalone .prg), 0 = wait
+		cli
+spin		jmp spin
+
+nmihandler	rti
+
+;;; ----------------------------------------
+;;; Black screen + border, light-grey text (lowercase/mixed charset), then
+;;; paint the static text rows.
+;;; ----------------------------------------
+setup_screen
+		lda #$17		; screen $0400, char base $1800 (lowercase set)
+		sta $d018
+		lda #COL_BLACK
+		sta $d020		; border
+		sta $d021		; background
+		ldx #0
+clrscr		lda #$20		; space
+		sta $0400,x
+		sta $0500,x
+		sta $0600,x
+		sta $06e8,x		; covers up to $07e7
+		lda #COL_LTGREY
+		sta $d800,x
+		sta $d900,x
+		sta $da00,x
+		sta $dae8,x		; covers up to $dbe7
+		inx
+		bne clrscr
+
+		ldx #39
+ss0		lda sn_appver,x
+		sta $0400,x		; row 0
+		lda sn_player,x
+		sta $0428,x		; row 1
+		lda sn_title,x
+		sta $0478,x		; row 3
+		lda sn_author,x
+		sta $04a0,x		; row 4
+		lda sn_release,x
+		sta $04c8,x		; row 5
+		lda sn_status,x
+		sta $0518,x		; row 7
+		dex
+		bpl ss0
+		rts
+
+;;; ----------------------------------------
+;;; IRQ handler. A hardware IRQ only stacks PC+status, so preserve the
+;;; registers ourselves. The border is green only while a player routine
+;;; runs, giving a raster-time bar; the numeric raster value comes from the
+;;; $d012 delta across the main play tick.
+;;; ----------------------------------------
+irqhandler
+		pha
+		txa
+		pha
+		tya
+		pha
+		lda #$ff		; ack VIC raster IRQ
+		sta $d019
+
+		;; --- handle one-shot host request, if any ---
+		lda ctrl_req
+		beq dispatch
+		cmp #1
+		beq do_restart
+		cmp #2
+		beq do_keyjam
+		cmp #3
+		beq do_stop
+		jmp clrreq		; unknown -> just clear
+
+do_restart
+		lda #0
+		sta rasidx		; realign to slot 0 (PLAY) on the next line
+		sta fcnt		; restart the playback clock
+		sta secs
+		sta mins
+		lda ctrl_subtune
+		jsr INITADDR
+		lda #1
+		sta ctrl_mode
+		jmp clrreq
+
+do_keyjam
+!if NEWKEYJAM = 1 {
+		ldx ctrl_kjvoice	; clear per-voice transpose (ver>8 semantics)
+		lda #0
+		sta SHTRANSADDR,x
+}
+		lda ctrl_kjnote
+		ldx ctrl_kjvoice
+		ldy ctrl_kjinstr
+!if NEWKEYJAM = 1 {
+		jsr SUBNOTE
+} else {
+		jsr $1009
+}
+		lda #2
+		sta ctrl_mode
+		jmp clrreq
+
+do_stop
+		jsr silence
+		lda #0
+		sta ctrl_mode
+clrreq
+		lda #0
+		sta ctrl_req
+
+		;; --- run the current mode for this tick ---
+		;; One player call per raster IRQ. We fire on NUMSLOTS pre-defined
+		;; lines per frame (rasline table, evenly spaced and centred): slot 0
+		;; (the lowest line, reached first each frame) is the full PLAY tick;
+		;; the others are sound-only MPLAY. rasidx tracks the current slot.
+dispatch
+		lda ctrl_mode
+		beq nextline		; 0 = stopped (still advance to keep IRQs coming)
+		cmp #2
+		beq kjtick
+
+		;; mode 1 = play
+		lda rasidx
+		bne pf_mplay
+!if SHOW_RASTERTIME = 1 {
+		lda rasacc		; frame boundary (slot 0): publish the previous
+		sta rasval		; frame's summed raster time (all play+mplay)...
+		lda #0
+		sta rasacc		; ...then start accumulating the new frame
+		jsr read_raster
+		stx ras_start_hi
+		sta ras_start
+		lda #COL_GREEN
+		sta $d020
+}
+		jsr PLAYADDR
+!if SHOW_RASTERTIME = 1 {
+		lda #COL_BLACK
+		sta $d020
+		jsr add_raster
+}
+		jsr update_status	; repaint clock / raster meter once per frame
+		jmp nextline
+pf_mplay
+!if SHOW_RASTERTIME = 1 {
+		jsr read_raster		; mplay subframe: time it and add to the frame total
+		stx ras_start_hi
+		sta ras_start
+		lda #COL_GREEN
+		sta $d020
+}
+		jsr MPLAYADDR
+!if SHOW_RASTERTIME = 1 {
+		lda #COL_BLACK
+		sta $d020
+		jsr add_raster
+}
+		jmp nextline
+
+kjtick
+		ldx #0
+!if SHOW_RASTERTIME = 1 {
+		lda #COL_GREEN
+		sta $d020
+}
+!if NEWKEYJAM = 1 {
+		jsr SUBMPLAY
+} else {
+		jsr $100c
+}
+!if SHOW_RASTERTIME = 1 {
+		lda #COL_BLACK
+		sta $d020
+}
+
+		;; --- advance to the next slot and program its raster compare line ---
+nextline
+		inc rasidx
+		lda rasidx
+		cmp numslots
+		bcc nl_set
+		lda #0
+		sta rasidx
+nl_set
+		ldx rasidx
+		lda rasline_lo,x
+		sta $d012
+		lda $d011
+		and #$7f		; keep DEN/RSEL/YSCROLL; clear raster bit 8
+		ldy rasline_hi,x
+		beq nl_nohi
+		ora #$80
+nl_nohi
+		sta $d011
+
+irqdone
+		pla
+		tay
+		pla
+		tax
+		pla
+		rti
+
+;;; ----------------------------------------
+;;; Advance the MM:SS clock (once per frame) and repaint the Time/raster row.
+;;; ----------------------------------------
+update_status
+!if SHOW_TIMER = 1 {
+		inc fcnt
+		lda fcnt
+		cmp #FRAMERATE
+		bcc us_show
+		lda #0
+		sta fcnt
+		inc secs
+		lda secs
+		cmp #60
+		bcc us_show
+		lda #0
+		sta secs
+		inc mins
+		lda mins
+		cmp #100
+		bcc us_show
+		lda #0
+		sta mins
+us_show
+		lda mins
+		jsr dec2
+		stx CELL_MIN10
+		sta CELL_MIN1
+		lda secs
+		jsr dec2
+		stx CELL_SEC10
+		sta CELL_SEC1
+}
+!if SHOW_RASTERTIME = 1 {
+		lda rasval
+		jsr hex2
+		stx CELL_RASH
+		sta CELL_RASL
+}
+		rts
+
+;;; value A (0..99) -> X = tens screen char, A = ones screen char
+dec2
+		ldx #$ff
+		sec
+dec2l		inx
+		sbc #10
+		bcs dec2l
+		adc #10
+		ora #$30		; ones char
+		pha
+		txa
+		ora #$30		; tens char
+		tax
+		pla
+		rts
+
+;;; Read the full 9-bit raster line: X = bit 8 (from $d011), A = $d012.
+read_raster
+		ldx #0
+		lda $d011
+		and #$80
+		beq rr_lo
+		ldx #1
+rr_lo		lda $d012
+		rts
+
+;;; rasacc += (raster now - ras_start), i.e. the raster lines the player call
+;;; that just ran consumed. Uses the full 9-bit line and corrects for the
+;;; PAL frame wrap (a call straddling line 311->0), then sums into rasacc.
+add_raster
+		jsr read_raster		; A = lo, X = hi (raster now)
+		sec
+		sbc ras_start		; A = after_lo - before_lo (sets borrow)
+		sta d_lo
+		txa
+		sbc ras_start_hi	; high byte of the signed difference
+		bpl ar_add		; >= 0: no wrap, d_lo is the line count
+		lda d_lo		; negative: wrapped, add 312 lines ($138)
+		clc
+		adc #$38		; low byte of 312; result < 256, carry ignored
+		sta d_lo
+ar_add
+		clc
+		lda rasacc
+		adc d_lo
+		sta rasacc
+		rts
+
+;;; value A (0..255) -> X = high-nibble char, A = low-nibble char
+hex2
+		pha
+		lsr
+		lsr
+		lsr
+		lsr
+		jsr hexd
+		tax
+		pla
+		and #$0f
+		jsr hexd
+		rts
+hexd		cmp #10
+		bcc hexd0
+		clc
+		adc #$41-10		; A..F
+		rts
+hexd0		ora #$30		; 0..9
+		rts
+
+;;; ----------------------------------------
+;;; Silence: master volume off and gate-off all three voices.
+;;; ----------------------------------------
+silence
+		lda #0
+		sta $d418
+		sta $d404
+		sta $d40b
+		sta $d412
+		rts
+
+fcnt		!8 0		; frames within the current second
+secs		!8 0
+mins		!8 0
+ras_start	!8 0		; raster line (low 8 bits) when the current call started
+ras_start_hi	!8 0		; raster line bit 8 when the current call started
+d_lo		!8 0		; scratch: lines used by the last call
+rasval		!8 0		; published per-frame raster total (shown as $RR)
+rasacc		!8 0		; raster lines accumulated so far this frame
+rasidx		!8 0		; current slot 0..numslots-1 (which rasline we're on)
+
+;;; ----------------------------------------
+;;; Text rows in C64 screen codes, filled by ct/build.d (40 bytes each).
+;;; ----------------------------------------
+		* = $0b00
+sn_title	!fill 40, $20
+sn_author	!fill 40, $20
+sn_release	!fill 40, $20
+sn_appver	!fill 40, $20
+sn_player	!fill 40, $20
+sn_status	!fill 40, $20
