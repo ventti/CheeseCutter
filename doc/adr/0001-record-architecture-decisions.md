@@ -9,7 +9,7 @@ re-deriving the same rationale ("but *why* is it done this way?"). The generated
 structure map (`doc/ARCHITECTURE.md`) answers *where things live* and *what
 depends on what*, but it can't carry the *why*: the constraints, the rejected
 alternatives, the gotchas. Free-form design docs accumulated in the repo root
-(`player_v5.md`, `INSTRUMENT_ANALYSIS.md`, `doc/ADSR_VISUALIZATION_*.md`, …) but
+(`player_v5.md`, `doc/ADSR_VISUALIZATION_*.md`, …) but
 have no convention, no index, and drift.
 
 ## Decision
