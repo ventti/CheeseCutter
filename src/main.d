@@ -39,7 +39,7 @@ version(OSX) {
 	const DIR_SEPARATOR = '/';
 }
 
-version(Win32) {
+version(Windows) {
 	const DIR_SEPARATOR = '\\';
 }
 

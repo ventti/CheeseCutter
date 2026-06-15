@@ -1,5 +1,18 @@
-make                   -- build Linux binary using gdc
-make -f Makefile.mac   -- build MacOS binary using ldc2
-make -f Makefile.mingw -- build MinGW binary using gdc on Wine
-make -f Makefile.dmd   -- build using dmd
-make-wintest.sh        -- build Windows zip archive with required dlls
+For the full cross-platform developer setup (dependencies, mise tasks, bootstrap
+scripts, troubleshooting) see doc/BUILD.md. Quick paths: `./bootstrap.sh`
+(macOS/Linux) or `./bootstrap-windows.sh` (MSYS2), or `mise run setup && mise run build`.
+
+Build targets (all build ccutter + ct2util; the C64 player.bin is assembled by acme):
+
+make                      -- Linux binary (ldc2)
+make -f Makefile.mac      -- macOS binary / .app (ldc2; LIBSPATH=/opt/homebrew/lib)
+make -f Makefile.win      -- Windows x64 binary (mingw-w64 + ldc2); see the file header
+make-wintest.sh           -- package a Windows x64 zip with the required DLLs
+
+Windows x64 (Makefile.win): the canonical build is a NATIVE build in an
+MSYS2/mingw-w64 shell, run by the "windows" job in .github/workflows/build.yml
+(it uses the MSYS2 `mingw-w64-x86_64-ldc` package, which is built for the mingw
+GNU ABI). Cross-building from macOS/Linux is not possible with stock LDC: LDC's
+druntime supports only the MSVC C runtime on Windows, so a windows-gnu (mingw)
+runtime build fails (core/stdc/stdio.d "Unsupported platform"). Use the CI job
+or an MSYS2 shell.

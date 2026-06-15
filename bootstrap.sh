@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 #
 # CheeseCutter Bootstrap Script
-# This script sets up the development environment for CheeseCutter
+# Sets up the development environment on macOS or Linux and does a test build.
+# For Windows, run bootstrap-windows.sh inside an MSYS2 MINGW64 shell.
+# See doc/BUILD.md for the full cross-platform guide.
 #
 
 set -e  # Exit on error
@@ -14,192 +16,168 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Logging functions
-log_info() {
-    echo -e "${BLUE}ℹ${NC} $1"
+log_info()    { echo -e "${BLUE}ℹ${NC} $1"; }
+log_success() { echo -e "${GREEN}✓${NC} $1"; }
+log_warning() { echo -e "${YELLOW}⚠${NC} $1"; }
+log_error()   { echo -e "${RED}✗${NC} $1"; }
+
+# Build acme from source when the platform has no package for it.
+build_acme_from_source() {
+    local prefix="${1:-/usr/local/bin}"
+    log_info "Building acme from source (github.com/meonwax/acme)..."
+    local tmp
+    tmp=$(mktemp -d)
+    git clone --depth 1 https://github.com/meonwax/acme "$tmp/acme"
+    make -C "$tmp/acme/src"
+    sudo cp "$tmp/acme/src/acme" "$prefix/"
+    log_success "acme installed to $prefix"
 }
 
-log_success() {
-    echo -e "${GREEN}✓${NC} $1"
+# --------------------------------------------------------------------------------
+# macOS setup
+# --------------------------------------------------------------------------------
+setup_macos() {
+    # Homebrew
+    log_info "Checking for Homebrew..."
+    if ! command -v brew &> /dev/null; then
+        log_warning "Homebrew not found. Installing Homebrew..."
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+        if [[ $(uname -m) == 'arm64' ]]; then
+            echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
+            eval "$(/opt/homebrew/bin/brew shellenv)"
+        fi
+        log_success "Homebrew installed"
+    else
+        log_success "Homebrew found"
+    fi
+
+    # Xcode Command Line Tools (make, clang)
+    log_info "Checking for Xcode Command Line Tools..."
+    if ! xcode-select -p &> /dev/null; then
+        log_warning "Xcode Command Line Tools not found. Installing..."
+        xcode-select --install
+        log_info "Complete the Xcode CLT installation, then re-run this script."
+        exit 1
+    fi
+    log_success "Xcode Command Line Tools found"
+
+    log_info "Installing system dependencies (ldc, acme, sdl2)..."
+    brew install ldc acme sdl2 2>/dev/null || \
+        log_warning "Some packages may already be installed, continuing..."
+    log_success "System dependencies installed"
+
+    if [[ $(uname -m) == 'arm64' ]]; then
+        LIBSPATH="/opt/homebrew/lib"
+    else
+        LIBSPATH="/usr/local/lib"
+    fi
+    export LIBSPATH
+    MAKE_ARGS=(-f Makefile.mac LIBSPATH="$LIBSPATH")
+    log_success "Using LIBSPATH=$LIBSPATH"
 }
 
-log_warning() {
-    echo -e "${YELLOW}⚠${NC} $1"
+# --------------------------------------------------------------------------------
+# Linux setup
+# --------------------------------------------------------------------------------
+setup_linux() {
+    log_info "Installing system dependencies..."
+    if command -v apt-get &> /dev/null; then
+        sudo apt-get update
+        sudo apt-get install -y ldc acme libsdl2-dev libcurl4-openssl-dev g++ make git
+    elif command -v dnf &> /dev/null; then
+        sudo dnf install -y ldc SDL2-devel libcurl-devel gcc-c++ make git
+        command -v acme &> /dev/null || build_acme_from_source /usr/local/bin
+    elif command -v pacman &> /dev/null; then
+        sudo pacman -S --needed --noconfirm ldc sdl2 curl gcc make git
+        command -v acme &> /dev/null || {
+            log_warning "acme not found -- install from the AUR (e.g. 'yay -S acme') or build from source."
+            build_acme_from_source /usr/local/bin
+        }
+    else
+        log_error "Unsupported distro. Install manually: ldc acme libsdl2-dev libcurl-dev g++ make git"
+        log_info "acme source: https://github.com/meonwax/acme (make -C src)"
+        exit 1
+    fi
+    log_success "System dependencies installed"
+    MAKE_ARGS=()  # the default Makefile is the Linux one
 }
 
-log_error() {
-    echo -e "${RED}✗${NC} $1"
-}
-
-# Check if running on macOS
-if [[ "$OSTYPE" != "darwin"* ]]; then
-    log_error "This bootstrap script is currently designed for macOS only."
-    log_info "For Linux, please ensure you have: gdc/ldc, acme, SDL development libraries, and make installed."
-    exit 1
-fi
-
+# --------------------------------------------------------------------------------
+# Main
+# --------------------------------------------------------------------------------
 echo ""
 echo "======================================"
 echo "  CheeseCutter Development Setup"
 echo "======================================"
 echo ""
 
-# Step 1: Check and install Homebrew
-log_info "Checking for Homebrew..."
-if ! command -v brew &> /dev/null; then
-    log_warning "Homebrew not found. Installing Homebrew..."
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-    
-    # Add Homebrew to PATH for Apple Silicon Macs
-    if [[ $(uname -m) == 'arm64' ]]; then
-        echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
-        eval "$(/opt/homebrew/bin/brew shellenv)"
-    fi
-    
-    log_success "Homebrew installed"
-else
-    log_success "Homebrew found"
-fi
+case "$OSTYPE" in
+    darwin*) PLATFORM="macOS";  setup_macos ;;
+    linux*)  PLATFORM="Linux";  setup_linux ;;
+    msys*|cygwin*)
+        log_error "Windows detected. Run ./bootstrap-windows.sh inside an MSYS2 MINGW64 shell."
+        exit 1 ;;
+    *)
+        log_error "Unsupported platform: $OSTYPE"
+        exit 1 ;;
+esac
 
-# Step 2: Check and install mise
+# mise (optional task runner; build also works with plain make)
 log_info "Checking for mise..."
 if ! command -v mise &> /dev/null; then
     log_warning "mise not found. Installing mise..."
     curl https://mise.run | sh
-    
-    # Add mise to shell configuration
     SHELL_NAME=$(basename "$SHELL")
     case "$SHELL_NAME" in
-        bash)
-            echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.bashrc
-            export PATH="$HOME/.local/bin:$PATH"
-            eval "$(~/.local/bin/mise activate bash)"
-            ;;
-        zsh)
-            echo 'eval "$(~/.local/bin/mise activate zsh)"' >> ~/.zshrc
-            export PATH="$HOME/.local/bin:$PATH"
-            eval "$(~/.local/bin/mise activate zsh)"
-            ;;
-        fish)
-            echo '~/.local/bin/mise activate fish | source' >> ~/.config/fish/config.fish
-            ;;
-        *)
-            log_warning "Unknown shell: $SHELL_NAME. Please add mise activation manually."
-            export PATH="$HOME/.local/bin:$PATH"
-            ;;
+        bash) echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.bashrc ;;
+        zsh)  echo 'eval "$(~/.local/bin/mise activate zsh)"'  >> ~/.zshrc ;;
+        fish) echo '~/.local/bin/mise activate fish | source'  >> ~/.config/fish/config.fish ;;
+        *)    log_warning "Unknown shell: $SHELL_NAME. Add mise activation manually." ;;
     esac
-    
+    export PATH="$HOME/.local/bin:$PATH"
     log_success "mise installed"
 else
     log_success "mise found"
 fi
+command -v mise &> /dev/null && mise trust 2>/dev/null || true
 
-# Ensure mise is in PATH for this script
-if ! command -v mise &> /dev/null; then
-    export PATH="$HOME/.local/bin:$PATH"
-fi
-mise trust
-# Step 3: Install system dependencies via Homebrew
-log_info "Installing system dependencies (ldc, acme, SDL2)..."
-brew install ldc acme sdl2 2>/dev/null || {
-    log_warning "Some packages may already be installed, continuing..."
-}
-log_success "System dependencies installed"
-
-# Step 4: Verify mise.toml exists
-log_info "Checking mise configuration..."
-if [ -f "mise.toml" ]; then
-    log_success "mise.toml found (used for environment variables and tasks)"
-else
-    log_warning "mise.toml not found"
-fi
-
-# Step 5: Verify Xcode Command Line Tools
-log_info "Checking for Xcode Command Line Tools..."
-if ! xcode-select -p &> /dev/null; then
-    log_warning "Xcode Command Line Tools not found. Installing..."
-    xcode-select --install
-    log_info "Please complete the Xcode Command Line Tools installation and run this script again."
-    exit 1
-else
-    log_success "Xcode Command Line Tools found"
-fi
-
-# Step 6: Verify installations
+# Verify toolchain
 echo ""
 log_info "Verifying installations..."
+command -v ldc2 &> /dev/null && log_success "ldc: $(ldc2 --version | head -n1)" || { log_error "ldc2 not found"; exit 1; }
+command -v acme &> /dev/null && log_success "acme: $(command -v acme)"          || { log_error "acme not found"; exit 1; }
 
-# Check ldc
-if command -v ldc2 &> /dev/null; then
-    LDC_VERSION=$(ldc2 --version | head -n 1)
-    log_success "ldc: $LDC_VERSION"
-else
-    log_error "ldc2 not found"
-    exit 1
-fi
-
-# Check acme
-if command -v acme &> /dev/null; then
-    log_success "acme: $(which acme)"
-else
-    log_error "acme not found"
-    exit 1
-fi
-
-# Check SDL
-if brew list sdl2 &> /dev/null; then
-    log_success "SDL2: installed via Homebrew"
-else
-    log_warning "SDL2 may not be properly installed"
-fi
-
-# Step 7: Set up environment variables
-echo ""
-log_info "Setting up environment variables..."
-
-# Detect library path
-if [[ $(uname -m) == 'arm64' ]]; then
-    LIBSPATH="/opt/homebrew/lib"
-else
-    LIBSPATH="/usr/local/lib"
-fi
-
-log_success "Using LIBSPATH=$LIBSPATH"
-
-# Step 8: Build the C64 player binary
+# Test build
 echo ""
 log_info "Building C64 player binary..."
-if make -f Makefile.mac LIBSPATH="$LIBSPATH" src/c64/player.bin; then
-    log_success "C64 player binary built"
-else
-    log_warning "Failed to build C64 player binary (you can try building manually later)"
-fi
+make "${MAKE_ARGS[@]}" src/c64/player.bin && log_success "player.bin built" \
+    || log_warning "Failed to build player.bin (try again after fixing acme)"
 
-# Step 9: Test build
 echo ""
 log_info "Attempting test build..."
-if make -f Makefile.mac LIBSPATH="$LIBSPATH" ccutter; then
+if make "${MAKE_ARGS[@]}" ccutter; then
     log_success "CheeseCutter built successfully!"
 else
     log_error "Build failed. Please check the errors above."
     exit 1
 fi
 
-# Final instructions
 echo ""
 echo "======================================"
-log_success "Setup complete!"
+log_success "Setup complete! ($PLATFORM)"
 echo "======================================"
 echo ""
-echo "You can now use the following commands:"
-echo ""
+echo "Common commands:"
 echo "  ${GREEN}mise run build${NC}        - Build CheeseCutter"
+echo "  ${GREEN}mise run run${NC}          - Build and run"
 echo "  ${GREEN}mise run build-utils${NC}  - Build ct2util utility"
 echo "  ${GREEN}mise run clean${NC}        - Clean build artifacts"
 echo ""
-echo "Or use make directly:"
-echo "  ${GREEN}make -f Makefile.mac LIBSPATH=$LIBSPATH${NC}"
+if [[ "$PLATFORM" == "macOS" ]]; then
+    echo "Or with make directly:  ${GREEN}make ${MAKE_ARGS[*]}${NC}"
+else
+    echo "Or with make directly:  ${GREEN}make${NC}"
+fi
 echo ""
-echo "All dependencies are installed via Homebrew and are in your PATH."
-echo "mise is configured for environment variables and convenient build tasks."
+echo "See doc/BUILD.md for the full guide."
 echo ""
-

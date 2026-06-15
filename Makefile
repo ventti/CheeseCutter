@@ -2,7 +2,9 @@
 
 PREFIX?=/usr
 EXAMPLESDIR?=/usr/share/examples/ccutter
-LIBS=-L-ldl -L-lstdc++ -L-lcurl
+# SDL2 is bound at link time (DerelictSDL2_Static), so it must be linked here
+# just like the macOS/Windows makefiles do. Provided by libsdl2-dev / SDL2-devel.
+LIBS=-L-ldl -L-lstdc++ -L-lcurl -L-lSDL2
 COMFLAGS=-O2
 VERSION=$(shell cat Version)
 DFLAGS=-d-version=DerelictSDL2_Static $(COMFLAGS) -I./src -J. -J./src/c64 -J./src/font

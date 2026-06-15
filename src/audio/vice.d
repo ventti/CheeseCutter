@@ -141,9 +141,11 @@ private class ViceTransport : RemoteTransport {
 		auto args = [execPath, "-binarymonitor", "-binarymonitoraddress",
 					 format("ip4://%s:%d", host, port)];
 		// ccutter owns the terminal (full-screen TUI), so keep VICE's stdio off
-		// it: feed the child /dev/null and discard its output.
-		auto devNullIn = File("/dev/null", "rb");
-		auto devNullOut = File("/dev/null", "wb");
+		// it: feed the child the null device and discard its output.
+		version(Windows) enum NULL_DEVICE = "NUL";
+		else             enum NULL_DEVICE = "/dev/null";
+		auto devNullIn = File(NULL_DEVICE, "rb");
+		auto devNullOut = File(NULL_DEVICE, "wb");
 		try {
 			// Not detached, so we can tryWait() it for liveness (relaunch on
 			// close). On ccutter exit the child is simply orphaned and keeps

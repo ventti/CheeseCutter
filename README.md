@@ -87,6 +87,9 @@ deployment. In-app help is available with `F12`.
 
 ## How to build
 
+See **[`doc/BUILD.md`](doc/BUILD.md)** for the full cross-platform guide
+(macOS, Linux, Windows). The short version follows.
+
 ### Quick Start (macOS) - Automated Setup
 
 The easiest way to set up the development environment is using the bootstrap script:
@@ -123,11 +126,11 @@ Pre-requisites
 
 * homebrew
 * ldc
-* SDL framework
+* SDL2
 * acme assembler
 
 ```sh
-brew install ldc acme sdl12-compat
+brew install ldc acme sdl2
 ```
 
 ```sh
