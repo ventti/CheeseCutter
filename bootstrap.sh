@@ -2,7 +2,7 @@
 #
 # CheeseCutter Bootstrap Script
 # Sets up the development environment on macOS or Linux and does a test build.
-# For Windows, run bootstrap-windows.sh inside an MSYS2 MINGW64 shell.
+# For Windows, run bootstrap-windows.sh from a Git Bash shell.
 # See doc/BUILD.md for the full cross-platform guide.
 #
 
@@ -115,7 +115,7 @@ case "$OSTYPE" in
     darwin*) PLATFORM="macOS";  setup_macos ;;
     linux*)  PLATFORM="Linux";  setup_linux ;;
     msys*|cygwin*)
-        log_error "Windows detected. Run ./bootstrap-windows.sh inside an MSYS2 MINGW64 shell."
+        log_error "Windows detected. Run ./bootstrap-windows.sh from a Git Bash shell."
         exit 1 ;;
     *)
         log_error "Unsupported platform: $OSTYPE"

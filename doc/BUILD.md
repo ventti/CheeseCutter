@@ -10,18 +10,26 @@ work.
 
 Every platform needs the same four things:
 
-| Component | macOS (Homebrew) | Linux (apt/dnf/pacman) | Windows (MSYS2 MINGW64) |
-|-----------|------------------|------------------------|-------------------------|
-| D compiler | `ldc` | `ldc` | `mingw-w64-x86_64-ldc` |
-| 6502 assembler | `acme` | `acme` * | from source * |
-| SDL2 | `sdl2` | `libsdl2-dev` / `SDL2-devel` / `sdl2` | `mingw-w64-x86_64-SDL2` |
-| libcurl | (bundled) | `libcurl4-openssl-dev` / `libcurl-devel` / `curl` | `mingw-w64-x86_64-curl` |
+| Component | macOS (Homebrew) | Linux (apt/dnf/pacman) | Windows (LLVM/MSVC) |
+|-----------|------------------|------------------------|---------------------|
+| D compiler | `ldc` | `ldc` | `ldc` (official build, MSVC-target) |
+| 6502 assembler | `acme` | `acme` * | not needed † |
+| SDL2 | `sdl2` | `libsdl2-dev` / `SDL2-devel` / `sdl2` | `sdl2:x64-windows` (vcpkg) |
+| libcurl | (bundled) | `libcurl4-openssl-dev` / `libcurl-devel` / `curl` | runtime only ‡ |
 
-Plus a C/C++ toolchain (`gcc`/`g++`/`clang`) and `make`.
+Plus a C/C++ toolchain (`gcc`/`g++`/`clang`) and `make`. On Windows the C/C++
+(reSID) sources are built with **clang**, which defaults to the
+`x86_64-pc-windows-msvc` target and so links cleanly with the MSVC-target `ldc2`.
 
-\* **acme** is packaged on Debian/Ubuntu and Homebrew, but **not** on Fedora,
-Arch (AUR only), or MSYS2. Where it is missing, build it from source — the
-setup scripts do this automatically:
+† The committed `src/c64/player.bin` is used as-is on Windows, so no acme is
+needed there. ‡ libcurl is not linked — Phobos `std.net.curl` loads it at
+runtime via `LoadLibraryA`, so it is only needed (as a DLL on `PATH`) if you use
+the Ultimate-hardware playback feature.
+
+\* **acme** is packaged on Debian/Ubuntu and Homebrew, but **not** on Fedora or
+Arch (AUR only). Where it is missing, build it from source — the setup scripts
+do this automatically (it is not needed on Windows, which uses the committed
+`player.bin`):
 
 ```sh
 git clone --depth 1 https://github.com/meonwax/acme /tmp/acme
@@ -92,29 +100,31 @@ make release    # optimized, stripped
 make dist       # tarball
 ```
 
-## Windows (MSYS2 / mingw-w64)
+## Windows (x64, LLVM/MSVC)
 
-The canonical Windows build is a **native** build in an MSYS2 `MINGW64` shell
-(the `windows` CI job uses exactly this). Cross-building from macOS/Linux is not
-supported by stock LDC — see the header of `Makefile.win`.
+The canonical Windows build is a **native** x64 build with the LLVM toolchain —
+`ldc2` for the D sources and `clang`/`clang++` for the reSID C/C++ sources,
+linked against the MSVC runtime (the `windows` CI job uses exactly this). It
+replaces the old mingw-w64 path: LDC was dropped from MSYS2 and the only official
+LDC Windows builds target the MSVC ABI. Run the commands from a **Git Bash**
+shell (bundled with Git for Windows).
 
-1. Install [MSYS2](https://www.msys2.org/) and open the **"MSYS2 MINGW64"**
-   shell (not the plain MSYS or UCRT64 shell).
+1. Install [LDC](https://github.com/ldc-developers/ldc/releases) (official
+   Windows build) and put `bin/` on `PATH`; ensure `clang` is available
+   (LLVM ships with Visual Studio / the LLVM installer).
 2. From the repo root:
 
 ```sh
-./bootstrap-windows.sh        # installs the toolchain, builds acme, release-builds
+./bootstrap-windows.sh        # installs make + SDL2 (vcpkg) and release-builds
 # or do it by hand:
-pacman -S --needed make git \
-  mingw-w64-x86_64-ldc mingw-w64-x86_64-gcc \
-  mingw-w64-x86_64-SDL2 mingw-w64-x86_64-curl
-# acme is NOT a mingw package — build from source (see the acme note above),
-# then:
-make -f Makefile.win release
+choco install make llvm ldc -y
+vcpkg install sdl2:x64-windows
+SDL2="$VCPKG_INSTALLATION_ROOT/installed/x64-windows"
+make -f Makefile.win release SDL2_INC="$SDL2/include" SDL2_LIBDIR="$SDL2/lib"
 ```
 
-Package a redistributable zip (bundles the SDL2/curl/mingw runtime DLLs the
-executables depend on):
+Package a redistributable zip (bundles `SDL2.dll`, the only mandatory runtime
+DLL):
 
 ```sh
 ./make-wintest.sh             # produces cheesecutter-<version>-win64.zip
@@ -143,11 +153,15 @@ executables depend on):
 ## Troubleshooting
 
 - **Link error: undefined symbols `SDL_*`** → SDL2 isn't installed/linked.
-  Install `sdl2` (macOS) / `libsdl2-dev` (Linux) / `mingw-w64-x86_64-SDL2`
-  (Windows). On macOS, check `LIBSPATH` matches `$(brew --prefix)/lib`.
-- **Link error: undefined `curl_*`** → install the libcurl dev package
-  (`libcurl4-openssl-dev` / `libcurl-devel` / `mingw-w64-x86_64-curl`).
-- **`acme: command not found`** → install acme or build it from source (see the
-  acme note at the top).
-- **Windows: wrong shell** → builds must run in the **MINGW64** shell; UCRT64 /
-  MSYS shells use a different runtime and won't match `Makefile.win`.
+  Install `sdl2` (macOS) / `libsdl2-dev` (Linux) / `sdl2:x64-windows` via vcpkg
+  (Windows). On macOS, check `LIBSPATH` matches `$(brew --prefix)/lib`; on
+  Windows, check `SDL2_INC`/`SDL2_LIBDIR` point at the vcpkg install.
+- **Link error: undefined `curl_*`** (macOS/Linux only) → install the libcurl
+  dev package (`libcurl4-openssl-dev` / `libcurl-devel`). On Windows curl is not
+  linked (Phobos loads it at runtime).
+- **`acme: command not found`** (macOS/Linux) → install acme or build it from
+  source (see the acme note at the top). Not needed on Windows — the committed
+  `player.bin` is used.
+- **Windows: `clang` not found** → install LLVM (`choco install llvm`) or use the
+  clang that ships with Visual Studio; `Makefile.win` builds the reSID C/C++
+  sources with clang so they match the MSVC-target `ldc2`.

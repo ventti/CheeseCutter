@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# CheeseCutter Windows Bootstrap (run inside an MSYS2 "MINGW64" shell).
+# CheeseCutter Windows Bootstrap (run from a Git Bash shell on Windows x64).
 # Mirrors the "windows" job in .github/workflows/build.yml so a local toolchain
-# matches CI exactly. Installs the mingw-w64 toolchain + builds acme from source
-# (acme is not a mingw package), then does a release build.
-# See doc/BUILD.md for details.
+# matches CI: the native x64 build uses ldc2 for D and clang for the reSID
+# C/C++ sources, linked against the MSVC runtime. SDL2 comes from vcpkg; libcurl
+# is not linked (Phobos loads it at runtime). See doc/BUILD.md for details.
 #
 set -e
 
@@ -13,33 +13,39 @@ log()  { echo -e "${GREEN}✓${NC} $1"; }
 warn() { echo -e "${YELLOW}⚠${NC} $1"; }
 err()  { echo -e "${RED}✗${NC} $1"; }
 
-if [[ "$MSYSTEM" != "MINGW64" ]]; then
-    err "This script must run from an MSYS2 'MINGW64' shell (MSYSTEM=$MSYSTEM)."
-    err "Open 'MSYS2 MINGW64' from the Start menu and re-run."
+# Install the toolchain via Chocolatey if pieces are missing.
+need_choco=()
+command -v ldc2  >/dev/null 2>&1 || need_choco+=(ldc)
+command -v clang >/dev/null 2>&1 || need_choco+=(llvm)
+command -v make  >/dev/null 2>&1 || need_choco+=(make)
+if [ ${#need_choco[@]} -gt 0 ]; then
+    if command -v choco >/dev/null 2>&1; then
+        echo "Installing via Chocolatey: ${need_choco[*]}"
+        choco install -y "${need_choco[@]}"
+    else
+        err "Missing tools (${need_choco[*]}) and Chocolatey not found."
+        err "Install LDC, LLVM (clang) and make, or install Chocolatey first."
+        exit 1
+    fi
+fi
+
+# SDL2 from vcpkg. Honour VCPKG_INSTALLATION_ROOT (set on CI) or VCPKG_ROOT.
+VCPKG="${VCPKG_INSTALLATION_ROOT:-${VCPKG_ROOT:-}}"
+if [ -z "$VCPKG" ]; then
+    err "vcpkg not found. Set VCPKG_ROOT to your vcpkg checkout and re-run."
+    err "  git clone https://github.com/microsoft/vcpkg && ./vcpkg/bootstrap-vcpkg.bat"
     exit 1
 fi
-
-echo "Installing mingw-w64 toolchain (ldc, gcc, SDL2, curl) + make/git..."
-pacman -S --needed --noconfirm make git \
-    mingw-w64-x86_64-ldc mingw-w64-x86_64-gcc \
-    mingw-w64-x86_64-SDL2 mingw-w64-x86_64-curl
-log "Toolchain installed"
-
-# acme is not a mingw package -- build it from source (same as CI).
-if ! command -v acme &> /dev/null; then
-    echo "Building acme from source (github.com/meonwax/acme)..."
-    tmp=$(mktemp -d)
-    git clone --depth 1 https://github.com/meonwax/acme "$tmp/acme"
-    make -C "$tmp/acme/src"
-    cp "$tmp/acme/src/acme.exe" /mingw64/bin/ 2>/dev/null \
-        || cp "$tmp/acme/src/acme" /mingw64/bin/acme.exe
-fi
-acme --version >/dev/null && log "acme: $(command -v acme)"
+echo "Installing SDL2 (vcpkg, x64-windows)..."
+"$VCPKG/vcpkg" install sdl2:x64-windows
+SDL2="$VCPKG/installed/x64-windows"
+log "SDL2: $SDL2"
 
 echo "Building CheeseCutter (release)..."
-make -f Makefile.win release
+make -f Makefile.win release \
+    SDL2_INC="$SDL2/include" SDL2_LIBDIR="$SDL2/lib"
 log "Build complete: ccutter.exe + ct2util.exe"
 
 echo ""
-echo "Package a redistributable zip with DLLs:  ./make-wintest.sh"
+echo "Package a redistributable zip with SDL2.dll:  ./make-wintest.sh"
 echo "See doc/BUILD.md for details."
