@@ -59,14 +59,17 @@ extern(C) {
 		
 		requested.userdata = null;
 		callback = cb;
-		if(SDL_OpenAudio(&requested, &audiospec) < 0) {
+		// Pass a null `obtained` so SDL guarantees the callback is fed our
+		// requested format (S16 mono), converting from the hardware format
+		// internally. With a non-null `obtained`, SDL_OpenAudio allows any
+		// change and hands back the native device format -- on Windows
+		// (WASAPI) that is float32/stereo, which the engine cannot consume
+		// (it would fail with "Incorrect audio format obtained").
+		if(SDL_OpenAudio(&requested, null) < 0) {
 			writeln("Could not open audio: ", to!string(SDL_GetError()));
 			return -1;
 		}
-		if(audiospec.format != AUDIO_S16LSB) {
-			writeln("Incorrect audio format obtained.");
-			return -1;
-		}
+		audiospec = requested;
 		bufferSize = audiospec.samples;
 		mixbuf = cast(short *)malloc(bufferSize * short.sizeof * MIXBUF_MUL);
         memset(mixbuf, 0, bufferSize * short.sizeof * MIXBUF_MUL);
