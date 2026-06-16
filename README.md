@@ -1,7 +1,7 @@
 # CheeseCutter-Extended
 
 A tracker-style music editor for the Commodore 64 SID chip — an extended fork of
-CheeseCutter 2.9 by abaddon. Current version 0.3.0.
+CheeseCutter 2.9 by abaddon. Current version 0.3.1.
 
 ![CheeseCutter-Extended](guide/pics/ccmain-scaled.png)
 
