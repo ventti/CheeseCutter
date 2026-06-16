@@ -3,7 +3,7 @@ name: Deploy User Guide
 on:
   push:
     branches:
-      - develop
+      - master
     paths:
       - "guide/**"
       - "Version"
