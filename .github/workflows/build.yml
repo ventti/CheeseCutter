@@ -12,6 +12,10 @@ on:
       - "src/**"
       - "Makefile*"
       - ".github/workflows/build.yml"
+  # Publishing a release rebuilds from the tagged commit and attaches the
+  # per-platform binaries to that release (see the "release" job).
+  release:
+    types: [published]
   workflow_dispatch:
 
 jobs:
@@ -112,3 +116,45 @@ jobs:
         with:
           name: cheesecutter-macos
           path: CheeseCutter-Extended.app
+
+  # On a published release, gather the three platform builds, package them with
+  # versioned names and attach them to that release.
+  release:
+    name: Attach binaries to release
+    if: github.event_name == 'release'
+    needs: [windows, linux, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Package per-platform archives
+        run: |
+          set -eu
+          # Release tag is ext-v<version>; strip the prefix for asset names.
+          VER="${GITHUB_REF_NAME#ext-v}"
+          cd artifacts
+          # Windows: ccutter.exe + ct2util.exe + SDL2.dll + tunes/docs.
+          mv cheesecutter-win64 "cheesecutter-${VER}-win64"
+          zip -rq "../cheesecutter-${VER}-win64.zip" "cheesecutter-${VER}-win64"
+          # Linux: restore exec bits lost in the artifact, then tar.
+          chmod +x cheesecutter-linux64/ccutter cheesecutter-linux64/ct2util
+          mv cheesecutter-linux64 "cheesecutter-${VER}-linux64"
+          tar czf "../cheesecutter-${VER}-linux64.tar.gz" "cheesecutter-${VER}-linux64"
+          # macOS: the artifact holds the .app's contents; rewrap the bundle.
+          mkdir -p CheeseCutter-Extended.app
+          mv cheesecutter-macos/Contents CheeseCutter-Extended.app/
+          find CheeseCutter-Extended.app/Contents/MacOS -type f -exec chmod +x {} \;
+          zip -rq "../cheesecutter-${VER}-macos.zip" CheeseCutter-Extended.app
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            cheesecutter-*-win64.zip
+            cheesecutter-*-linux64.tar.gz
+            cheesecutter-*-macos.zip

@@ -132,6 +132,17 @@ DLL):
 
 ---
 
+## Releases
+
+Publishing a GitHub release whose tag is `ext-v<version>` (e.g. `ext-v0.3.0`)
+triggers the `build.yml` workflow: it rebuilds all three platforms from the
+tagged commit and the `release` job attaches the packaged binaries
+(`cheesecutter-<version>-win64.zip`, `-linux64.tar.gz`, `-macos.zip`) to that
+release automatically. Create one with `gh release create ext-v<version>` (or
+the Releases UI); the version comes from the repo-root `Version` file.
+
+---
+
 ## Common gotchas
 
 - **No inter-module dependency tracking.** The Makefiles don't track header /
