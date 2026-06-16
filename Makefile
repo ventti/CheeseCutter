@@ -69,7 +69,7 @@ install: all
 	cp -r tunes/* $(DESTDIR)/$(EXAMPLESDIR)/example_tunes
 
 # release version with additional optimizations
-release: DFLAGS += -frelease -fno-bounds-check
+release: DFLAGS += --release --boundscheck=off
 release: all
 	strip ccutter$(EXE)
 	strip ct2util$(EXE)
