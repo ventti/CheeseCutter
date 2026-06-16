@@ -1,6 +1,6 @@
 # CheeseCutter-Extended User Guide
 
-This is the consolidated user guide for CheeseCutter-Extended 0.1.0.
+This is the consolidated user guide for CheeseCutter-Extended {{ site.version }}.
 CheeseCutter-Extended is based on CheeseCutter 2.9.
 The old web-guide screenshots from `origin/dev_docs` are kept in `guide/pics/`.
 

@@ -6,6 +6,7 @@ on:
       - develop
     paths:
       - "guide/**"
+      - "Version"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -27,6 +28,12 @@ jobs:
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
+
+      # The guide's version comes from the repo-root Version file (single source
+      # of truth) — expose it to Jekyll as site.version so guide/README.md never
+      # goes stale. Append rather than overwrite in case a _config.yml is added.
+      - name: Inject version into Jekyll config
+        run: echo "version: \"$(cat Version)\"" >> guide/_config.yml
 
       - name: Build guide
         uses: actions/jekyll-build-pages@v1
