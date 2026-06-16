@@ -1,46 +1,48 @@
-# Build CheeseCutter for 64-bit Windows (mingw-w64 / GNU ABI).
+# Build CheeseCutter for 64-bit Intel Windows (x64, MSVC ABI) with the LLVM
+# toolchain: ldc2 for the D sources and clang/clang++ for the reSID C/C++
+# sources, linked against the MSVC runtime. This is the canonical Windows CI
+# path -- a native build on a windows-latest runner; see
+# .github/workflows/build.yml.
 #
-# Two ways to use this makefile:
+# Why not mingw any more: LDC was dropped from MSYS2 and LDC's only official
+# Windows builds target the MSVC ABI, so the previous mingw-w64 approach (and a
+# mingw cross-build) no longer has a usable druntime/phobos. clang defaults to
+# the x86_64-pc-windows-msvc target on Windows, so the same GCC-style flags in
+# the .c/.cpp rules keep working while producing MSVC-ABI objects that link
+# cleanly with the MSVC-target ldc2.
 #
-#   1. Native build on Windows (MSYS2 / mingw-w64 shell) -- the canonical CI path:
-#        pacman -S mingw-w64-x86_64-{ldc,gcc,SDL2,curl} make git
-#        # acme is NOT a mingw package -- build it from source:
-#        #   git clone --depth 1 https://github.com/meonwax/acme /tmp/acme
-#        #   make -C /tmp/acme/src && cp /tmp/acme/src/acme.exe /mingw64/bin/
-#        # (or just run ./bootstrap-windows.sh, which does all of the above)
-#        make -f Makefile.win
-#      Here CROSS is empty, ldc2 targets Windows by default, and SDL2/curl come
-#      from the mingw sysroot.
+# Dependencies (installed by the CI workflow):
+#   * ldc2            -- dlang-community/setup-dlang
+#   * clang/clang++   -- LLVM (preinstalled on the runner)
+#   * SDL2 x64 devel  -- SDL2.lib + headers (vcpkg); SDL2.dll bundled at package
+#   * make            -- choco
 #
-#   2. Cross build from macOS/Linux (fragile -- needs a mingw-w64 toolchain, an
-#      LDC with the x86_64 Windows-GNU druntime/phobos, and mingw SDL2 + curl):
-#        make -f Makefile.win CROSS=x86_64-w64-mingw32- LDC_TRIPLE=x86_64-pc-windows-gnu \
-#             EXTRA_LIBDIRS="-L=-L/path/to/mingw/lib"
+# libcurl is intentionally NOT linked: Phobos std.net.curl loads it dynamically
+# at runtime (LoadLibraryA), so the Ultimate-hardware feature only needs a
+# libcurl DLL present at run time -- the editor builds and runs without it.
 #
-# The C64 player.bin is produced by the host `acme` (architecture-independent),
-# exactly as in the other makefiles.
+# The C64 player.bin is checked in, so CI uses the committed copy and needs no
+# acme on Windows (the workflow touches it to mark it up to date).
+#
+# Override SDL2_INC / SDL2_LIBDIR if your SDL2 dev package lives elsewhere.
 #
 # NOTE: all the makefiles share the same per-source .o paths, so run
-# `make -f Makefile.win clean` when switching to/from a host build.
+# `make -f Makefile.win clean` when switching to/from another build.
 
-# Cross-compiler prefix for the C/C++ sources (reSID, ACME). Empty = native.
-CROSS ?=
-CC  = $(CROSS)gcc
-CXX = $(CROSS)g++
 DC  = ldc2
+CC  = clang
+CXX = clang++
 
-# When cross-compiling, ldc2 needs the Windows target triple AND a matching
-# prebuilt druntime/phobos. Leave empty for a native Windows ldc2.
-LDC_TRIPLE ?=
-ifneq ($(LDC_TRIPLE),)
-TRIPLEFLAG = -mtriple=$(LDC_TRIPLE)
-endif
+# SDL2 development package (headers + import library). Defaults match a vcpkg
+# x64-windows install; the CI workflow passes explicit paths.
+SDL2_INC    ?= SDL2/include
+SDL2_LIBDIR ?= SDL2/lib
 
 COMFLAGS = -O2
-VERSION = $(shell cat Version)
-DFLAGS = -d-version=DerelictSDL2_Static $(TRIPLEFLAG) $(COMFLAGS) -I./src -J. -J./src/c64 -J./src/font
-CFLAGS = $(COMFLAGS)
-CXXFLAGS = $(COMFLAGS) -I./src
+VERSION  = $(shell cat Version)
+DFLAGS   = -d-version=DerelictSDL2_Static $(COMFLAGS) -I./src -J. -J./src/c64 -J./src/font
+CFLAGS   = $(COMFLAGS) -I$(SDL2_INC)
+CXXFLAGS = $(COMFLAGS) -I./src -I$(SDL2_INC)
 COMPILE.d = $(DC) $(DFLAGS) -c
 EXE = .exe
 TARGET = ccutter
@@ -50,27 +52,28 @@ include Makefile.objects.mk
 
 PYTHON ?= python3
 
+# MSVC produces a separate PDB, so there is nothing to strip; make it a no-op
+# that the workflow can override.
+STRIP ?= true
+
 .PHONY: all install release dist clean dclean docs map check-map
 
 all: ct2util ccutter
 
-# System libraries forwarded to the linker (ldc2 drives the link via the C
-# compiler, so -L=<flag> reaches the gcc/mingw linker driver). Override
-# SDL_LIBS/CURL_LIBS/EXTRA_LIBDIRS if your sysroot needs explicit -L paths.
-SDL_LIBS  ?= -L=-lSDL2
-CURL_LIBS ?= -L=-lcurl
-EXTRA_LIBDIRS ?=
-LIBS = -L=-lstdc++ $(SDL_LIBS) $(CURL_LIBS) $(EXTRA_LIBDIRS)
+# Link flags forwarded to the MSVC linker via ldc2's -L=<arg>. Only SDL2 is
+# linked (its import library); the MSVC C/C++ runtime is referenced implicitly
+# by the clang-compiled objects, and libcurl is loaded at runtime by Phobos.
+LIBS = -L=/LIBPATH:$(SDL2_LIBDIR) -L=SDL2.lib
 
-# -mwindows (passed to the gcc linker driver) hides the console window for the
-# GUI editor. ct2util is a console tool, so it does not get -mwindows.
-GUIFLAG = -L=-mwindows
+# ccutter is the GUI editor; ct2util is a console tool. Both currently build as
+# console subsystem (a console window appears alongside the editor).
+GUIFLAG =
 
 ccutter: $(C64OBJS) $(OBJS) $(CXX_OBJS) $(C_OBJS)
-	$(DC) $(TRIPLEFLAG) $(COMFLAGS) -of=$@$(EXE) $(OBJS) $(CXX_OBJS) $(C_OBJS) $(LIBS) $(GUIFLAG)
+	$(DC) $(COMFLAGS) -of=$@$(EXE) $(OBJS) $(CXX_OBJS) $(C_OBJS) $(LIBS) $(GUIFLAG)
 
 ct2util: $(C64OBJS) $(UTILOBJS)
-	$(DC) $(TRIPLEFLAG) $(COMFLAGS) -of=$@$(EXE) $(UTILOBJS) $(LIBS)
+	$(DC) $(COMFLAGS) -of=$@$(EXE) $(UTILOBJS) $(LIBS)
 
 .cpp.o : $(CXX_SRCS)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -83,8 +86,8 @@ c64: $(C64OBJS)
 # release version with additional optimizations
 release: DFLAGS += --release --boundscheck=off
 release: all
-	strip ccutter$(EXE)
-	strip ct2util$(EXE)
+	$(STRIP) ccutter$(EXE)
+	$(STRIP) ct2util$(EXE)
 
 # Regenerate docs / architecture map (parity with the other makefiles).
 docs: ccutter map

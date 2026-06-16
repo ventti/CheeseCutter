@@ -16,49 +16,47 @@ on:
 
 jobs:
   windows:
-    name: Windows x64 (mingw-w64)
+    name: Windows x64 (ldc, msvc)
     runs-on: windows-latest
     defaults:
       run:
-        shell: msys2 {0}
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up MSYS2 / mingw-w64
-        uses: msys2/setup-msys2@v2
+      - name: Install LDC (MSVC-target)
+        uses: dlang-community/setup-dlang@v2
         with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            make
-            git
-            mingw-w64-x86_64-ldc
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-SDL2
-            mingw-w64-x86_64-curl
+          compiler: ldc-latest
 
-      - name: Build the ACME assembler (for src/c64/player.bin)
+      - name: Install make + SDL2 (vcpkg)
         run: |
-          git clone --depth 1 https://github.com/meonwax/acme.git /tmp/acme
-          make -C /tmp/acme/src
-          # mingw gcc emits acme.exe; fall back to a bare name just in case.
-          cp /tmp/acme/src/acme.exe /mingw64/bin/ 2>/dev/null || cp /tmp/acme/src/acme /mingw64/bin/acme.exe
-          acme --version
+          choco install make --no-progress -y
+          vcpkg install sdl2:x64-windows
+          echo "SDL2_PREFIX=${VCPKG_INSTALLATION_ROOT}/installed/x64-windows" >> "$GITHUB_ENV"
+
+      - name: Tool versions
+        run: |
+          ldc2 --version | head -3
+          clang --version | head -1
+          make --version | head -1
+
+      - name: Use committed C64 player.bin (no acme on Windows)
+        run: touch src/c64/player.bin
 
       - name: Build
-        run: make -f Makefile.win release
+        run: |
+          make -f Makefile.win release \
+            SDL2_INC="${SDL2_PREFIX}/include" \
+            SDL2_LIBDIR="${SDL2_PREFIX}/lib"
 
       - name: Package
         run: |
           mkdir -p dist
           cp ccutter.exe ct2util.exe dist/
-          # Bundle every mingw runtime DLL the executables actually depend on
-          # (SDL2, curl + its TLS/zlib deps, libstdc++, libgcc, winpthread, ...).
-          for exe in ccutter.exe ct2util.exe; do
-            for dll in $(ldd "$exe" | grep -i '/mingw64/bin/' | awk '{print $3}'); do
-              cp -u "$dll" dist/
-            done
-          done
+          # SDL2.dll is the only mandatory runtime DLL; libcurl is loaded lazily
+          # by Phobos only if the Ultimate-hardware feature is used.
+          cp "${SDL2_PREFIX}/bin/SDL2.dll" dist/
           cp README.md LICENSE.md dist/ 2>/dev/null || true
           cp -r tunes dist/tunes
           ls -l dist
