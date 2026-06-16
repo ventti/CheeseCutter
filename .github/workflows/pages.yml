@@ -33,7 +33,8 @@ jobs:
       # of truth) — expose it to Jekyll as site.version so guide/README.md never
       # goes stale. Append rather than overwrite in case a _config.yml is added.
       - name: Inject version into Jekyll config
-        run: echo "version: \"$(cat Version)\"" >> guide/_config.yml
+        run: |
+          echo "version: \"$(cat Version)\"" >> guide/_config.yml
 
       - name: Build guide
         uses: actions/jekyll-build-pages@v1
