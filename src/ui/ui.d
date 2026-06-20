@@ -575,6 +575,8 @@ final class UI {
 		// A plain load matches the file on disk; an import alters the current
 		// song without touching its file.
 		com.session.state.songModified = doImport;
+		// Force the filter-track trace to recompute against the new song data.
+		com.session.state.editGeneration++;
 	}
 
 	// Start a fresh, empty project. Round-trips a blank Song through the normal

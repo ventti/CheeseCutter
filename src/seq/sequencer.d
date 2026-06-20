@@ -18,6 +18,7 @@ import seq.fplay;
 import seq.tracktable;
 import seq.seqtable;
 import seq.trackmap;
+import seq.filtertrace;
 import com.shortcuts;
 import derelict.sdl2.sdl;
 import std.string;
@@ -30,6 +31,20 @@ enum Jump { toBeginning = 0, toMark = -1, toEnd = -2, toWrapMark = -3 };
 enum playbackBarColor = 6;
 enum wrapBarColor = 4;
 enum selectionBarColor = 5;
+
+// Read-only filter-track column: width (chars) reserved to the right of voice 3
+// and the colors distinguishing table-exact (static) from swept (calculated)
+// filter values.
+enum filterTrackWidth = 15;
+enum filterStaticColor = 15; // light gray: values taken exactly from the filter table
+enum filterCalcColor = 12;   // mid gray: cutoff being calculated (swept)
+enum filterEmptyColor = 11;  // dark gray: in-song row with no active filter (dashes)
+enum filterHeaderColor = 11;
+// Toggle (View shortcut). Drawing only; the column space is reserved in the
+// adjacent layout regardless.
+bool showFilterTrack = true;
+// Shared offline trace consumed by every SequenceTable (editor + follow-play).
+FilterTrace filterTrace;
 
 bool displaySequenceRowcounter = true;
 int stepValue = 1;

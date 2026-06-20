@@ -17,6 +17,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Ctrl-F12` | Save screenshot |
 | `Alt-Return` | Toggle fullscreen |
 | `Alt-H` | Toggle help texts |
+| `Ctrl-Shift-F` | Toggle the read-only filter track column |
 
 ### Edit
 

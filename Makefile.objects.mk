@@ -41,6 +41,7 @@ OBJS= \
 	src/seq/trackmap.o \
 	src/seq/fplay.o \
 	src/seq/sequencer.o \
+	src/seq/filtertrace.o \
 	src/audio/resid/filter.o
 
 CXX_SRCS = src/audio/resid/residctrl.cpp \

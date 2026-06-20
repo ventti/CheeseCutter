@@ -64,6 +64,9 @@ struct EditorState {
 	// insertUndo / executeUndo / executeRedo); UI.saveCallback / loadCallback
 	// reset it. Drives the unsaved-changes warning in the quit confirmation.
 	bool songModified = false;
+	// Bumped on every change to the song data (undoable edits, undo/redo, load).
+	// Read by the read-only filter-track trace to know when to recompute.
+	int editGeneration = 0;
 	string filename;
 	auto undoQueue = Queue!UndoState();
 	auto redoQueue = Queue!UndoState();
@@ -78,6 +81,7 @@ void insertUndo(Undoable undoable, UndoValue value) {
 	state.undoQueue.insert(UndoState(undoable, value));
 	state.redoQueue.clear();
 	state.songModified = true;
+	state.editGeneration++;
 }
 
 void executeUndo() {
@@ -88,6 +92,7 @@ void executeUndo() {
 	state.redoQueue.insert(redo);
 	u.func.undo(u.value);
 	state.songModified = true;
+	state.editGeneration++;
 }
 
 void executeRedo() {
@@ -98,6 +103,7 @@ void executeRedo() {
 	state.undoQueue.insert(undo);
 	r.func.undo(r.value);
 	state.songModified = true;
+	state.editGeneration++;
 }
 
 private UndoState makeRedoOrUndo(UndoState state) {

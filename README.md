@@ -1,7 +1,7 @@
 # CheeseCutter-Extended
 
 A tracker-style music editor for the Commodore 64 SID chip — an extended fork of
-CheeseCutter 2.9 by abaddon. Current version 0.3.1.
+CheeseCutter 2.9 by abaddon. Current version 0.4.0.
 
 ![CheeseCutter-Extended](guide/pics/ccmain-scaled.png)
 
@@ -18,6 +18,11 @@ CheeseCutter 2.9 by abaddon. Current version 0.3.1.
   audio render to `.wav` / `.flac` with normalize, bit depth and sample-rate
   options.
 - Instrument color tags (`$X` / `$XY`) in instrument descriptions.
+- Read-only **filter track** column in the pattern view (between voice 3 and the
+  instrument table): per-row SID filter registers (cutoff, resonance, mode and a
+  per-channel routing mask) derived by tracing the song, color-coded by whether a
+  value is taken straight from the filter table or calculated by a sweep. Toggle
+  with `Ctrl-Shift-F`.
 - Hardware and emulator playback (C64 Ultimate, VICE).
 - Companion `ct2util` CLI for headless convert / export / merge / dump.
 
