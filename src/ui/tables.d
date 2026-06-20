@@ -1834,23 +1834,17 @@ class SweepTable : HexTable {
 			if(data[p+3] > 0x3f && data[p+3] != 0x7f) col = "`0a";
 			if(highlightRow(curRow)) { col2 = col = "`03"; }
 
-			// Check if entire row is zeros
+			// Empty ("all-zero") rows render as dashes. dashEmptyRow() decides
+			// which empty rows qualify (see the hook below).
 			bool allZeros = (data[p] == 0 && data[p+1] == 0 && data[p+2] == 0 && data[p+3] == 0);
+			bool showDashes = allZeros && dashEmptyRow(curRow);
 
-			// Check if all subsequent rows are also zeros
-			bool allSubsequentZeros = true;
-			if(allZeros) {
-				for(int checkRow = curRow + 1; checkRow < 64; checkRow++) {
-					int checkP = checkRow * 4;
-					if(data[checkP] != 0 || data[checkP+1] != 0 || data[checkP+2] != 0 || data[checkP+3] != 0) {
-						allSubsequentZeros = false;
-						break;
-					}
-				}
+			// An empty row may dim its dashes (emptyRowColor() != null).
+			if(showDashes) {
+				string dc = emptyRowColor();
+				if(dc !is null) col = col2 = dc;
 			}
 
-			// Display "--" only if this row and all subsequent rows are zeros
-			bool showDashes = allZeros && allSubsequentZeros;
 			string val0 = (showDashes && data[p] == 0) ? "--" : format("%02X", data[p]);
 			string val1 = (showDashes && data[p+1] == 0) ? "--" : format("%02X", data[p+1]);
 			string val2 = (showDashes && data[p+2] == 0) ? "--" : format("%02X", data[p+2]);
@@ -1913,6 +1907,19 @@ class SweepTable : HexTable {
 		if(startFrom > 0x3f) return;
 		seekRowOnTopIfNeeded(startFrom);
 	}
+
+	// Which empty ("all-zero") rows render as dashes. By default only the
+	// trailing run of empty rows is dashed; FilterTable dashes every empty row.
+	protected bool dashEmptyRow(int curRow) {
+		for(int r = curRow + 1; r < 64; r++) {
+			int q = r * 4;
+			if(data[q] || data[q+1] || data[q+2] || data[q+3]) return false;
+		}
+		return true;
+	}
+
+	// Colour for an empty row's dashes (null = keep the normal table colour).
+	protected string emptyRowColor() { return null; }
 
 	protected float playbackBrightness(int row) {
 		return 0.0f;
@@ -2012,6 +2019,11 @@ class FilterTable : SweepTable {
 		super.refresh();
 		data = song.filterTable;
 	}
+
+	// Every empty row in the filter table shows dashes, dimmed to dark grey
+	// (`0b) -- the same colour empty note rows use in the track view.
+	protected override bool dashEmptyRow(int curRow) { return true; }
+	protected override string emptyRowColor() { return "`0b"; }
 
 	override void update() {
 		if(state.shortTitles)
