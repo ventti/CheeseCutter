@@ -62,7 +62,8 @@ final package class Toplevel : WindowSwitcher, Undoable {
 		int insWidth = 3 + 8 * 3 + 12;
 		int adjacentFixedWidth = 8 + 14 + 14 + 10 + 6 + tracksWidth + com.fb.border * 6;
 		bool adjacentTableLayout = com.fb.mode > 0 &&
-			screen.width >= sequencerContentWidth + minInsWidth + adjacentFixedWidth;
+			screen.width >= sequencerContentWidth + filterTrackWidth + com.fb.border +
+							minInsWidth + adjacentFixedWidth;
 
 		int cappedHeight(int rows) {
 			int h = rows + 1;
@@ -80,13 +81,16 @@ final package class Toplevel : WindowSwitcher, Undoable {
 		string bottomHotkeys;
 
 		if(adjacentTableLayout) {
-			int tableX = sequencerContentWidth;
+			// Reserve a read-only filter-track column to the right of voice 3,
+			// inside the sequencer area; the instrument table starts after it.
+			int seqContentX = sequencerContentWidth + filterTrackWidth;
+			int tableX = seqContentX + com.fb.border;
 			insWidth = screen.width - tableX - adjacentFixedWidth;
 			if(insWidth > preferredInsWidth) insWidth = preferredInsWidth;
 			sequencer = new Sequencer(Rectangle(zone1x, zone1y, screen.height - 10,
-												tableX - zone1x));
+												seqContentX - zone1x));
 			fplay = new Fplay(Rectangle(zone1x, zone1y, screen.height - 10,
-										tableX - zone1x));
+										seqContentX - zone1x));
 
 			tx = tableX;
 			instable = new InsTable(Rectangle(tx, zone1y, cappedHeight(0x30), insWidth));

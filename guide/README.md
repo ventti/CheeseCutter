@@ -136,6 +136,7 @@ bar it flips the highlighted on/off item), but it works fine inside a query
 | <kbd>F12</kbd> again in context help | Global help |
 | <kbd>Ctrl</kbd>-<kbd>F12</kbd> | Screenshot |
 | <kbd>Alt</kbd>-<kbd>H</kbd> | Toggle table byte help |
+| <kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>F</kbd> | Toggle the filter track column (see [Filter Track](#filter-track)) |
 | <kbd>Alt</kbd>-<kbd>F4</kbd> | Quit (asks for confirmation) |
 
 Quit is <kbd>Alt</kbd>-<kbd>F4</kbd>, or open the menu bar with <kbd>Esc</kbd> and
@@ -429,6 +430,28 @@ idle row.
 Filter table rows follow the pulse-table style. If byte A is at least `80`,
 the row initializes filter type, resonance/voice mask, and cutoff. Filter add
 values wrap, so `FF` subtracts one.
+
+### Filter Track
+
+The pattern view shows a read-only **filter track** column between voice 3 and
+the instrument table. The SID has a single, global filter shared by all three
+voices, so this column reflects the resulting filter registers per song row
+rather than per-voice note data — it is never editable.
+
+For each row it shows, left to right: the 11-bit **cutoff** (3 hex digits),
+**resonance** (`0`–`F`), the active filter **mode** (`L`/`B`/`H` for low-,
+band- and high-pass, `-` when off), and a 3-character **channel mask**
+(`X`/`-` for voices 1–3 routed through the filter).
+
+The values are produced by tracing the song through the real player, so they
+account for the filter table, instrument filter pointers and filter commands —
+exactly what the chip will do. The cutoff is **color-coded**: a value taken
+straight from the filter table (a step that sets the cutoff, or a held value)
+is shown in one color, while a cutoff that is being **calculated** by a running
+sweep is shown in another. Resonance, mode and mask are always table-exact.
+
+Press <kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>F</kbd> (or **View → Filter track**)
+to hide or show the column.
 
 ![Command table](pics/cmd.png)
 

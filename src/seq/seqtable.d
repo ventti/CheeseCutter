@@ -18,6 +18,7 @@ import derelict.sdl2.sdl;
 import std.string;
 import audio.player;
 import audio.visualizer;
+import seq.filtertrace;
 
 private enum activeInstrumentColor = 3;
 
@@ -280,6 +281,8 @@ class SequenceTable : VoiceTable, Undoable {
 		// First, call parent to render all the voices
 		super.update();
 
+		renderFilterTrack();
+
 		// Store persistent brightness for current playback positions
 		if(audio.player.isPlaying && !audio.player.keyjamEnabled) {
 			for(int i = 0; i < 3; i++) {
@@ -346,6 +349,76 @@ class SequenceTable : VoiceTable, Undoable {
 						screen.setColor(x, y, existingFg, bgcolor);
 					}
 				}
+			}
+		}
+	}
+
+	// Read-only virtual "filter track": one column to the right of voice 3 that
+	// shows, per song row, the global SID filter register state derived offline
+	// (see seq.filtertrace). Table-exact values are drawn in filterStaticColor,
+	// swept (calculated) cutoff values in filterCalcColor. Aligns to the voice
+	// row grid and matches the playback bar, but is never editable.
+	void renderFilterTrack() {
+		import std.array : replicate;
+		int colX = voices[2].area.x + voices[2].area.width;
+		// Skip when the column would not fit (narrow non-adjacent layout).
+		if(colX - area.x + filterTrackWidth > area.width) return;
+
+		string blank = replicate(" ", filterTrackWidth);
+		// Toggled off: clear the reserved strip so nothing stale lingers (the
+		// screen is not globally cleared between frames).
+		if(!showFilterTrack) {
+			screen.cprint(colX, area.y, 1, 0, blank);
+			for(int r = 0; r < area.height; r++)
+				screen.cprint(colX, 1 + area.y + r, 1, 0, blank);
+			return;
+		}
+
+		if(filterTrace is null) filterTrace = new FilterTrace();
+		filterTrace.ensureFresh(song, state.editGeneration, song.subtune);
+
+		screen.cprint(colX + 1, area.y, filterHeaderColor, 0, "Filter");
+		bool playing = audio.player.isPlaying && !audio.player.keyjamEnabled;
+		int playRow = playing ? fplayPos[0].rowCounter : int.min;
+
+		for(int rowIdx = 0; rowIdx < area.height; rowIdx++) {
+			int y = 1 + area.y + rowIdx;
+			int rowCounter = posTable[0].rowCounter + rowIdx - anchor;
+			// Clear the whole column cell first (the screen is not globally
+			// cleared between frames; voice columns clear their own cells).
+			screen.cprint(colX, y, 1, 0, blank);
+
+			// Past the loop point (or before song start) the trace has no data:
+			// leave the cell blank. Within the song, rows with no active filter
+			// show dashes like an empty note row.
+			if(rowCounter >= 0 && rowCounter < filterTrace.length()) {
+				FilterRowState st = filterTrace.at(rowCounter);
+				if(st.valid) {
+					int cutoffColor = st.sweeping ? filterCalcColor : filterStaticColor;
+					screen.cprint(colX + 1, y, cutoffColor, 0, format("%03X", st.cutoff));
+					screen.cprint(colX + 5, y, filterStaticColor, 0, format("%X", st.res));
+					screen.cprint(colX + 7, y, filterStaticColor, 0, format("%c%c%c",
+								  (st.mode & 0x10) ? 'L' : '-',
+								  (st.mode & 0x20) ? 'B' : '-',
+								  (st.mode & 0x40) ? 'H' : '-'));
+					screen.cprint(colX + 11, y, filterStaticColor, 0, format("%c%c%c",
+								  (st.mask & 0x01) ? 'X' : '-',
+								  (st.mask & 0x02) ? 'X' : '-',
+								  (st.mask & 0x04) ? 'X' : '-'));
+				}
+				else {
+					screen.cprint(colX + 1, y, filterEmptyColor, 0, "---");
+					screen.cprint(colX + 5, y, filterEmptyColor, 0, "-");
+					screen.cprint(colX + 7, y, filterEmptyColor, 0, "---");
+					screen.cprint(colX + 11, y, filterEmptyColor, 0, "---");
+				}
+			}
+
+			// Match the voice columns' playback bar on the playing row.
+			if(rowCounter == playRow) {
+				for(int x = colX; x < colX + filterTrackWidth; x++)
+					if(screen.getbg(x, y) == 0)
+						screen.setbg(x, y, playbackBarColor);
 			}
 		}
 	}

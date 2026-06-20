@@ -405,6 +405,12 @@ void registerShortcuts(UI ui) {
 		UI.statusline.display("Help texts " ~ (state.displayHelp ? "enabled." : "disabled."));
 	});
 
+	sm.register("toggle_filter_track", Ctx.global, "Display",
+				"Toggle the read-only filter track column", SDLK_f, KMOD_CTRL | KMOD_SHIFT, {
+		showFilterTrack = !showFilterTrack;
+		UI.statusline.display("Filter track " ~ (showFilterTrack ? "shown." : "hidden."));
+	});
+
 	// Dialogs
 	sm.register("about_dialog", Ctx.global, "Help",
 				"Show the splash / about screen", SDLK_F11, 0, {
@@ -425,6 +431,7 @@ void registerShortcuts(UI ui) {
 	sm.setChecked("toggle_help_text", () => state.displayHelp);
 	sm.setChecked("toggle_fullscreen", () => video.isFullscreen());
 	sm.setChecked("toggle_follow_mode", () => toplevel.fplayEnabled());
+	sm.setChecked("toggle_filter_track", () => showFilterTrack);
 
 	// Context-specific command shortcuts (sequencer, tables, ...)
 	registerContextShortcuts(ui);
@@ -725,6 +732,7 @@ void applyMenuLabels(UI ui) {
 		setMenuLabel("decrease_multiplier_alt", "Multiplier -");
 		setMenuLabel("toggle_fullscreen", "Fullscreen");
 		setMenuLabel("toggle_help_text", "Help texts");
+		setMenuLabel("toggle_filter_track", "Filter track");
 		setMenuLabel("screenshot", "Screenshot");
 		setMenuLabel("cycle_visualization", "Visualization");
 		setMenuLabel("dump_frame", "Dump SID frame");
