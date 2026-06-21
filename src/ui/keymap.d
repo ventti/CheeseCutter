@@ -91,8 +91,8 @@ void registerShortcuts(UI ui) {
 	});
 
 	// File Operations
-	sm.registerMenuOnly("new_song", Ctx.global, "File",
-				"Clear the song and start a new project", {
+	sm.register("new_song", Ctx.global, "File",
+				"Clear the song and start a new project", SDLK_n, KMOD_CTRL, {
 		if(state.songModified)
 			activateDialog(new ConfirmationDialog(
 				"Discard unsaved changes and start new (y/n)? ", (int param) {
