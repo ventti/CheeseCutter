@@ -291,6 +291,7 @@ class SequenceTable : VoiceTable, Undoable {
 		super.update();
 
 		renderFilterTrack();
+		renderPlaybackCursor();
 
 		// Store persistent brightness for current playback positions
 		if(audio.player.isPlaying && !audio.player.keyjamEnabled) {
@@ -446,16 +447,26 @@ class SequenceTable : VoiceTable, Undoable {
 				}
 			}
 
-			// Playing-row cursor bar (white-on-blue). In follow-play the voice
-			// columns don't draw their own bar on the centred row, so extend the
-			// blue bar across the channels too to make the cursor visible there.
-			if(cursorRow) {
-				bool follow = UI.toplevel !is null && UI.toplevel.fplayEnabled();
-				int barStart = follow ? voices[0].area.x : colX;
-				for(int x = barStart; x < colX + filterTrackWidth; x++)
-					if(screen.getbg(x, y) == 0)
-						screen.setbg(x, y, playbackBarColor);
-			}
+		}
+	}
+
+	// The playback cursor: a blue bar on the currently-playing row, drawn across
+	// all three voice columns (and the filter track when shown) so it is visible
+	// the same way in every playback mode — follow or not. Independent of the
+	// filter track's visibility. Runs after the voice + filter cells are drawn.
+	void renderPlaybackCursor() {
+		if(!(audio.player.isPlaying && !audio.player.keyjamEnabled)) return;
+		int playRow = fplayPos[0].rowCounter;
+		int colX = voices[2].area.x + voices[2].area.width;
+		int barEnd = colX; // end of the three voice columns
+		if(showFilterTrack && colX - area.x + filterTrackWidth <= area.width)
+			barEnd = colX + filterTrackWidth;
+		for(int rowIdx = 0; rowIdx < area.height; rowIdx++) {
+			if(posTable[0].rowCounter + rowIdx - anchor != playRow) continue;
+			int y = 1 + area.y + rowIdx;
+			for(int x = voices[0].area.x; x < barEnd; x++)
+				if(screen.getbg(x, y) == 0)
+					screen.setbg(x, y, playbackBarColor);
 		}
 	}
 
