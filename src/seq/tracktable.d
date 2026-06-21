@@ -537,6 +537,14 @@ abstract class BaseTrackTable : VoiceTable, Undoable {
 		v.tracks[absRow].setValue(0xa0, 0);
 	}
 
+	protected override void writeCellAt(int voiceIdx, int absRow,
+										const(ubyte)[] src, bool mergeOnly) {
+		Voice v = voices[voiceIdx];
+		if(absRow < 0 || absRow >= v.tracks.trackLength) return;
+		if(mergeOnly && v.tracks[absRow].number != 0) return;
+		v.tracks[absRow].setValue(src[0], src[1]);
+	}
+
 	// Paste from the cursor track down, clipped to the tracklist end mark
 	// (overflow dropped). mergeOnly writes only into empty (number==0) slots.
 	protected override void pasteColumn(int voiceIdx, int clipCol, bool mergeOnly) {

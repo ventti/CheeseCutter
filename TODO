@@ -8,6 +8,7 @@ Create a plan first if the task seems complex.
 
 ---
 If user has track data copied to clipboard and they highlight an area before paste, the clipboard content shall be pasted to that area, not beyond it. if no area is selected, keep existing behavior
+Status: DONE
 ---
 Assign <ctrl>-<n> to "New" song. (File->New menu item).
 Status: DONE

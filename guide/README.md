@@ -305,7 +305,9 @@ Make a selection by **left-dragging** with the mouse, or with the keyboard
 markers below. A plain left-click clears the selection and just positions the
 cursor. **Paste** and **merge** write into the currently active voice(s) from
 the cursor down and are clipped to the current sequence/track end — anything that
-would overflow is dropped. **Merge** only fills rows that are currently empty.
+would overflow is dropped. If an area is **highlighted** when you paste, the
+clipboard is instead written into that area and clipped to it (never beyond).
+**Merge** only fills rows that are currently empty.
 **Paste new** instead inserts brand-new track(s)/sequence(s) at the cursor,
 sized to hold the block.
 

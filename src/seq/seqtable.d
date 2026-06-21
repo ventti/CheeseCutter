@@ -688,6 +688,17 @@ class SequenceTable : VoiceTable, Undoable {
 		seq.data.raw[s * 4 .. s * 4 + 4] = cast(ubyte[])CLEAR;
 	}
 
+	protected override void writeCellAt(int voiceIdx, int absRow,
+										const(ubyte)[] src, bool mergeOnly) {
+		int t, s;
+		Voice v = voices[voiceIdx];
+		if(!locate(v, absRow, t, s)) return;
+		Sequence seq = song.seqs[v.tracks[t].number];
+		int off = s * 4;
+		if(mergeOnly && seq.data.raw[off .. off + 4] != cast(ubyte[])CLEAR) return;
+		seq.data.raw[off .. off + 4] = src[0 .. 4];
+	}
+
 	// Paste from the per-voice cursor down, clipped to the current sequence's
 	// end (overflow dropped). mergeOnly: write only into empty target rows.
 	protected override void pasteColumn(int voiceIdx, int clipCol, bool mergeOnly) {
