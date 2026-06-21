@@ -13,6 +13,7 @@ Assign <ctrl>-<n> to "New" song. (File->New menu item).
 Status: DONE
 ---
 When using follow-playback (<shift>-<F1>), the filter track has a cursor indicator (black on blue) while the channels have not. change it to white-on-blue and expand to be visible on top of the channels too
+Status: DONE
 ---
 After some point the filter value rendering just stops working and shows 000 even when user can hear the filter is active
 ---
