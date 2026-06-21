@@ -160,6 +160,19 @@ final class UI {
 		}
 	}
 
+	// Shift-F3: play from the cursor with tracking. If playback is already
+	// running, don't restart it — just turn tracking on from the current
+	// position (continues uninterrupted). A no-op if already tracking.
+	package void playFromCursorFollow() {
+		if(!audio.player.isPlaying)
+			toplevel.playFromCursor();
+		if(!toplevel.fplayEnabled()) {
+			stop(false);
+			toplevel.startFp();
+			statusline.display("Tracking on.");
+		}
+	}
+
 	@property Window activeWindow() {
 		if(dialog) return dialog;
 		return toplevel.activeWindow;
