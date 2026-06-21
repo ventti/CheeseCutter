@@ -576,6 +576,16 @@ class InsValueTable : HexTable {
 		UI.activateInstrument(row);
 	}
 
+	override void clickedAt(int x, int y, int button, int clicks = 1) {
+		int rx = x - area.x;
+		int ry = y - area.y;
+		super.clickedAt(x, y, button, clicks);
+		// Clicking the instrument-number column ("NN:") selects that instrument
+		// as the active one, mirroring keyboard navigation (stepRow).
+		if(rx >= 0 && rx < 3 && ry >= 1 && ry <= visibleRows)
+			UI.activateInstrument(row);
+	}
+
 	override void showByteDescription() {
 		if(song.ver > 8) {
 			super.showByteDescription(song.instrumentByteDescriptions[column]);

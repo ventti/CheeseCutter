@@ -176,7 +176,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 |---|---|
 | `,` | Change the note in current row to a tie note |
 | `<` | Decrease base octave |
-| `Return` | Grab the instrument value in the current row |
+| `Return` | Grab the current row's instrument as the active instrument |
 | `>` | Increase base octave |
 | `;` | Toggle automatic instrument value insert |
 | `Ctrl-S` | Transpose octave down |

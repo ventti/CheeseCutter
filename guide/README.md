@@ -285,6 +285,7 @@ Use <kbd>F5</kbd>, <kbd>F6</kbd>, and <kbd>F7</kbd> to switch sequencer views:
 | <kbd>Ctrl</kbd>-<kbd>R</kbd> | Redo |
 | <kbd>Insert</kbd> / <kbd>Delete</kbd> | Insert/delete |
 | <kbd>Shift</kbd>-<kbd>Insert</kbd> / <kbd>Shift</kbd>-<kbd>Delete</kbd> | Insert/delete row |
+| <kbd>Enter</kbd> | Pick the current row's instrument as active (any column; empty row does nothing) |
 | <kbd>Ctrl</kbd>-<kbd>Q</kbd>/<kbd>A</kbd> | Transpose semitone up/down |
 | <kbd>Ctrl</kbd>-<kbd>W</kbd>/<kbd>S</kbd> | Transpose octave up/down |
 | <kbd>Ctrl</kbd>-<kbd>M</kbd>/<kbd>N</kbd> | Increase/decrease row highlight |
@@ -380,6 +381,9 @@ Instrument bytes:
 | F | Pulse table pointer, `00` means no new pulse |
 | G | Unused |
 | H | Wave table pointer |
+
+Click an instrument's number (the `NN:` column on the left) to make it the
+active instrument.
 
 ### Instrument color tags
 

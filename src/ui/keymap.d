@@ -600,7 +600,7 @@ void registerContextShortcuts(UI ui) {
 				"Transpose octave down", SDLK_s, KMOD_CTRL,
 				{ invokeKey(SDLK_s, KMOD_CTRL); });
 	sm.register("note_grab_instr", C.noteColumn, "Note column",
-				"Grab the instrument value in the current row", SDLK_RETURN, 0,
+				"Grab the current row's instrument as the active instrument", SDLK_RETURN, 0,
 				{ invokeKey(SDLK_RETURN, 0); });
 	sm.register("note_tie", C.noteColumn, "Note column",
 				"Change the note in current row to a tie note", SDLK_COMMA, 0,
