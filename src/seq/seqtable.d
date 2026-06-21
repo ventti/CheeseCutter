@@ -18,6 +18,8 @@ import derelict.sdl2.sdl;
 import std.string;
 import audio.player;
 import audio.visualizer;
+static import audio.audio;
+static import audio.remote;
 import seq.filtertrace;
 
 private enum activeInstrumentColor = 3;
@@ -387,6 +389,12 @@ class SequenceTable : VoiceTable, Undoable {
 		screen.cprint(colX + 1, area.y, filterHeaderColor, 0, "Filter");
 		bool playing = audio.player.isPlaying && !audio.player.keyjamEnabled;
 		int playRow = playing ? fplayPos[0].rowCounter : int.min;
+		// On the playing row, prefer the live SID filter registers when the
+		// internal engine drives playback: the static trace only covers the
+		// first pass and diverges once the song loops (the SID filter is global,
+		// so its state depends on cross-voice history). Remote backends (VICE /
+		// Ultimate) don't feed sidreg, so they keep the static trace.
+		bool liveCursor = playing && !audio.remote.isActive();
 
 		for(int rowIdx = 0; rowIdx < area.height; rowIdx++) {
 			int y = 1 + area.y + rowIdx;
@@ -403,8 +411,17 @@ class SequenceTable : VoiceTable, Undoable {
 			// Past the loop point (or before song start) the trace has no data:
 			// leave the cell blank. Within the song, rows with no active filter
 			// show dashes like an empty note row.
-			if(rowCounter >= 0 && rowCounter < filterTrace.length()) {
-				FilterRowState st = filterTrace.at(rowCounter);
+			FilterRowState st;
+			bool have = false;
+			if(cursorRow && liveCursor) {
+				st = liveFilterState();
+				have = true;
+			}
+			else if(rowCounter >= 0 && rowCounter < filterTrace.length()) {
+				st = filterTrace.at(rowCounter);
+				have = true;
+			}
+			if(have) {
 				if(st.valid) {
 					int cutoffColor = cursorRow ? cursorColor :
 						(st.sweeping ? filterCalcColor : filterStaticColor);
@@ -440,6 +457,22 @@ class SequenceTable : VoiceTable, Undoable {
 						screen.setbg(x, y, playbackBarColor);
 			}
 		}
+	}
+
+	// The live global SID filter registers ($d415-$d418), used for the playing
+	// row so the cursor always reflects what is actually heard.
+	private static FilterRowState liveFilterState() {
+		FilterRowState st;
+		int d415 = audio.audio.sidreg[0x15] & 0xff;
+		int d416 = audio.audio.sidreg[0x16] & 0xff;
+		int d417 = audio.audio.sidreg[0x17] & 0xff;
+		int d418 = audio.audio.sidreg[0x18] & 0xff;
+		st.cutoff = cast(ushort)((d416 << 3) | (d415 & 7));
+		st.res = cast(ubyte)(d417 >> 4);
+		st.mask = cast(ubyte)(d417 & 0x0f);
+		st.mode = cast(ubyte)(d418 & 0x70);
+		st.valid = (st.mask & 0x07) != 0 || st.mode != 0;
+		return st;
 	}
 
 	override void stepVoice(int i) {

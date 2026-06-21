@@ -454,6 +454,11 @@ straight from the filter table (a step that sets the cutoff, or a held value)
 is shown in one color, while a cutoff that is being **calculated** by a running
 sweep is shown in another. Resonance, mode and mask are always table-exact.
 
+The trace covers the song's first pass; the SID filter is global, so its state
+can differ on later loop iterations. During playback the highlighted (playing)
+row therefore shows the **live** filter registers — always matching what you
+hear — while the other rows show the traced estimate.
+
 Press <kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>F</kbd> (or **View → Filter track**)
 to hide or show the column.
 
