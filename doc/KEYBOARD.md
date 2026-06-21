@@ -30,7 +30,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 
 | Shortcut | Action |
 |---|---|
-|  | Clear the song and start a new project |
+| `Ctrl-N` | Clear the song and start a new project |
 | `Shift-F10` | Export song: Full player .prg / Optimized .prg / PSID (options dialog) |
 | `F9` | Open the Load song dialog |
 | `F10` | Open the Save song dialog |

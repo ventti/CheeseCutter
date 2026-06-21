@@ -1,0 +1,22 @@
+# TODO list
+This file describes individual tasks separated with `---`.
+Read method and act accordingly.
+If worktree is defined, create a worktree with a branch with given name. Worktree directory in same dir as main repo (CheeseCutter) but with name suffixed, e.g. feat/this-and-that --> "CheeseCutter.this-and-that"
+If status indicates work in progress, such as "WIP" or "Draft", skip that task, it's not ready yet 
+For completed tasks, set status DONE when implemented and committed.
+Create a plan first if the task seems complex.
+
+---
+If user has track data copied to clipboard and they highlight an area before paste, the clipboard content shall be pasted to that area, not beyond it. if no area is selected, keep existing behavior
+---
+Assign <ctrl>-<n> to "New" song. (File->New menu item).
+Status: DONE
+---
+When using follow-playback (<shift>-<F1>), the filter track has a cursor indicator (black on blue) while the channels have not. change it to white-on-blue and expand to be visible on top of the channels too
+---
+After some point the filter value rendering just stops working and shows 000 even when user can hear the filter is active
+---
+When user has activated the wave table, highlight with cyan the byte 8 (wave table pointer) column on Instruments. Do the same for pulse and filter tables and their corresponding columns, respectively.
+---
+"Go to instrument wave" <G> should work on instrument table too, and it shall be visible in the menu as well. Instead of "Tables" menu, it should be on "Navigate" menu.
+---
