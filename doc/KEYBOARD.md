@@ -112,6 +112,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Alt-6` / `Alt-P` | Jump to Pulse table |
 | `Alt-V` | Jump to Sequencer |
 | `Alt-5` / `Alt-W` | Jump to Wave table |
+|  | Jump to the active instrument's wave-table row |
 | `Alt-1` | Jump to voice 1 |
 | `Alt-2` | Jump to voice 2 |
 | `Alt-3` | Jump to voice 3 |
@@ -244,7 +245,6 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `.` | Clear current wave row |
 | `Delete` | Delete a row |
 | `Insert` | Insert a row |
-| `G` | Jump to current instrument's wave |
 | `Shift-Home` | Jump to first row |
 | `Shift-End` | Jump to last used row |
 

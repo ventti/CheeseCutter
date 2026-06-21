@@ -451,6 +451,12 @@ class InsValueTable : HexTable {
 			default: break;
 			}
 		}
+		// G (no modifiers): jump to the active instrument's wave-table row,
+		// focusing the wave table — same as on the player tables.
+		if(!(key.mods & (KMOD_CTRL | KMOD_ALT)) && key.raw == SDLK_g) {
+			UI.toplevel.gotoInstrumentWave();
+			return OK;
+		}
 		int r = super.keypress(key);
 		if(r  == WRAP) {
 			stepColumn(1);
