@@ -34,7 +34,9 @@ private enum PAGE_ROWS = 30;      // lines per help page (HelpDialog ~36 tall)
 /// `keys` may list several shortcuts (e.g. "Alt-4 / Alt-I").
 private string helpLine(string keys, string desc) {
 	int pad = max(2, LEADER_WIDTH - cast(int)keys.length);
-	return keys ~ replicate(".", pad) ~ desc;
+	// Dotted leader in dark gray (`0b); the caller emits the line with `0f, so
+	// restore that for the description after the dots.
+	return keys ~ "`0b" ~ replicate(".", pad) ~ "`0f" ~ desc;
 }
 
 /// Markdown rendering of a shortcut list: each in its own code span, joined
