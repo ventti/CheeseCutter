@@ -101,7 +101,14 @@ class SeqVoice : Voice, Undoable {
 				 return seqinput.step(-1);
 			 case SDLK_RIGHT:
 				 return seqinput.step(1);
-			 case SDLK_INSERT, SDLK_RETURN:
+			 case SDLK_RETURN:
+				 // Enter (no modifiers) picks the current row's instrument as the
+				 // active instrument, the same way on any column. An empty row
+				 // (no instrument) is a no-op. Enter never inserts — use Insert.
+				 if(activeRow.element.instr.hasValue)
+					 UI.activateInstrument(activeRow.element.instr.value);
+				 break;
+			 case SDLK_INSERT:
 				 saveState();
 				 activeRow.seq.insert(activeRow.seqOffset);
 				 break;

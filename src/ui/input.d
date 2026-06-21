@@ -791,10 +791,8 @@ class InputNote : ExtendedInput {
 		}
 
 		switch(key.unicode) {
-		case SDLK_RETURN:
-			if(element.instr.value < 0x30)
-				UI.activateInstrument(element.instr.value);
-			break;
+		// Enter is handled uniformly in SeqVoice (grab the row's instrument on
+		// any column); the note column no longer needs its own handler.
 		case SDLK_COMMA:
 			if(element.note.value >= 3 && element.note.value < 0x5f) {
 				valueChanged();
