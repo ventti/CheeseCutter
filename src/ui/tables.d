@@ -506,6 +506,17 @@ class InsValueTable : HexTable {
 		int i, j, ofs;
 		int myrow = row;
 
+		// When a player table is the active bottom table, cyan-highlight the
+		// instrument byte column that points into it (wave=byte 8, pulse=byte 6,
+		// filter=byte 5) so the link between the two is visible.
+		int hlCol = -1;
+		if(UI.toplevel !is null) {
+			auto aw = UI.toplevel.bottomTabSwitcher.activeWindow;
+			if(aw is UI.toplevel.wavetable) hlCol = 7;
+			else if(aw is UI.toplevel.pulsetable) hlCol = 5;
+			else if(aw is UI.toplevel.filtertable) hlCol = 4;
+		}
+
 		if(myrow > 48) myrow -= 48;
 		screen.fprint(area.x,area.y, "`b1I`01nstruments");
 
@@ -548,6 +559,8 @@ class InsValueTable : HexTable {
 		for(j=0; j<8; j++) {
 			ofs = p + j * 48;
 			int hl = isActiveInstrument ? activeInstrumentColor : (p == mark) ? 13 : 5;
+			// Pointer column for the active player table: cyan down the column.
+			if(j == hlCol) hl = activeInstrumentColor;
 			// Display "--" for zero values only if entire row is zeros
 			string displayVal = (allZeros && data[ofs] == 0) ? "--" : format("%02X", data[ofs]);
 			screen.cprint(area.x+3+j*3,area.y + i + 1,hl,0, displayVal ~ " ");
