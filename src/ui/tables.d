@@ -1074,7 +1074,7 @@ class TracksTable : Window, Undoable {
 
 	override void update() {
 		rebuildOffsets();
-		screen.fprint(area.x, area.y, "`01Tracks");
+		screen.fprint(area.x, area.y, "`01T`b1r`01acks");
 		for(int i = 0; i < visibleRows; i++) {
 			int rowIdx = viewOffset + i;
 			int y = area.y + i + 1;
