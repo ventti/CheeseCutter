@@ -126,8 +126,8 @@ _Generated from the shortcut registry (com.shortcuts)._
 
 | Shortcut | Action |
 |---|---|
-| `Ctrl-N` | Decrease row highlight value |
-| `Ctrl-M` | Increase row highlight value |
+| `Ctrl-,` | Decrease row highlight value |
+| `Ctrl-.` | Increase row highlight value |
 | `Ctrl-0` | Reset highlighting to current row |
 | `Ctrl-E` | Show/hide row counters for sequences |
 | `Ctrl-T` | Toggle notes relative to current transpose |

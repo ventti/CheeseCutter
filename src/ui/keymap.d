@@ -493,11 +493,11 @@ void registerContextShortcuts(UI ui) {
 				{ invokeKey(SDLK_BACKSPACE, KMOD_CTRL); });
 
 	sm.register("seq_highlight_inc", C.sequencer, "Display",
-				"Increase row highlight value", SDLK_m, KMOD_CTRL,
-				{ invokeKey(SDLK_m, KMOD_CTRL); });
+				"Increase row highlight value", SDLK_PERIOD, KMOD_CTRL,
+				{ invokeKey(SDLK_PERIOD, KMOD_CTRL); });
 	sm.register("seq_highlight_dec", C.sequencer, "Display",
-				"Decrease row highlight value", SDLK_n, KMOD_CTRL,
-				{ invokeKey(SDLK_n, KMOD_CTRL); });
+				"Decrease row highlight value", SDLK_COMMA, KMOD_CTRL,
+				{ invokeKey(SDLK_COMMA, KMOD_CTRL); });
 	sm.register("seq_highlight_reset", C.sequencer, "Display",
 				"Reset highlighting to current row", SDLK_0, KMOD_CTRL,
 				{ invokeKey(SDLK_0, KMOD_CTRL); });

@@ -431,11 +431,11 @@ abstract class VoiceTable : Window {
 			case SDLK_l:
 				centralize();
 				break;
-			case SDLK_m:
+			case SDLK_PERIOD:
 				if(song.highlight < 16)
 					song.highlight++;
 				break;
-			case SDLK_n:
+			case SDLK_COMMA:
 				if(song.highlight > 1)
 					song.highlight--;
 				break;

@@ -288,7 +288,7 @@ Use <kbd>F5</kbd>, <kbd>F6</kbd>, and <kbd>F7</kbd> to switch sequencer views:
 | <kbd>Enter</kbd> | Pick the current row's instrument as active (any column; empty row does nothing) |
 | <kbd>Ctrl</kbd>-<kbd>Q</kbd>/<kbd>A</kbd> | Transpose semitone up/down |
 | <kbd>Ctrl</kbd>-<kbd>W</kbd>/<kbd>S</kbd> | Transpose octave up/down |
-| <kbd>Ctrl</kbd>-<kbd>M</kbd>/<kbd>N</kbd> | Increase/decrease row highlight |
+| <kbd>Ctrl</kbd>-<kbd>.</kbd>/<kbd>,</kbd> | Increase/decrease row highlight |
 | <kbd>Ctrl</kbd>-<kbd>0</kbd> | Reset highlighting to current row |
 | <kbd>Ctrl</kbd>-<kbd>E</kbd> | Toggle row counters |
 | <kbd>Ctrl</kbd>-<kbd>T</kbd> | Toggle relative notes |
