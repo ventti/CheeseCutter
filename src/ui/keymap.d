@@ -169,6 +169,11 @@ void registerShortcuts(UI ui) {
 		toplevel.playFromCursor();
 	});
 
+	sm.register("play_from_cursor_follow", Ctx.global, "Playback",
+				"Play / resume from cursor with tracking", SDLK_F3, KMOD_SHIFT, {
+		playFromCursorFollow();
+	});
+
 	sm.register("stop_playback", Ctx.global, "Playback",
 				"Stop playback", SDLK_F4, 0, {
 		if(toplevel.fplayEnabled())
@@ -746,6 +751,7 @@ void applyMenuLabels(UI ui) {
 		setMenuLabel("play_from_beginning", "Play from start");
 		setMenuLabel("play_from_beginning_follow", "Play from start (track)");
 		setMenuLabel("play_from_cursor", "Play from cursor");
+		setMenuLabel("play_from_cursor_follow", "Play from cursor (track)");
 		setMenuLabel("stop_playback", "Stop");
 		setMenuLabel("toggle_follow_mode", "Tracking");
 		setMenuLabel("fast_forward_5", "Fast forward");

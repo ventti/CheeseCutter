@@ -166,6 +166,7 @@ In the load (<kbd>F9</kbd>), save (<kbd>F10</kbd>) and `.prg` export dialogs:
 | <kbd>F2</kbd> | Play from start |
 | <kbd>Shift</kbd>-<kbd>F2</kbd> | Play/resume from start with tracking |
 | <kbd>F3</kbd> | Play from cursor |
+| <kbd>Shift</kbd>-<kbd>F3</kbd> | Play from cursor with tracking (if already playing, just enables tracking) |
 | <kbd>F4</kbd> | Stop |
 | <kbd>F8</kbd> | Fast forward 5 frames |
 | <kbd>Shift</kbd>-<kbd>F8</kbd> | Fast forward 25 frames |
