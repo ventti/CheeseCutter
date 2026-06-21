@@ -398,6 +398,16 @@ final package class Toplevel : WindowSwitcher, Undoable {
 		}
 	}
 
+	// Focus the wave table and scroll it to the active instrument's wave-table
+	// row. Reachable from the instrument table and player tables (the G key) and
+	// the Navigate menu.
+	void gotoInstrumentWave() {
+		activateWindow(2);
+		// Alt modifier so the bottom tab-switcher treats this as a tab hotkey.
+		activeWindow.keypress(Keyinfo(SDLK_w, KMOD_ALT, 0));
+		wavetable.seekCurWave();
+	}
+
 	void activateInfobar() {
 		ui.activateDialog(UI.infobar);
 	}

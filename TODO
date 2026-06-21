@@ -19,4 +19,5 @@ After some point the filter value rendering just stops working and shows 000 eve
 When user has activated the wave table, highlight with cyan the byte 8 (wave table pointer) column on Instruments. Do the same for pulse and filter tables and their corresponding columns, respectively.
 ---
 "Go to instrument wave" <G> should work on instrument table too, and it shall be visible in the menu as well. Instead of "Tables" menu, it should be on "Navigate" menu.
+Status: DONE
 ---

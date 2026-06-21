@@ -691,9 +691,11 @@ void registerContextShortcuts(UI ui) {
 				{ invokeKey(SDLK_v, KMOD_CTRL); });
 
 	// --- Sub-tables (wave / pulse / filter) ---
-	sm.register("wave_goto_instr", C.subtable, "Tables",
-				"Jump to current instrument's wave", SDLK_g, 0,
-				{ invokeKey(SDLK_g, 0, 'g'); });
+	// Reachable via the Navigate menu and the G key on the instrument and player
+	// tables (the tables handle G directly; this entry gives it a menu home).
+	sm.registerMenuOnly("wave_goto_instr", Ctx.global, "Window navigation",
+				"Jump to the active instrument's wave-table row",
+				{ ui.toplevel.gotoInstrumentWave(); }, "Go to instr wave");
 	sm.register("wave_clear_row", C.subtable, "Tables",
 				"Clear current wave row", SDLK_PERIOD, 0,
 				{ invokeKey(SDLK_PERIOD, 0, '.'); });
