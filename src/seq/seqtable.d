@@ -395,35 +395,47 @@ class SequenceTable : VoiceTable, Undoable {
 			// cleared between frames; voice columns clear their own cells).
 			screen.cprint(colX, y, 1, 0, blank);
 
+			// The playing row is the cursor: draw its filter values white so they
+			// stay readable on the blue cursor bar drawn below.
+			bool cursorRow = (rowCounter == playRow);
+			enum cursorColor = 1; // white
+
 			// Past the loop point (or before song start) the trace has no data:
 			// leave the cell blank. Within the song, rows with no active filter
 			// show dashes like an empty note row.
 			if(rowCounter >= 0 && rowCounter < filterTrace.length()) {
 				FilterRowState st = filterTrace.at(rowCounter);
 				if(st.valid) {
-					int cutoffColor = st.sweeping ? filterCalcColor : filterStaticColor;
+					int cutoffColor = cursorRow ? cursorColor :
+						(st.sweeping ? filterCalcColor : filterStaticColor);
+					int fieldColor = cursorRow ? cursorColor : filterStaticColor;
 					screen.cprint(colX + 1, y, cutoffColor, 0, format("%03X", st.cutoff));
-					screen.cprint(colX + 5, y, filterStaticColor, 0, format("%X", st.res));
-					screen.cprint(colX + 7, y, filterStaticColor, 0, format("%c%c%c",
+					screen.cprint(colX + 5, y, fieldColor, 0, format("%X", st.res));
+					screen.cprint(colX + 7, y, fieldColor, 0, format("%c%c%c",
 								  (st.mode & 0x10) ? 'L' : '-',
 								  (st.mode & 0x20) ? 'B' : '-',
 								  (st.mode & 0x40) ? 'H' : '-'));
-					screen.cprint(colX + 11, y, filterStaticColor, 0, format("%c%c%c",
+					screen.cprint(colX + 11, y, fieldColor, 0, format("%c%c%c",
 								  (st.mask & 0x01) ? 'X' : '-',
 								  (st.mask & 0x02) ? 'X' : '-',
 								  (st.mask & 0x04) ? 'X' : '-'));
 				}
 				else {
-					screen.cprint(colX + 1, y, filterEmptyColor, 0, "---");
-					screen.cprint(colX + 5, y, filterEmptyColor, 0, "-");
-					screen.cprint(colX + 7, y, filterEmptyColor, 0, "---");
-					screen.cprint(colX + 11, y, filterEmptyColor, 0, "---");
+					int emptyColor = cursorRow ? cursorColor : filterEmptyColor;
+					screen.cprint(colX + 1, y, emptyColor, 0, "---");
+					screen.cprint(colX + 5, y, emptyColor, 0, "-");
+					screen.cprint(colX + 7, y, emptyColor, 0, "---");
+					screen.cprint(colX + 11, y, emptyColor, 0, "---");
 				}
 			}
 
-			// Match the voice columns' playback bar on the playing row.
-			if(rowCounter == playRow) {
-				for(int x = colX; x < colX + filterTrackWidth; x++)
+			// Playing-row cursor bar (white-on-blue). In follow-play the voice
+			// columns don't draw their own bar on the centred row, so extend the
+			// blue bar across the channels too to make the cursor visible there.
+			if(cursorRow) {
+				bool follow = UI.toplevel !is null && UI.toplevel.fplayEnabled();
+				int barStart = follow ? voices[0].area.x : colX;
+				for(int x = barStart; x < colX + filterTrackWidth; x++)
 					if(screen.getbg(x, y) == 0)
 						screen.setbg(x, y, playbackBarColor);
 			}
