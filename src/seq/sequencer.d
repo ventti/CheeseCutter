@@ -805,6 +805,10 @@ abstract class VoiceTable : Window {
 	/// Paste-new: insert fresh track(s)/sequence(s) at the cursor sized to hold
 	/// clipboard column `clipCol`, then write its rows.
 	protected void pasteNewColumn(int voiceIdx, int clipCol) {}
+	/// Write a single clipboard cell to an absolute (voiceIdx, absRow) position.
+	/// Used by the paste-into-selection path. When `mergeOnly`, write only if the
+	/// target cell is empty. Out-of-range positions are ignored.
+	protected void writeCellAt(int voiceIdx, int absRow, const(ubyte)[] src, bool mergeOnly) {}
 	/// Undo checkpoint before a mutating verb.
 	protected void saveSelState() {}
 	/// Re-sync inputs / cursor after a mutation.
@@ -863,10 +867,21 @@ abstract class VoiceTable : Window {
 		if(!selectionEnabled || rowClip.empty || rowClip.kind != cellKind())
 			return;
 		saveSelState();
-		for(int c = 0; c < rowClip.cols; c++) {
-			int tcol = activeVoiceNum + c;
-			if(tcol > 2) break;
-			pasteColumn(tcol, c, mergeOnly);
+		if(sel.active) {
+			// A highlighted area is the paste target: anchor at its top-left and
+			// clip the clipboard to it — never write beyond the selection.
+			int cols = rowClip.cols < sel.cols ? rowClip.cols : sel.cols;
+			int rows = rowClip.rows < sel.rows ? rowClip.rows : sel.rows;
+			for(int c = 0; c < cols; c++)
+				for(int r = 0; r < rows; r++)
+					writeCellAt(sel.loCol + c, sel.loRow + r, rowClip.cell(c, r), mergeOnly);
+		}
+		else {
+			for(int c = 0; c < rowClip.cols; c++) {
+				int tcol = activeVoiceNum + c;
+				if(tcol > 2) break;
+				pasteColumn(tcol, c, mergeOnly);
+			}
 		}
 		afterMutate();
 	}
