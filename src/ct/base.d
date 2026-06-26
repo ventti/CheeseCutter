@@ -1340,6 +1340,14 @@ class Song {
 		songspeeds[] = 5;
 		initialize(bin);
 		sidbuf = memspace[0xd400 .. 0xd419];
+		// A fresh song is built from player.bin, which carries the bundled demo
+		// tune's metadata. Replace it with neutral placeholders so a new song
+		// (and its Ultimate/SID export) never shows the demo's name.
+		void setMeta(ref char[32] f, string s) { f[] = ' '; f[0 .. s.length] = s[]; }
+		setMeta(title, "<title>");
+		setMeta(author, "<author>");
+		setMeta(release, "<release>");
+		message[] = ' ';
 	}
 
 
