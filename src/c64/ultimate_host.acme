@@ -41,11 +41,27 @@
 ;;; ----------------------------------------------------------------------
 
 COL_BLACK	= 0
-COL_GREEN	= 5		; the C64 "green" is a dark green
+COL_WHITE	= 1		; info text (title/author/release), matches CheeseCutter
+COL_GREEN	= 5		; status labels (and the raster-time meter border)
+COL_DKGREY	= 11		; muted voice indicator
+COL_GREY	= 12		; the app-version line
+COL_LIGREEN	= 13		; status values (matches the editor's value color)
 COL_LTGREY	= 15
+COLRAM		= $d800 - $0400	; add to a screen address to get its colour-RAM cell
 
-;;; Screen cells of the live digits in the "Time: MM:SS / $RR" row (row 7).
-SCR_ROW7	= $0400 + 7*40
+;;; Screen rows (the data block was shifted one row down; row 0 = app version).
+SCR_ROW_FILE	= $0400 + 2*40	; .ct filename
+SCR_ROW_PLAYER	= $0400 + 3*40
+SCR_ROW_TITLE	= $0400 + 5*40
+SCR_ROW_AUTHOR	= $0400 + 6*40
+SCR_ROW_RELEASE	= $0400 + 7*40
+SCR_ROW_TIME	= $0400 + 9*40
+SCR_ROW_SID	= $0400 + 11*40	; detected SID model
+SCR_ROW_VOICES	= $0400 + 12*40	; voice on/off
+SCR_ROW_POS	= SCR_ROW_TIME + 21	; player position shares the Time row (4 cols after $RR)
+
+;;; Screen cells of the live digits in the "Time: MM:SS / $RR" row.
+SCR_ROW7	= SCR_ROW_TIME
 CELL_MIN10	= SCR_ROW7 + 6
 CELL_MIN1	= SCR_ROW7 + 7
 CELL_SEC10	= SCR_ROW7 + 9
@@ -127,6 +143,7 @@ install_nohi
 
 		lda ctrl_subtune
 		jsr INITADDR		; init the player (silent first frame)
+		jsr detect_sid		; one-shot 6581/8580 probe -> ctrl_sidmodel (host reads it)
 !if STARTMODE = 0 {
 		jsr silence		; host-driven: stay quiet until REQ_RESTART (user Play)
 }
@@ -153,7 +170,7 @@ clrscr		lda #$20		; space
 		sta $0500,x
 		sta $0600,x
 		sta $06e8,x		; covers up to $07e7
-		lda #COL_LTGREY
+		lda #COL_WHITE		; base colour (info rows); paint_static recolours others
 		sta $d800,x
 		sta $d900,x
 		sta $da00,x
@@ -163,19 +180,22 @@ clrscr		lda #$20		; space
 
 		ldx #39
 ss0		lda sn_appver,x
-		sta $0400,x		; row 0
+		sta $0400,x		; row 0  (app version, grey)
+		lda sn_file,x
+		sta $0450,x		; row 2  (File: <name>)
 		lda sn_player,x
-		sta $0428,x		; row 1
-		lda sn_title,x
 		sta $0478,x		; row 3
-		lda sn_author,x
-		sta $04a0,x		; row 4
-		lda sn_release,x
+		lda sn_title,x
 		sta $04c8,x		; row 5
-		lda sn_status,x
+		lda sn_author,x
+		sta $04f0,x		; row 6
+		lda sn_release,x
 		sta $0518,x		; row 7
+		lda sn_status,x
+		sta $0568,x		; row 9  (Time / raster, + Pos painted alongside)
 		dex
 		bpl ss0
+		jsr paint_static	; recolour rows + paint the SID/Voices/Pos labels
 		rts
 
 ;;; ----------------------------------------
@@ -193,10 +213,16 @@ irqhandler
 		lda #$ff		; ack VIC raster IRQ
 		sta $d019
 
+		lda rasidx		; refresh the status display once per frame (slot 0
+		bne irq_nopaint		; only), not on every multispeed subtick
+		jsr paint_dynamic	; SID model / voice on-off / position
+irq_nopaint
+
 		;; --- handle one-shot host request, if any ---
 		lda ctrl_req
-		beq dispatch
-		cmp #1
+		bne hasreq
+		jmp dispatch		; no request (dispatch is too far for a branch now)
+hasreq		cmp #1
 		beq do_restart
 		cmp #2
 		beq do_keyjam
@@ -224,6 +250,9 @@ rst_cpnv	lda seed_newseq,x
 		sta fcnt		; restart the playback clock
 		sta secs
 		sta mins
+		sta pos_sub		; restart the player-position counter
+		sta pos_rows
+		sta pos_rows+1
 		lda ctrl_subtune
 		jsr INITADDR
 		lda #1
@@ -292,6 +321,8 @@ dispatch
 		sta $d020
 		jsr add_raster
 }
+		jsr apply_mute		; silence host-muted voices on the real SID
+		jsr pos_tick		; advance the player-position counter (once/frame)
 		jsr update_status	; repaint clock / raster meter once per frame
 		jmp nextline
 pf_mplay
@@ -308,6 +339,7 @@ pf_mplay
 		sta $d020
 		jsr add_raster
 }
+		jsr apply_mute		; keep muted voices silenced across mplay subticks
 		jmp nextline
 
 kjtick
@@ -411,37 +443,8 @@ dec2l		inx
 		pla
 		rts
 
-;;; Read the full 9-bit raster line: X = bit 8 (from $d011), A = $d012.
-read_raster
-		ldx #0
-		lda $d011
-		and #$80
-		beq rr_lo
-		ldx #1
-rr_lo		lda $d012
-		rts
-
-;;; rasacc += (raster now - ras_start), i.e. the raster lines the player call
-;;; that just ran consumed. Uses the full 9-bit line and corrects for the
-;;; PAL frame wrap (a call straddling line 311->0), then sums into rasacc.
-add_raster
-		jsr read_raster		; A = lo, X = hi (raster now)
-		sec
-		sbc ras_start		; A = after_lo - before_lo (sets borrow)
-		sta d_lo
-		txa
-		sbc ras_start_hi	; high byte of the signed difference
-		bpl ar_add		; >= 0: no wrap, d_lo is the line count
-		lda d_lo		; negative: wrapped, add 312 lines ($138)
-		clc
-		adc #$38		; low byte of 312; result < 256, carry ignored
-		sta d_lo
-ar_add
-		clc
-		lda rasacc
-		adc d_lo
-		sta rasacc
-		rts
+;;; (read_raster / add_raster relocated to free RAM below to keep this code
+;;; region under $0b00 — they're jsr'd, so the address doesn't matter.)
 
 ;;; value A (0..255) -> X = high-nibble char, A = low-nibble char
 hex2
@@ -485,6 +488,7 @@ rasval		!8 0		; published per-frame raster total (shown as $RR)
 rasacc		!8 0		; raster lines accumulated so far this frame
 rasidx		!8 0		; current slot 0..numslots-1 (which rasline we're on)
 
+!if * > $0b00 { !error "CODE REGION OVERFLOW: ends at ", * }
 ;;; ----------------------------------------
 ;;; Text rows in C64 screen codes, filled by ct/build.d (40 bytes each).
 ;;; ----------------------------------------
@@ -524,3 +528,265 @@ ctrl_kjinstr	!8 0		; keyjam instrument
 seed_tracklo	!fill 6, 0	; -> TRACKLO (t1/t2/t3 lo, then hi)
 seed_newseq	!fill 3, 0	; -> NEWSEQ (per voice)
 seed_voice	!fill 3, 0	; -> VOICE (voice-on mask)
+ctrl_sidmodel	!8 $ff		; detected SID: $ff=not yet, 0=6581, 1=8580 (host reads)
+
+;;; ----------------------------------------
+;;; SID model auto-detect (C=Hacking #20 "SID Type Auto-Detect"). The 6581 and
+;;; 8580 differ on combined waveforms: drive voice 3 with triangle+sawtooth and
+;;; the OSC3 readback ($d41b) is mostly zero with occasional bursts -- on the
+;;; 8580 a burst reaches >=$80, on the 6581 it stays well below. Blank the screen
+;;; (DEN=0) while sampling so bad lines don't steal cycles and perturb it. Runs
+;;; once from install (IRQs already masked). Result -> ctrl_sidmodel: 0=6581 1=8580.
+;;; ($d41b is the oscillator-3 waveform output, independent of gate/envelope.)
+;;; Lives here in free RAM (above the control block, below the $0e00 image) so the
+;;; routine never collides with the text rows the way it would after the code.
+;;; ----------------------------------------
+		* = $0c10
+detect_sid
+		lda $d011
+		pha			; save screen control
+		and #$ef		; DEN=0: blank screen -> no bad lines
+		sta $d011
+		lda #$20
+		sta $d40e		; voice 3 freq = $2020
+		sta $d40f
+		lda #$30		; triangle+sawtooth combined (gate off, test off)
+		sta $d412
+		ldy #8			; sample 8*256 = 2048 times (~13 osc periods)
+ds_outer	ldx #0
+ds_loop		lda $d41b		; OSC3 high byte
+		cmp #$80
+		bcs ds_8580		; a burst >= $80 -> 8580
+		inx
+		bne ds_loop
+		dey
+		bne ds_outer
+		lda #0			; no burst seen -> 6581
+		beq ds_store		; (always; A=0)
+ds_8580		lda #1
+ds_store	sta ctrl_sidmodel
+		pla
+		sta $d011		; restore screen
+		lda #0
+		sta $d412		; leave voice 3 silent
+		rts
+
+;;; ----------------------------------------
+;;; Mute: silence the voices the host has muted. The mirrored VOICE mask
+;;; (SEEDVOICE) holds $19 for a muted voice (the player redirects its writes
+;;; away), so we write $08 (TEST bit -> instant silence) to that voice's control
+;;; register every tick after the player -- the on-device equivalent of the
+;;; host-only muteSID(). Unmuted voices (mask 0/7/14) are left for the player.
+;;; ----------------------------------------
+apply_mute
+		lda SEEDVOICE+0
+		cmp #$19
+		bne am_2
+		lda #$08
+		sta $d404
+am_2		lda SEEDVOICE+1
+		cmp #$19
+		bne am_3
+		lda #$08
+		sta $d40b
+am_3		lda SEEDVOICE+2
+		cmp #$19
+		bne am_done
+		lda #$08
+		sta $d412
+am_done		rts
+
+;;; Advance the position counter once per frame. The player advances a row every
+;;; (SPEED+1) frames (its tempo counter runs SPEED..0 inclusive), so roll over when
+;;; pos_sub passes SPEED, not when it equals it (matches the audio / editor rate).
+pos_tick
+		inc pos_sub
+		lda pos_sub
+		cmp SPEEDADDR
+		bcc pt_done		; pos_sub < speed
+		beq pt_done		; pos_sub == speed (still within the row; roll at speed+1)
+		lda #0
+		sta pos_sub
+		inc pos_rows
+		bne pt_done
+		inc pos_rows+1
+pt_done		rts
+
+;;; One-time at install: colour the rows (clrscr filled everything white). App
+;;; version row grey; the four status rows green (their value cells get
+;;; light-green from the per-frame painters). Then paint the static labels.
+paint_static
+		ldx #39
+ps_l		lda #COL_GREY
+		sta $d800,x			; row 0  app version (grey)
+		lda #COL_GREEN
+		sta $d800+9*40,x		; row 9  Time (+Pos) dark-green base; values recoloured
+		sta $d800+11*40,x		; row 11 SID    (label; value recoloured by painter)
+		sta $d800+12*40,x		; row 12 Voices
+		dex
+		bpl ps_l
+		; File row (2) and Player row (3): dark-green label, bright-green value.
+		ldx #39
+ps_pl		lda #COL_LIGREEN
+		cpx #6
+		bcs ps_pl_f
+		lda #COL_GREEN			; "File: " label = cols 0..5
+ps_pl_f		sta $d800+2*40,x
+		lda #COL_LIGREEN
+		cpx #8
+		bcs ps_pl_p
+		lda #COL_GREEN			; "Player:" label = cols 0..7
+ps_pl_p		sta $d800+3*40,x
+		dex
+		bpl ps_pl
+		; static labels (explicit lowercase-charset screen codes)
+		ldx #4
+psl1		lda lbl_sid,x
+		sta SCR_ROW_SID,x
+		dex
+		bpl psl1
+		ldx #7
+psl2		lda lbl_voices,x
+		sta SCR_ROW_VOICES,x
+		dex
+		bpl psl2
+		ldx #4
+psl3		lda lbl_pos,x
+		sta SCR_ROW_POS,x
+		dex
+		bpl psl3
+		rts
+
+;;; Per-frame value painters (called from update_status).
+paint_dynamic
+		jsr paint_sid_model
+		jsr paint_voices
+		jsr paint_pos
+		jmp color_time_row
+
+;;; Colour the time VALUE "MM:SS / $RR" (cols 6..16, including its ':' and '/') by
+;;; play state: mid-grey stopped, bright green playing — like CheeseCutter. The
+;;; "Time:" label (cols 0..5) stays paint_static's constant dark green, as does
+;;; Pos (cols 21+, its own colours).
+color_time_row
+		ldy #COL_LIGREEN
+		lda ctrl_mode
+		cmp #1
+		beq ctr_set
+		ldy #COL_GREY
+ctr_set		tya
+		ldx #16
+ctr_l		sta SCR_ROW_TIME+COLRAM,x
+		dex
+		cpx #5
+		bne ctr_l		; colour cols 16..6; leave the "Time: " label (0..5)
+		rts
+
+;;; SID model digits at SCR_ROW_SID+5 ("6581"/"8580"); blank until detected.
+paint_sid_model
+		lda ctrl_sidmodel
+		cmp #2
+		bcc psm_show			; 0 or 1
+		ldx #3				; not detected yet -> blank
+psm_b		lda #$20
+		sta SCR_ROW_SID+5,x
+		dex
+		bpl psm_b
+		rts
+psm_show	asl				; model*4 (0 or 4) -> source offset
+		asl
+		tax
+		ldy #0
+psm_c		lda sidtxt,x
+		sta SCR_ROW_SID+5,y
+		lda #COL_LIGREEN
+		sta SCR_ROW_SID+5+COLRAM,y
+		inx
+		iny
+		cpy #4
+		bne psm_c
+		rts
+
+;;; Voice on/off digits '1' '2' '3' at SCR_ROW_VOICES+8/10/12: bright green when
+;;; enabled, dark-grey when muted (VOICE mask == $19).
+paint_voices
+		ldx #0				; voice index 0..2
+		ldy #0				; cell offset within the row (0,2,4 from +8)
+pv_l		txa
+		clc
+		adc #$31
+		sta SCR_ROW_VOICES+8,y		; '1'+i
+		lda SEEDVOICE,x
+		cmp #$19
+		bne pv_on
+		lda #COL_DKGREY			; muted
+		bne pv_col			; (always)
+pv_on		lda #COL_LIGREEN		; enabled -> bright green
+pv_col		sta SCR_ROW_VOICES+8+COLRAM,y
+		iny
+		iny
+		inx
+		cpx #3
+		bne pv_l
+		rts
+
+;;; Player position: 16-bit pos_rows -> 4 hex digits at SCR_ROW_POS+5 (matches
+;;; CheeseCutter, which shows the position in hex). Reuses hex2.
+paint_pos
+		lda pos_rows+1
+		jsr hex2			; X = high-nibble char, A = low-nibble char
+		stx SCR_ROW_POS+5
+		sta SCR_ROW_POS+6
+		lda pos_rows
+		jsr hex2
+		stx SCR_ROW_POS+7
+		sta SCR_ROW_POS+8
+		ldx #3
+pp_col		lda #COL_LIGREEN
+		sta SCR_ROW_POS+5+COLRAM,x
+		dex
+		bpl pp_col
+		rts
+
+;;; ---- data (free RAM) ----
+pos_sub		!8 0
+pos_rows	!8 0, 0
+sidtxt		!8 $36,$35,$38,$31, $38,$35,$38,$30	; "6581" "8580" (digit screen codes)
+lbl_sid		!8 $53,$49,$44,$3a,$20			; "SID: "
+lbl_voices	!8 $56,$0f,$09,$03,$05,$13,$3a,$20	; "Voices: "
+lbl_pos		!8 $50,$0f,$13,$3a,$20			; "Pos: "
+
+;;; Raster-meter helpers, relocated here from the (full) code region.
+read_raster
+		ldx #0
+		lda $d011
+		and #$80
+		beq rr_lo
+		ldx #1
+rr_lo		lda $d012
+		rts
+add_raster
+		jsr read_raster
+		sec
+		sbc ras_start
+		sta d_lo
+		txa
+		sbc ras_start_hi
+		bpl ar_add
+		lda d_lo
+		clc
+		adc #$38
+		sta d_lo
+ar_add
+		clc
+		lda rasacc
+		adc d_lo
+		sta rasacc
+		rts
+
+!if * > $0dd8 { !error "FREE-RAM OVERFLOW into sn_file ($0dd8): ends at ", * }
+;;; Host-sent .ct filename (already prefixed "File: " by ct/build.d), painted to
+;;; SCR_ROW_FILE by setup_screen. In free RAM (kept clear of the code above and
+;;; the $0e00 image). Keep ULTIMATE_SN_FILE in ct/build.d in sync.
+		* = $0dd8
+sn_file		!fill 40, $20

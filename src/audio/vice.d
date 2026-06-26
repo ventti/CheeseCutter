@@ -252,17 +252,21 @@ private class ViceTransport : RemoteTransport {
 		body ~= cast(ubyte)path.length;
 		body ~= cast(ubyte[])path.dup;
 		command(CMD_AUTOSTART, body);
+		resume();  // the command stops the monitor; let the machine boot + RUN the shim
 	}
 
-	// Read C64 RAM (for diagnostics). Returns the bytes [start, end].
-	ubyte[] readMem(int start, int end) {
+	// Read `len` bytes of C64 RAM from `addr` (the RemoteTransport read).
+	ubyte[] readMem(int addr, int len) {
+		if(len <= 0) return [];
+		int end = (addr + len - 1) & 0xffff;
 		ubyte[] body;
 		body ~= 0;                                    // side effects: none
-		appendLE16(body, cast(ushort)(start & 0xffff));
-		appendLE16(body, cast(ushort)(end & 0xffff));
+		appendLE16(body, cast(ushort)(addr & 0xffff));
+		appendLE16(body, cast(ushort)end);            // end is inclusive
 		body ~= 0;                                    // memspace: main memory
 		appendLE16(body, ramBank);
 		auto r = command(CMD_MEM_GET, body);
+		resume();  // a command stops the monitor; keep the C64 running after the read
 		if(r.length < 2) return [];
 		int n = r[0] | (r[1] << 8);
 		return r[2 .. 2 + n];
@@ -340,11 +344,9 @@ private __gshared ViceTransport active;
 // player. Returns -1 if no VICE transport is active.
 int debugRunningCheck() {
 	if(active is null) return -1;
-	auto a = active.readMem(0x1900, 0x1990);
-	active.resume();
+	auto a = active.readMem(0x1900, 0x1990 - 0x1900 + 1);   // readMem resumes the machine
 	Thread.sleep(dur!"msecs"(500));
-	auto b = active.readMem(0x1900, 0x1990);
-	active.resume();
+	auto b = active.readMem(0x1900, 0x1990 - 0x1900 + 1);
 	int diff = 0;
 	foreach(i; 0 .. (a.length < b.length ? a.length : b.length))
 		if(a[i] != b[i]) diff++;

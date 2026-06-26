@@ -321,6 +321,7 @@ enum ULTIMATE_SN_RELEASE = 0x0b50;
 enum ULTIMATE_SN_APPVER = 0x0b78;
 enum ULTIMATE_SN_PLAYER = 0x0ba0;
 enum ULTIMATE_SN_STATUS = 0x0bc8;
+enum ULTIMATE_SN_FILE = 0x0dd8;    // .ct filename row (free RAM; matches ultimate_host.acme)
 
 // ASCII -> C64 screen code for the lowercase/mixed charset (VIC char base
 // $1800, set by the shim). A-Z map to $41-$5A, a-z to $01-$1A.
@@ -342,7 +343,8 @@ private ubyte[] wrapWithShim(Song song, bool ntsc, bool autoPlay,
 							 int initAddr, int playAddr, int mplayAddr,
 							 int subnote, int submplay, int shtrans,
 							 bool newKeyjam, int startSubtune,
-							 bool showInfo, bool showRastertime, bool showTimer) {
+							 bool showInfo, bool showRastertime, bool showTimer,
+							 string filename = "") {
 	int mult = song.multiplier < 1 ? 1 : song.multiplier;
 	if(mult > 16) mult = 16;   // the shim reserves 16 raster slots
 	// The shim is driven by a VIC raster IRQ on `mult` pre-defined lines per
@@ -376,6 +378,9 @@ private ubyte[] wrapWithShim(Song song, bool ntsc, bool autoPlay,
 		format("SEEDTRACKLO = $%04x\n", song.offsets[Offsets.TRACKLO] & 0xffff) ~
 		format("SEEDNEWSEQ = $%04x\n", song.offsets[Offsets.NEWSEQ] & 0xffff) ~
 		format("SEEDVOICE = $%04x\n", song.offsets[Offsets.VOICE] & 0xffff) ~
+		// The player's SPEED variable (frames per row) — the shim derives the
+		// on-screen position counter from it.
+		format("SPEEDADDR = $%04x\n", song.offsets[Offsets.SPEED] & 0xffff) ~
 		format("NEWKEYJAM = %d\n", newKeyjam ? 1 : 0) ~
 		format("FRAMERATE = %d\n", ntsc ? 60 : 50) ~
 		format("STARTMODE = %d\n", autoPlay ? 1 : 0) ~
@@ -420,6 +425,7 @@ private ubyte[] wrapWithShim(Song song, bool ntsc, bool autoPlay,
 	if(!showTimer)      status[6 .. 11] = ' ';   // MM:SS cells
 	if(!showRastertime) status[12 .. 17] = ' ';  // "/ $RR" cells
 	putText(ULTIMATE_SN_STATUS, (showTimer || showRastertime) ? cast(const(char)[])status : "");
+	putText(ULTIMATE_SN_FILE, filename.length ? ("File: " ~ filename) : "");
 
 	// Poke the raster-line table the shim reads (same fixed-address mechanism).
 	void shimPoke(int addr, int v) { prg[(addr - 0x0801) + 2] = cast(ubyte)v; }
@@ -436,7 +442,7 @@ private ubyte[] wrapWithShim(Song song, bool ntsc, bool autoPlay,
 
 ubyte[] buildResidentImage(Song song, bool ntsc, bool autoPlay,
 						   bool showInfo = true, bool showRastertime = true,
-						   bool showTimer = true) {
+						   bool showTimer = true, string filename = "") {
 	bool newKeyjam = song.ver > 7;
 	int subnote = newKeyjam ? song.offsets[Offsets.Subnoteplay] : 0x1009;
 	int submplay = newKeyjam ? song.offsets[Offsets.Submplayplay] : 0x100c;
@@ -448,7 +454,7 @@ ubyte[] buildResidentImage(Song song, bool ntsc, bool autoPlay,
 	ubyte[] liveImg = song.memspace[ULTIMATE_IMG_LO .. ULTIMATE_IMG_HI].dup;
 	ubyte[] prg = wrapWithShim(song, ntsc, autoPlay, liveImg, ULTIMATE_IMG_LO,
 							   0x1000, 0x1003, 0x1006, subnote, submplay, shtrans,
-							   newKeyjam, 0, showInfo, showRastertime, showTimer);
+							   newKeyjam, 0, showInfo, showRastertime, showTimer, filename);
 
 	// Prime the player to start the current subtune from the top, mirroring
 	// audio.player.initPlayOffset([0,0,0],[0,0,0]) + all voices on. The

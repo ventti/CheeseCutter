@@ -253,7 +253,7 @@ void mainloop(bool verbose) {
 		// Mirror any edited song data to the remote backend (no-op when
 		// nothing changed). Re-injects the image if a new song was loaded.
 		if(audio.remote.isActive()) {
-			audio.remote.ensureLoaded(song);
+			audio.remote.ensureLoaded(song);   // also drives the post-inject SID readback
 			audio.remote.syncDeltas(song);
 		}
 	}

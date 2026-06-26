@@ -83,6 +83,26 @@ private class UltimateTransport : RemoteTransport {
 		httpRequest("POST", format("/v1/machine:writemem?address=%04X", addr & 0xffff), data);
 	}
 
+	// readmem is a GET that returns the bytes as the body (works even while the
+	// POST handlers are unavailable). We capture the body here rather than via the
+	// shared httpRequest, whose onReceive discards it.
+	ubyte[] readMem(int addr, int len) {
+		ubyte[] buf;
+		string url = format("http://%s:%d/v1/machine:readmem?address=%04X&length=%d",
+							 host, port, addr & 0xffff, len);
+		auto http = HTTP(url);
+		http.method = HTTP.Method.get;
+		http.connectTimeout = dur!"seconds"(3);
+		if(password.length)
+			http.addRequestHeader("X-Password", password);
+		http.onReceive = (ubyte[] data) { buf ~= data; return data.length; };
+		http.perform();
+		auto code = http.statusLine.code;
+		if(code >= 400)
+			throw new Exception(format("C64 Ultimate: HTTP %d for readmem", code));
+		return buf;
+	}
+
 	string name() nothrow { return "Ultimate"; }
 
 	void shutdown() nothrow {
