@@ -28,8 +28,11 @@ class RemoteUnavailableException : Exception {
 	this(string msg) { super(msg); }
 }
 
-// Control block layout — must match ultimate_host.acme ($0810).
-enum CTRL_ADDR = 0x0810;
+// Control/command block layout — must match ultimate_host.acme ($0bf0). The
+// request, keyjam fields and position seeds are one contiguous block so a
+// restart/keyjam is a single writemem (each ~150ms on real hardware, so request
+// count is what matters).
+enum CTRL_ADDR = 0x0bf0;
 enum {
 	CTRL_MODE = 0,
 	CTRL_REQ = 1,
@@ -37,6 +40,10 @@ enum {
 	CTRL_KJNOTE = 3,
 	CTRL_KJVOICE = 4,
 	CTRL_KJINSTR = 5,
+	CTRL_SEED_TRACKLO = 6,   // 6 bytes -> TRACKLO (applied by the shim on restart)
+	CTRL_SEED_NEWSEQ = 12,   // 3 bytes -> NEWSEQ
+	CTRL_SEED_VOICE = 15,    // 3 bytes -> VOICE (restart and keyjam)
+	CTRL_BLOCK_LEN = 18,
 }
 enum {
 	REQ_RESTART = 1,
@@ -58,6 +65,8 @@ interface RemoteTransport {
 	void writeMem(int addr, const(ubyte)[] data);
 	// Tear down on app exit: reset hardware / detach emulator. Must not throw.
 	void shutdown() nothrow;
+	// Short backend name for the UI (e.g. "Ultimate", "Vice").
+	string name() nothrow;
 }
 
 private struct Region { int addr; int len; }
@@ -65,6 +74,12 @@ private __gshared ubyte[65536] shadow;
 private __gshared Region[] regions;
 private __gshared bool loaded = false;
 private __gshared bool reloadPending = false;
+// Cached resident image. Building it runs the (non-reentrant, leaky) ACME
+// assembler, so we assemble ONCE per song and only re-upload the cached bytes on
+// connection retries — re-assembling every retry would accumulate memory and
+// eventually crash the assembler. Invalidated by markReload (song changed).
+private __gshared ubyte[] cachedPrg;
+private __gshared bool prgValid = false;
 private __gshared bool ntscMode = false;
 private __gshared RemoteTransport transport; // null = no remote backend active
 private __gshared MonoTime nextRetry;        // earliest next (re)establish attempt
@@ -74,13 +89,32 @@ enum RETRY_BACKOFF = 2;                       // seconds between recovery attemp
 bool isActive() nothrow { return transport !is null; }
 bool isLoaded() nothrow { return loaded; }
 
-// Install a transport (called once at startup by --ultimate / --vice wiring).
-void useTransport(RemoteTransport t) { transport = t; }
+// Name of the active backend for the UI ("Ultimate"/"Vice"), or "" if local.
+string backendName() nothrow { return transport is null ? "" : transport.name(); }
+
+// Install a transport (called at startup by --ultimate / --vice wiring, and at
+// runtime by the Properties dialog when switching backend). Shuts the previous
+// transport down first and flags a re-inject so the next ensureLoaded brings the
+// new backend up. Pass null to return to local-only playback.
+void useTransport(RemoteTransport t) {
+	if(transport !is null && transport !is t) {
+		try { transport.shutdown(); } catch(Throwable) {}
+	}
+	transport = t;
+	loaded = false;
+	reloadPending = (t !is null);
+	wasDown = false;
+	nextRetry = MonoTime.zero;   // allow an immediate (re)connect attempt
+}
+
+// Switch back to local reSID playback (no remote backend).
+void goLocal() { useTransport(null); }
+
 void setMode(bool ntsc) { ntscMode = ntsc; }
 
 // Mark that the resident image is stale (e.g. a different song was loaded);
-// it will be re-injected on the next ensureLoaded().
-void markReload() nothrow { reloadPending = true; loaded = false; }
+// it will be rebuilt and re-injected on the next ensureLoaded().
+void markReload() nothrow { reloadPending = true; loaded = false; prgValid = false; }
 
 // ---------------------------------------------------------------- mirroring
 
@@ -129,9 +163,15 @@ void ensureLoaded(Song song) {
 	if(MonoTime.currTime < nextRetry) return;
 	try {
 		transport.connect();   // (re)launch / (re)connect; idempotent
-		buildRegions(song);
-		auto prg = buildResidentImage(song, ntscMode, false); // host starts playback on Play
-		transport.runProgram(prg);
+		// Assemble the resident image only when it's actually stale (first bring-up
+		// or a song change). On a plain connection retry we reuse the cached bytes,
+		// so the leaky ACME assembler is never re-run in a tight retry loop.
+		if(!prgValid) {
+			buildRegions(song);
+			cachedPrg = buildResidentImage(song, ntscMode, false); // host starts playback on Play
+			prgValid = true;
+		}
+		transport.runProgram(cachedPrg);
 		shadow[] = song.memspace[];
 		loaded = true;
 		reloadPending = false;
@@ -160,27 +200,25 @@ void ensureLoaded(Song song) {
 }
 
 // Push edited song-data bytes to C64 RAM. Cheap when nothing changed.
+//
+// One writemem per dirty *region*, covering its first..last changed byte in a
+// single request. On real hardware a request is ~150ms fixed + ~6ms/KB, so an
+// extra request costs as much as ~25KB of redundant payload: collapsing a
+// region's scattered edits (and the clean bytes between them) into one write is
+// always the win. Each region is bounded mirror data, so the span never reaches
+// runtime/position vars or I/O.
 void syncDeltas(Song song) {
 	if(transport is null || !loaded) return;
 	try {
 		foreach(r; regions) {
 			int end = r.addr + r.len;
-			int i = r.addr;
-			while(i < end) {
-				while(i < end && song.memspace[i] == shadow[i]) i++;
-				if(i >= end) break;
-				// Extend the dirty span, coalescing short runs of equal bytes.
-				int j = i, lastDiff = i, gap = 0;
-				while(j < end) {
-					if(song.memspace[j] != shadow[j]) { lastDiff = j; gap = 0; }
-					else if(++gap > 8) break;
-					j++;
-				}
-				int spanEnd = lastDiff + 1;
-				transport.writeMem(i, song.memspace[i .. spanEnd]);
-				shadow[i .. spanEnd] = song.memspace[i .. spanEnd];
-				i = spanEnd;
-			}
+			int lo = -1, hi = -1;
+			foreach(i; r.addr .. end)
+				if(song.memspace[i] != shadow[i]) { if(lo < 0) lo = i; hi = i; }
+			if(lo < 0) continue;   // region unchanged
+			int spanEnd = hi + 1;
+			transport.writeMem(lo, song.memspace[lo .. spanEnd]);
+			shadow[lo .. spanEnd] = song.memspace[lo .. spanEnd];
 		}
 	}
 	catch(Exception e) {
@@ -196,17 +234,37 @@ private void pushBytes(Song song, int addr, int len) {
 	shadow[addr .. addr + len] = song.memspace[addr .. addr + len];
 }
 
-// Start playback from a position. song.buffer must already hold the poked
-// track/sequence offsets (initPlayOffset ran in audio.player).
+// Issue a one-shot command as a single writemem: the request byte, keyjam
+// fields and the position seeds (read from song.memspace, where initPlayOffset
+// / playNote already poked them) in one contiguous block from CTRL_REQ to the
+// end. The shim applies the seeds to the player's own vars and clears the
+// request next IRQ; the writemem DMA is atomic vs that IRQ (the Ultimate halts
+// the CPU during DMA), so the request is never seen with half-written seeds.
+private void writeCommand(Song song, ubyte req, ubyte subtune,
+						  ubyte kjnote, ubyte kjvoice, ubyte kjinstr) {
+	ubyte[CTRL_BLOCK_LEN - CTRL_REQ] b;   // CTRL_REQ .. end of block
+	b[CTRL_REQ      - CTRL_REQ] = req;
+	b[CTRL_SUBTUNE  - CTRL_REQ] = subtune;
+	b[CTRL_KJNOTE   - CTRL_REQ] = kjnote;
+	b[CTRL_KJVOICE  - CTRL_REQ] = kjvoice;
+	b[CTRL_KJINSTR  - CTRL_REQ] = kjinstr;
+	void seed(int dst, int off, int len) {
+		b[dst - CTRL_REQ .. dst - CTRL_REQ + len] = song.memspace[off .. off + len];
+	}
+	seed(CTRL_SEED_TRACKLO, song.offsets[Offsets.TRACKLO], 6);
+	seed(CTRL_SEED_NEWSEQ,  song.offsets[Offsets.NEWSEQ], 3);
+	seed(CTRL_SEED_VOICE,   song.offsets[Offsets.VOICE], 3);
+	transport.writeMem(CTRL_ADDR + CTRL_REQ, b[]);
+}
+
+// Start playback from a position. song.memspace must already hold the poked
+// track/sequence offsets (initPlayOffset ran in audio.player); the shim seeds
+// them into the player on restart.
 void cmdRestart(Song song, ubyte subtune) {
 	if(transport is null || !loaded) return;
 	try {
 		syncDeltas(song);
-		pushBytes(song, song.offsets[Offsets.TRACKLO], 6);
-		pushBytes(song, song.offsets[Offsets.NEWSEQ], 3);
-		pushBytes(song, song.offsets[Offsets.VOICE], 3);
-		transport.writeMem(CTRL_ADDR + CTRL_SUBTUNE, [subtune]);
-		transport.writeMem(CTRL_ADDR + CTRL_REQ, [cast(ubyte)REQ_RESTART]);
+		writeCommand(song, cast(ubyte)REQ_RESTART, subtune, 0, 0, 0);
 	}
 	catch(Exception e) { stderr.writeln("Remote: restart failed: ", e.msg); loaded = false; }
 }
@@ -214,11 +272,9 @@ void cmdRestart(Song song, ubyte subtune) {
 void cmdKeyjam(Song song, int note, int voice, int instr) {
 	if(transport is null || !loaded) return;
 	try {
-		syncDeltas(song);
-		pushBytes(song, song.offsets[Offsets.VOICE], 3); // voice-on mask set by playNote
-		transport.writeMem(CTRL_ADDR + CTRL_KJNOTE,
-				 [cast(ubyte)note, cast(ubyte)voice, cast(ubyte)instr]);
-		transport.writeMem(CTRL_ADDR + CTRL_REQ, [cast(ubyte)REQ_KEYJAM]);
+		syncDeltas(song);   // voice-on mask (set by playNote) rides along as the voice seed
+		writeCommand(song, cast(ubyte)REQ_KEYJAM, 0,
+					 cast(ubyte)note, cast(ubyte)voice, cast(ubyte)instr);
 	}
 	catch(Exception e) { stderr.writeln("Remote: keyjam failed: ", e.msg); loaded = false; }
 }

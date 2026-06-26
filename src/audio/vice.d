@@ -282,6 +282,8 @@ private class ViceTransport : RemoteTransport {
 		resume();  // keep the C64 running after the DMA write
 	}
 
+	string name() nothrow { return "Vice"; }
+
 	void shutdown() nothrow {
 		// Leave any launched x64sc running so the user keeps hearing it. VICE
 		// "opens" (pauses) the monitor when a client disconnects, so resume
