@@ -19,6 +19,7 @@ import audio.audio, audio.callback, audio.timer;
 static import audio.remote;
 static import audio.ultimate;
 static import audio.vice;
+static import com.config;
 import manpage;
 import std.stdio;
 import std.string;
@@ -336,6 +337,10 @@ int main(char[][] args) {
 	bool viceOn = false;
 	string viceTarget;
 	int vicePort = 0; // 0 => transport default (6502)
+
+	// Read persisted user preferences (creates the file with defaults if absent).
+	// These seed the backend/driver below; explicit CLI flags still take priority.
+	com.config.load();
   // DerelictSDL2.load();
 
 	scope(exit) {
@@ -504,12 +509,29 @@ int main(char[][] args) {
 		std.stdio.stderr.writeln("Error: --ultimate and --vice are mutually exclusive.");
 		return -1;
 	}
+	// No backend on the command line: fall back to the saved preference.
+	if(!ultimateOn && !viceOn) {
+		if(com.config.prefs.backend == "ultimate") {
+			ultimateOn = true;
+			ultimateHost = com.config.prefs.ultimateHost;
+			ultimatePort = com.config.prefs.ultimatePort;
+		}
+		else if(com.config.prefs.backend == "vice") {
+			viceOn = true;
+			viceTarget = com.config.prefs.x64scPath;
+		}
+	}
 	if(ultimateOn)
 		audio.ultimate.configure(ultimateHost, ultimatePort, audio.player.ntsc != 0);
 	if(viceOn)
 		audio.vice.configure(viceTarget, vicePort, audio.player.ntsc != 0);
 
 	audio.player.init();
+
+	// Apply the saved SDL audio driver (empty = SDL default). Done after the
+	// device is open; setAudioDriver re-opens it with the chosen driver.
+	if(com.config.prefs.audioDriver.length)
+		audio.audio.setAudioDriver(com.config.prefs.audioDriver);
 
 	// Initialize video and get the actual sequencer height
 	int actualSeqHeight;

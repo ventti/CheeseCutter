@@ -29,6 +29,7 @@ import ui.dialogs;
 import seq.fplay;
 import com.fb;
 import com.util;
+import com.config : Prefs;
 import com.shortcuts;
 import ui.shorthelp;
 import ui.menubar;
@@ -61,6 +62,7 @@ final class UI {
 		AboutDialog aboutdialog;
 		FileSelectorDialog loaddialog, savedialog, exportsavedialog;
 		ExportOptionsDialog exportDialog, renderDialog;
+		PropertiesDialog propertiesDialog;
 		ExportOptions exportOpts;
 	}
 	enum SPLASH_DURATION_MS = 2500;
@@ -103,6 +105,7 @@ final class UI {
 												  dialog_width), &saveExportCallback, "Export song");
 		exportDialog = new ExportOptionsDialog(&exportConfirm, false);
 		renderDialog = new ExportOptionsDialog(&exportConfirm, true);
+		propertiesDialog = new PropertiesDialog(&propertiesConfirm);
 
 		int aboutdlg_width = screen.width - 18;
 		int aboutdlg_height = 13;
@@ -489,6 +492,31 @@ final class UI {
 		exportsavedialog.setDirectory(getcwd());
 		exportsavedialog.setFilename(proposeExportName(ext));
 		activateDialog(exportsavedialog);
+	}
+
+	// File -> Properties confirm: apply the edited preferences live (hot-swap the
+	// SDL audio driver and/or the playback backend) and persist them to the JSON
+	// config. The audio callback only reads remote.isActive() (a pointer), so the
+	// transport swap is safe between frames; setAudioDriver does its own
+	// pause/lock. The next main-loop ensureLoaded brings a new remote backend up.
+	private void propertiesConfirm(Prefs p) {
+		import com.config : prefs, save;
+		static import audio.ultimate;
+		static import audio.vice;
+		bool ntsc = audio.player.ntsc != 0;
+
+		if(p.audioDriver != prefs.audioDriver)
+			audio.audio.setAudioDriver(p.audioDriver);
+
+		switch(p.backend) {
+		case "ultimate": audio.ultimate.configure(p.ultimateHost, p.ultimatePort, ntsc); break;
+		case "vice":     audio.vice.configure(p.x64scPath, 0, ntsc); break;
+		default:         audio.remote.goLocal(); break;
+		}
+
+		prefs = p;
+		save();
+		statusline.display("Properties applied and saved.");
 	}
 
 	// Step 2: build and write the export using the stashed options + format. Data

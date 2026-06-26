@@ -252,6 +252,37 @@ following along. Use `--ultimate-port <n>` for a non-default port, and set the
 `CHEESECUTTER_ULTIMATE_PASSWORD` environment variable if the device has a network
 password (firmware 3.12+).
 
+While a hardware/emulator backend is active the bottom-bar **SID** field shows the
+backend name (`Ultimate` / `Vice`) instead of the local `6581`/`8580` model, since
+the audible SID is the real machine's and local reSID is muted.
+
+You don't have to set the backend on the command line: open **File → Properties**
+to choose the playback backend (Local reSID, C64 Ultimate, or VICE) and switch it
+**while the editor is running** — no restart needed. The same dialog edits the
+Ultimate IP and port, the path to `x64sc` (for the VICE backend), and the SDL
+audio driver (changed live).
+
+## Properties & preferences
+
+**File → Properties** opens a settings dialog (Up/Down to move, Left/Right to
+change a value, type into the IP/path fields, Return to apply, Esc to cancel):
+
+| Field | Meaning |
+| --- | --- |
+| Playback backend | Local (reSID) / Ultimate / VICE — applied immediately |
+| Ultimate IP / port | The C64 Ultimate REST endpoint (used by the Ultimate backend) |
+| x64sc path | Path to the `x64sc` binary for the VICE backend (blank = found on `PATH`) |
+| Audio driver | SDL audio driver for local playback (blank = SDL default); switched live |
+
+Settings are saved to a JSON preferences file and reloaded at startup (created
+with defaults on first run). Command-line flags override the saved values for
+that session. The file lives in the per-OS config directory:
+
+- **Windows:** `%APPDATA%\CheeseCutter-Extended\config.json`
+- **macOS:** `~/Library/Application Support/CheeseCutter-Extended/config.json`
+- **Linux:** `$XDG_CONFIG_HOME/cheesecutter-extended/config.json` (or
+  `~/.config/cheesecutter-extended/config.json`)
+
 ## Window Navigation
 
 | Shortcut | Action |

@@ -20,6 +20,7 @@ OBJS= \
 	src/com/kbd.o \
 	src/com/session.o \
 	src/com/util.o \
+	src/com/config.o \
 	src/com/shortcuts.o \
 	src/com/selection.o \
 	src/manpage.o \

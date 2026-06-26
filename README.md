@@ -23,7 +23,9 @@ CheeseCutter 2.9 by abaddon. Current version 0.4.0.
   per-channel routing mask) derived by tracing the song, color-coded by whether a
   value is taken straight from the filter table or calculated by a sweep. Toggle
   with `Ctrl-Shift-F`.
-- Hardware and emulator playback (C64 Ultimate, VICE).
+- Hardware and emulator playback (C64 Ultimate, VICE), switchable at runtime from
+  **File → Properties** along with the Ultimate IP/port, `x64sc` path and SDL
+  audio driver — persisted to a JSON preferences file in the per-OS config dir.
 - Companion `ct2util` CLI for headless convert / export / merge / dump.
 
 See the [user guide](guide/README.md) for details on every feature.

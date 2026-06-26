@@ -172,3 +172,80 @@ extern(C) {
 		}
 	}
 }
+
+import std.string : toStringz, fromStringz;
+
+// (Re)open the SDL audio device with the current freq/bufferSize and our
+// callback, (re)allocating the mix buffer. Mirrors audio_init's open path but is
+// safe to call again at runtime (after SDL_CloseAudio) for a driver swap; it
+// recomputes callbackInterval for the current framerate and leaves reSID alone.
+private int openDevice() {
+	SDL_AudioSpec requested;
+	requested.freq = freq;
+	requested.format = AUDIO_S16LSB;
+	requested.channels = 1;
+	requested.samples = cast(ushort) bufferSize;
+	requested.callback = &audio_callback_2;
+	requested.userdata = null;
+	if(SDL_OpenAudio(&requested, null) < 0) {
+		writeln("Could not open audio: ", to!string(SDL_GetError()));
+		return -1;
+	}
+	audiospec = requested;
+	bufferSize = audiospec.samples;
+	if(mixbuf) free(mixbuf);
+	mixbuf = cast(short *)malloc(bufferSize * short.sizeof * MIXBUF_MUL);
+	memset(mixbuf, 0, bufferSize * short.sizeof * MIXBUF_MUL);
+	if(framerate > 0) callbackInterval = audiospec.freq / framerate;
+	reset();
+	return 0;
+}
+
+// SDL audio drivers compiled into this build (e.g. "coreaudio", "dummy"), for
+// the Properties dialog to choose from.
+string[] availableAudioDrivers() {
+	string[] r;
+	int n = SDL_GetNumAudioDrivers();
+	for(int i = 0; i < n; i++) {
+		auto p = SDL_GetAudioDriver(i);
+		if(p !is null) r ~= to!string(fromStringz(p));
+	}
+	return r;
+}
+
+// The driver currently in use ("" if none/unknown).
+string currentAudioDriver() {
+	auto p = SDL_GetCurrentAudioDriver();
+	return p is null ? "" : to!string(fromStringz(p));
+}
+
+// Switch the SDL audio driver at runtime. `name` is an SDL driver name (empty =
+// SDL default). Pauses + locks the callback, tears down and re-initialises the
+// audio subsystem with the new driver, then re-opens our device. reSID and the
+// current multiplier are preserved. No-op if already on that driver.
+void setAudioDriver(string name) {
+	if(!audioInited) return;
+	if(name.length && name == currentAudioDriver()) return;
+
+	bool wasPlaying = SDL_GetAudioStatus() == SDL_AUDIO_PLAYING;
+	int savedMult = multiplier < 1 ? 1 : multiplier;
+
+	SDL_PauseAudio(1);
+	SDL_Delay(30);          // let any in-flight callback finish
+	SDL_LockAudio();
+	SDL_CloseAudio();
+	if(mixbuf) { free(mixbuf); mixbuf = null; }
+	SDL_AudioQuit();        // unload the old driver
+	const(char)* drv = name.length ? name.toStringz() : null;
+	if(SDL_AudioInit(drv) < 0) {
+		writeln("Could not select audio driver '", name, "': ",
+				to!string(SDL_GetError()), " — reverting to default.");
+		SDL_AudioInit(null);
+	}
+	multiplier = 0;         // force the multiplier restore below to recompute
+	int rc = openDevice();
+	SDL_UnlockAudio();
+	if(rc < 0) { audioInited = false; return; }
+	setCallMultiplier(savedMult);
+	SDL_PauseAudio(wasPlaying ? 0 : 1);
+}
