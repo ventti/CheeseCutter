@@ -17,6 +17,7 @@ import ui.ui;
 import audio.player;
 import seq.sequencer;
 import audio.audio;
+static import audio.remote;
 import com.fb;
 import com.util;
 import com.shortcuts;
@@ -59,10 +60,18 @@ class Infobar : Window, Undoable {
 		screen.fprint(playerX, area.y,
 				   format("`05Rate:   `0d%-1d*%dhz",
 						  song.multiplier, audio.player.ntsc ? 60 : 50));
-		screen.fprint(playerX, area.y+1,
-				   format("`05SID:    `0d%s%s",
-						  audio.player.usefp ? audio.player.curfp.id : audio.player.sidtype ? "8580" : "6581",
-						  audio.player.badline ? "&0fb" : " "));
+		// With a remote backend the audible SID is the real/emulated machine's,
+		// not the local reSID model — show the backend name instead (the local
+		// 6581/8580 + badline state is irrelevant while it's muted).
+		string sidLabel; string sidExtra = " ";
+		if(audio.remote.isActive())
+			sidLabel = audio.remote.backendName();
+		else {
+			sidLabel = audio.player.usefp ? audio.player.curfp.id
+					 : audio.player.sidtype ? "8580" : "6581";
+			sidExtra = audio.player.badline ? "&0fb" : " ";
+		}
+		screen.fprint(playerX, area.y+1, format("`05SID:    `0d%s%s", sidLabel, sidExtra));
 		screen.fprint(playerX, area.y+2,format("`05Player: `0d%s", ztos(song.playerID)));
 	}
 

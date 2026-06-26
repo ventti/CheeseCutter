@@ -122,6 +122,11 @@ void registerShortcuts(UI ui) {
 		activateDialog(renderDialog);
 	});
 
+	sm.registerMenuOnly("properties", Ctx.global, "File",
+				"Properties: playback backend, Ultimate IP/port, x64sc path, audio driver", {
+		activateDialog(propertiesDialog);
+	}, "Properties");
+
 	sm.register("quick_save", Ctx.global, "File",
 				"Quick save song (doesn't ask a filename)", SDLK_F10, KMOD_CTRL, {
 		string s = savedialog.filename;

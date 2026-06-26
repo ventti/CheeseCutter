@@ -13,6 +13,8 @@ import com.session;
 private import ct.base;
 import ct.build : ExportOptions, ExportFormat, isAudioFormat;
 import audio.render : flacAvailable;
+import com.config : Prefs;
+static import audio.audio;
 import ui.help;
 import ui.ui;
 import ui.input;
@@ -1216,6 +1218,154 @@ class ExportOptionsDialog : Window {
 			if(key.unicode == '<') { adjust(kind, -1); return OK; }
 			if(key.unicode == '>') { adjust(kind, +1); return OK; }
 			editDigit(kind, key.unicode);
+			return OK;
+		}
+	}
+}
+
+// File -> Properties: edit + persist the connection/output preferences and apply
+// them live. Modeled on ExportOptionsDialog (row select; Left/Right cycles or
+// adjusts; printable keys edit the text rows). On confirm it hands a filled Prefs
+// to the callback, which applies them (backend swap / driver swap) and saves.
+class PropertiesDialog : Window {
+	alias void delegate(Prefs) ConfirmCB;
+
+	private {
+		ConfirmCB onConfirm;
+		int sel;
+		Prefs f;                       // working copy
+		immutable string[] backends = ["local", "ultimate", "vice"];
+		string[] drivers;              // "" (default) + SDL-reported drivers
+		struct Row { string label; char kind; }
+		// kind: b=backend i=ultimate IP p=ultimate port x=x64sc path d=audio driver
+		Row[] rows = [Row("Playback backend", 'b'), Row("Ultimate IP", 'i'),
+					  Row("Ultimate port", 'p'), Row("x64sc path", 'x'),
+					  Row("Audio driver", 'd')];
+		enum TEXT_MAX = 38;            // fits the dialog box
+		enum frameW = 56, lblW = 18;
+	}
+
+	this(ConfirmCB cb) {
+		super(Rectangle(0, 0, 1));
+		onConfirm = cb;
+	}
+
+	// Seed the working copy from the current saved prefs each time it opens.
+	override void activate() {
+		import com.config : prefs;
+		f = prefs;
+		drivers = "" ~ audio.audio.availableAudioDrivers();
+		sel = 0;
+	}
+
+	private int driverIndex() {
+		foreach(i, d; drivers) if(d == f.audioDriver) return cast(int)i;
+		return 0;
+	}
+
+	private string valStr(char kind) {
+		switch(kind) {
+		case 'b': return f.backend;
+		case 'i': return f.ultimateHost;
+		case 'p': return format("%d", f.ultimatePort);
+		case 'x': return f.x64scPath.length ? f.x64scPath : "(from PATH)";
+		case 'd': return f.audioDriver.length ? f.audioDriver : "(default)";
+		default: return "";
+		}
+	}
+
+	override void update() {
+		int fw = frameW;
+		int h = cast(int)rows.length + 6;
+		int x = screen.width / 2 - (fw + 2) / 2;
+		int y = screen.height / 2 - h / 2;
+		drawFrame(Rectangle(x, y, h, fw + 2));
+		screen.cprint(x + 2, y, 1, 0, " Properties ");
+		foreach(i, row; rows) {
+			int ry = y + 2 + cast(int)i;
+			int fg = 15, bg = 0;
+			if(cast(int)i == sel) { fg = 1; bg = 4; }
+			string v = valStr(row.kind);
+			if((row.kind == 'i' || row.kind == 'x') && cast(int)i == sel) v ~= "_";
+			string line = format(" %s%s", row.label.leftJustify(lblW), v);
+			screen.cprint(x + 2, ry, fg, bg, line.leftJustify(fw - 2));
+		}
+		screen.cprint(x + 2, y + h - 3, 12, 0, "Up/Down: Navigate   Left/Right: Change");
+		screen.cprint(x + 2, y + h - 2, 12, 0, "Return: OK   Esc: Cancel");
+	}
+
+	private void cycle(ref string cur, const(string)[] list, int delta) {
+		int n = cast(int)list.length;
+		if(n == 0) return;
+		int c = 0;
+		foreach(i, v; list) if(v == cur) { c = cast(int)i; break; }
+		cur = list[((c + delta) % n + n) % n];
+	}
+
+	private void adjust(char kind, int delta) {
+		switch(kind) {
+		case 'b': cycle(f.backend, backends, delta); break;
+		case 'd': { string drv = f.audioDriver; cycle(drv, drivers, delta); f.audioDriver = drv; break; }
+		case 'p':
+			f.ultimatePort += delta;
+			if(f.ultimatePort < 1) f.ultimatePort = 65535;
+			else if(f.ultimatePort > 65535) f.ultimatePort = 1;
+			break;
+		default: break;     // text rows edited via keypress
+		}
+	}
+
+	override int keypress(Keyinfo key) {
+		if(key.mods & KMOD_ALT) return OK;
+		char kind = rows[sel].kind;
+		switch(key.raw) {
+		case SDLK_ESCAPE:
+			return CANCEL;
+		case SDLK_RETURN:
+			onConfirm(f);
+			return RETURN;
+		case SDLK_UP:
+			sel = (sel - 1 + cast(int)rows.length) % cast(int)rows.length;
+			return OK;
+		case SDLK_DOWN:
+			sel = (sel + 1) % cast(int)rows.length;
+			return OK;
+		default:
+			break;
+		}
+		// Text rows: printable keys append, Backspace deletes.
+		if(kind == 'i' || kind == 'x') {
+			if(key.raw == SDLK_BACKSPACE) {
+				if(kind == 'i' && f.ultimateHost.length) f.ultimateHost = f.ultimateHost[0 .. $ - 1];
+				if(kind == 'x' && f.x64scPath.length) f.x64scPath = f.x64scPath[0 .. $ - 1];
+				return OK;
+			}
+			int uc = key.unicode;
+			if(uc >= 0x20 && uc < 0x7f) {
+				if(kind == 'i' && f.ultimateHost.length < TEXT_MAX) f.ultimateHost ~= cast(char)uc;
+				if(kind == 'x' && f.x64scPath.length < TEXT_MAX) f.x64scPath ~= cast(char)uc;
+			}
+			return OK;
+		}
+		// Port digit entry; backend/driver cycle.
+		switch(key.raw) {
+		case SDLK_LEFT:  adjust(kind, -1); return OK;
+		case SDLK_RIGHT:
+		case SDLK_SPACE: adjust(kind, +1); return OK;
+		case SDLK_BACKSPACE:
+			if(kind == 'p') f.ultimatePort /= 10;
+			return OK;
+		default:
+			if(kind == 'p') {
+				int uc = key.unicode;
+				if(uc >= '0' && uc <= '9') {
+					int v = f.ultimatePort * 10 + (uc - '0');
+					f.ultimatePort = (v > 65535) ? (uc - '0') : v;
+				}
+			} else {
+				if(key.unicode == '<') adjust(kind, -1);
+				if(key.unicode == '>') adjust(kind, +1);
+			}
 			return OK;
 		}
 	}
