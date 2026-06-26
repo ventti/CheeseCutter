@@ -20,6 +20,7 @@ import std.stdio;
 import core.time : MonoTime, dur;
 import ct.base;
 import ct.build;
+static import com.session;
 
 // Thrown by a transport's connect() when the backend can never come up (e.g. the
 // emulator executable is not on PATH). The core treats this as unrecoverable and
@@ -44,6 +45,9 @@ enum {
 	CTRL_SEED_NEWSEQ = 12,   // 3 bytes -> NEWSEQ
 	CTRL_SEED_VOICE = 15,    // 3 bytes -> VOICE (restart and keyjam)
 	CTRL_BLOCK_LEN = 18,
+	// Read-only byte the shim writes once at install: $ff=not detected yet,
+	// 0=6581, 1=8580. Outside the command block, so writeCommand never touches it.
+	CTRL_SIDMODEL = 18,
 }
 enum {
 	REQ_RESTART = 1,
@@ -63,6 +67,8 @@ interface RemoteTransport {
 	void runProgram(const(ubyte)[] prg);
 	// Push bytes into C64 RAM (DMA / monitor write).
 	void writeMem(int addr, const(ubyte)[] data);
+	// Read `len` bytes of C64 RAM from `addr` (DMA / monitor / readmem GET).
+	ubyte[] readMem(int addr, int len);
 	// Tear down on app exit: reset hardware / detach emulator. Must not throw.
 	void shutdown() nothrow;
 	// Short backend name for the UI (e.g. "Ultimate", "Vice").
@@ -80,6 +86,16 @@ private __gshared bool reloadPending = false;
 // eventually crash the assembler. Invalidated by markReload (song changed).
 private __gshared ubyte[] cachedPrg;
 private __gshared bool prgValid = false;
+// SID model the shim detected on the target ("" until known). Reset on every
+// (re)inject so a new backend/song re-detects. See pollSidModel / ctrl_sidmodel.
+private __gshared string sidModel = "";
+private __gshared bool sidModelKnown = false;
+private __gshared MonoTime nextSidPoll;
+private __gshared int sidPollTries = 0;
+enum SID_POLL_MAX = 24;   // ~6s of 250ms polls, then give up (show backend name only)
+// Last unsaved-changes state pushed to the File row; resynced after each inject.
+private __gshared bool lastMod = false;
+private __gshared bool modSynced = false;
 private __gshared bool ntscMode = false;
 private __gshared RemoteTransport transport; // null = no remote backend active
 private __gshared MonoTime nextRetry;        // earliest next (re)establish attempt
@@ -91,6 +107,52 @@ bool isLoaded() nothrow { return loaded; }
 
 // Name of the active backend for the UI ("Ultimate"/"Vice"), or "" if local.
 string backendName() nothrow { return transport is null ? "" : transport.name(); }
+
+// Detected SID model on the target ("6581"/"8580"), or "" until known.
+string backendSidModel() nothrow { return sidModelKnown ? sidModel : ""; }
+
+// Read back the shim's one-shot SID detection (ctrl_sidmodel). Driven from
+// ensureLoaded once the shim is loaded — detection is tied to the injected
+// shim's lifecycle, not the playback loop — so it is private. Self-throttling
+// and a no-op once known. The shim writes 0/1 from install a moment after
+// inject; until then it reads $ff. Read failures are non-fatal — never disturb
+// playback/connection state.
+private void pollSidModel() nothrow {
+	if(transport is null || !loaded || sidModelKnown) return;
+	if(sidPollTries >= SID_POLL_MAX) return;   // give up; never stutter a monitor backend forever
+	if(MonoTime.currTime < nextSidPoll) return;
+	nextSidPoll = MonoTime.currTime + dur!"msecs"(250);
+	sidPollTries++;
+	try {
+		auto b = transport.readMem(CTRL_ADDR + CTRL_SIDMODEL, 1);
+		if(b.length < 1) return;
+		if(b[0] == 0)      { sidModel = "6581"; sidModelKnown = true; }
+		else if(b[0] == 1) { sidModel = "8580"; sidModelKnown = true; }
+		// $ff (or anything else): install hasn't written it yet — retry next tick.
+		if(sidModelKnown)
+			stderr.writeln("Remote: ", transport.name(), " SID detected: ", sidModel);
+	}
+	catch(Throwable) { /* transient read error; retry next tick */ }
+}
+
+// Mirror the host's unsaved-changes state to the on-target File row: a '*'
+// ($2a) one space after the filename when modified, a blank when clean. Only
+// writes when the state flips (each writeMem is ~150ms on real hardware). The
+// File row is screen $0400 + 2*40 ("File: " = 6 chars, then the name).
+private void pushModifiedFlag(Song song) nothrow {
+	if(transport is null || !loaded) return;
+	try {
+		bool mod = com.session.state.songModified;
+		if(modSynced && mod == lastMod) return;
+		int len = cast(int)com.session.state.filename.length;
+		if(len > 0)
+			transport.writeMem(0x0400 + 2*40 + 6 + len + 1,
+							   [cast(ubyte)(mod ? 0x2a : 0x20)]);
+		lastMod = mod;
+		modSynced = true;
+	}
+	catch(Throwable) {}
+}
 
 // Install a transport (called at startup by --ultimate / --vice wiring, and at
 // runtime by the Properties dialog when switching backend). Shuts the previous
@@ -104,6 +166,7 @@ void useTransport(RemoteTransport t) {
 	loaded = false;
 	reloadPending = (t !is null);
 	wasDown = false;
+	sidModel = ""; sidModelKnown = false; sidPollTries = 0; modSynced = false;   // re-detect on the new backend
 	nextRetry = MonoTime.zero;   // allow an immediate (re)connect attempt
 }
 
@@ -114,7 +177,10 @@ void setMode(bool ntsc) { ntscMode = ntsc; }
 
 // Mark that the resident image is stale (e.g. a different song was loaded);
 // it will be rebuilt and re-injected on the next ensureLoaded().
-void markReload() nothrow { reloadPending = true; loaded = false; prgValid = false; }
+void markReload() nothrow {
+	reloadPending = true; loaded = false; prgValid = false;
+	sidModel = ""; sidModelKnown = false; sidPollTries = 0; modSynced = false;   // fresh image re-detects the SID
+}
 
 // ---------------------------------------------------------------- mirroring
 
@@ -157,7 +223,14 @@ private void buildRegions(Song song) {
 // pending. Throttled by a backoff so a downed backend isn't hammered per frame.
 void ensureLoaded(Song song) {
 	if(transport is null) return;
-	if(loaded && !reloadPending) return;
+	if(loaded && !reloadPending) {
+		// Shim already injected: read back its one-shot SID probe (self-throttled,
+		// no-op once known). Driven from here so the SID readback belongs to the
+		// shim's lifecycle rather than the playback/frame loop.
+		pollSidModel();
+		pushModifiedFlag(song);   // mirror the host's unsaved-changes dot to the File row
+		return;
+	}
 	// Backoff applies only between consecutive failed attempts (nextRetry is set
 	// in the failure path), so the first recovery after a loss is immediate.
 	if(MonoTime.currTime < nextRetry) return;
@@ -168,13 +241,19 @@ void ensureLoaded(Song song) {
 		// so the leaky ACME assembler is never re-run in a tight retry loop.
 		if(!prgValid) {
 			buildRegions(song);
-			cachedPrg = buildResidentImage(song, ntscMode, false); // host starts playback on Play
+			// host starts playback on Play; pass the loaded .ct name for the display.
+			cachedPrg = buildResidentImage(song, ntscMode, false, true, true, true,
+										   com.session.state.filename.idup);
 			prgValid = true;
 		}
 		transport.runProgram(cachedPrg);
 		shadow[] = song.memspace[];
 		loaded = true;
 		reloadPending = false;
+		// Let the target boot + run install (which does the SID probe) uninterrupted
+		// before the first readback — on a monitor backend each read halts the CPU,
+		// which would otherwise race the autostart sequence.
+		nextSidPoll = MonoTime.currTime + dur!"seconds"(3);
 		if(wasDown) {
 			stderr.writeln("Remote: backend reconnected; player re-uploaded.");
 			wasDown = false;

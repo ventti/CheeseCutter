@@ -253,8 +253,14 @@ following along. Use `--ultimate-port <n>` for a non-default port, and set the
 password (firmware 3.12+).
 
 While a hardware/emulator backend is active the bottom-bar **SID** field shows the
-backend name (`Ultimate` / `Vice`) instead of the local `6581`/`8580` model, since
-the audible SID is the real machine's and local reSID is muted.
+backend name plus the SID model the target actually has — auto-detected on the
+machine at inject time (e.g. `Ultimate 8580`, `Vice 6581`) — instead of the local
+reSID model, since the audible SID is the real machine's and local reSID is muted.
+A muted channel is truly silenced on the real SID (not just left ringing).
+
+The **on-target screen** (shown on the real C64 / in x64sc) mirrors CheeseCutter's
+colours and shows, below the time/raster line: the detected SID model, per-voice
+on/off (a muted voice dims), the player position in hex, and the `.ct` filename.
 
 You don't have to set the backend on the command line: open **File → Properties**
 to choose the playback backend (Local reSID, C64 Ultimate, or VICE) and switch it

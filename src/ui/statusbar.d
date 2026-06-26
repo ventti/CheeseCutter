@@ -53,7 +53,8 @@ class Infobar : Window, Undoable {
 		screen.fprint(x1 + 19,area.y,
 				   format("`05Oct: `0d%d  `05Spd: `0d%X  `05St: `0d%d ",
 						  state.octave, song.speed, seq.sequencer.stepValue));
-		screen.fprint(x1,area.y+1,format("`05Filename: `0d%s", state.filename.leftJustify(38)));
+		screen.fprint(x1,area.y+1,format("`05Filename: `0d%s",
+			(state.filename ~ (state.songModified ? " *" : "")).leftJustify(38)));
 		drawSongField(0, "  `b1T`01itle:", inputTitle, song.title);
 		drawSongField(1, " `01Author:", inputAuthor, song.author);
 		drawSongField(2, "`01Release:", inputReleased, song.release);
@@ -64,8 +65,13 @@ class Infobar : Window, Undoable {
 		// not the local reSID model — show the backend name instead (the local
 		// 6581/8580 + badline state is irrelevant while it's muted).
 		string sidLabel; string sidExtra = " ";
-		if(audio.remote.isActive())
+		if(audio.remote.isActive()) {
+			// Backend name + the SID model the shim auto-detected on the target
+			// (e.g. "Ultimate 8580"); just the name until detection completes.
 			sidLabel = audio.remote.backendName();
+			string m = audio.remote.backendSidModel();
+			if(m.length) sidLabel ~= " " ~ m;
+		}
 		else {
 			sidLabel = audio.player.usefp ? audio.player.curfp.id
 					 : audio.player.sidtype ? "8580" : "6581";
