@@ -41,6 +41,19 @@ else
 fi
 """
 
+[tasks.debug]
+description = "Build the debug variant (DWARF symbols, -O0, unstripped) for lldb root-causing — see tools/lldb-run.sh. Full clean rebuild."
+run = """
+#!/usr/bin/env bash
+set -e
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  make -f Makefile.mac debug LIBSPATH=${LIBSPATH:-/opt/homebrew/lib}
+else
+  echo "The 'debug' target is defined only in Makefile.mac (macOS) for now." >&2
+  exit 1
+fi
+"""
+
 [tasks.build-utils]
 description = "Build ct2util utility"
 run = """
