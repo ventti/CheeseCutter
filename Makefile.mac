@@ -31,7 +31,7 @@ $(TARGET): $(C64OBJS) $(OBJS) $(CXX_OBJS) $(C_OBJS)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 .c.o : $(C_SRCS)
-	$(CC) -c $< -o $@
+	$(CC) $(CFLAGS) -c $< -o $@
 
 ct: $(C64OBJS) $(CTOBJS)
 
@@ -41,6 +41,19 @@ ct2util: $(C64OBJS) $(UTILOBJS)
 c64: $(C64OBJS)
 
 all: c64 $(OBJS) $(CXX_OBJS) ct2util ct $(TARGET)
+
+# Unoptimized, symbol-rich build (DWARF) for lldb root-causing — never stripped.
+# Builds the same ./ccutter, so it's a full clean rebuild (the Makefiles have no
+# dependency tracking). Overrides are passed to a sub-make on the command line so
+# they win over the defaults and apply to every D/C/C++ object. Drive it with
+# tools/lldb-run.sh. (D: -g + frame pointers + debug code, -O0; C/C++: -g -O0.)
+.PHONY: debug
+debug:
+	$(MAKE) -f Makefile.mac clean
+	$(MAKE) -f Makefile.mac all \
+	  COMPILE.d='$(DC) $(DFLAGS) -g --frame-pointer=all -d-debug -d -O0 -c -of=$$@' \
+	  CFLAGS='$(COMFLAGS) -g -O0' \
+	  CXXFLAGS='$(COMFLAGS) -I./src -g -O0'
 
 # Headless editor driver for agents (see .claude/skills/run-cheesecutter).
 # Reuses every editor object except main.o (driver.d is module `main`).
