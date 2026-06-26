@@ -250,9 +250,11 @@ rst_cpnv	lda seed_newseq,x
 		sta fcnt		; restart the playback clock
 		sta secs
 		sta mins
-		sta pos_sub		; restart the player-position counter
-		sta pos_rows
+		sta pos_rows		; restart the player-position counter
 		sta pos_rows+1
+		lda #$ff		; prev-speedcnt sentinel: the player's first
+		sta pos_prev		; speedcnt is < $ff, so the initial count-down
+					; isn't mistaken for a row reload (see pos_tick)
 		lda ctrl_subtune
 		jsr INITADDR
 		lda #1
@@ -596,20 +598,25 @@ am_3		lda SEEDVOICE+2
 		sta $d412
 am_done		rts
 
-;;; Advance the position counter once per frame. The player advances a row every
-;;; (SPEED+1) frames (its tempo counter runs SPEED..0 inclusive), so roll over when
-;;; pos_sub passes SPEED, not when it equals it (matches the audio / editor rate).
+;;; Advance the position counter once per frame by watching the player itself
+;;; advance a row, which is correct for BOTH constant tempo and funktempo. The
+;;; player paces rows with its `speedcnt` byte: it reloads it (to the effective
+;;; speed) at the start of each row, then decrements it once per frame down to 0.
+;;; So speedcnt only ever *increases* on the reload frame — i.e. exactly once per
+;;; row, regardless of whether the per-row count is fixed (constant speed) or
+;;; alternates from the break-speed table (funktempo, where SPEED is 0/1 and a
+;;; single fixed divider would drift). speedcnt is the byte right after the
+;;; player's SPEED variable (speed, speedcnt, playspeed are consecutive), so it
+;;; lives at SPEEDADDR+1. pos_prev holds last frame's value.
 pos_tick
-		inc pos_sub
-		lda pos_sub
-		cmp SPEEDADDR
-		bcc pt_done		; pos_sub < speed
-		beq pt_done		; pos_sub == speed (still within the row; roll at speed+1)
-		lda #0
-		sta pos_sub
-		inc pos_rows
-		bne pt_done
+		ldx SPEEDADDR+1		; player's live speedcnt
+		cpx pos_prev
+		beq pt_done		; unchanged this frame
+		bcc pt_store		; decreased: normal count-down, not a new row
+		inc pos_rows		; increased: row reloaded -> count one row
+		bne pt_store
 		inc pos_rows+1
+pt_store	stx pos_prev
 pt_done		rts
 
 ;;; One-time at install: colour the rows (clrscr filled everything white). App
@@ -749,7 +756,7 @@ pp_col		lda #COL_LIGREEN
 		rts
 
 ;;; ---- data (free RAM) ----
-pos_sub		!8 0
+pos_prev	!8 $ff		; speedcnt seen last frame ($ff = no row yet; see pos_tick)
 pos_rows	!8 0, 0
 sidtxt		!8 $36,$35,$38,$31, $38,$35,$38,$30	; "6581" "8580" (digit screen codes)
 lbl_sid		!8 $53,$49,$44,$3a,$20			; "SID: "
