@@ -306,8 +306,10 @@ enum ULTIMATE_PAL_LINES = 312;
 enum ULTIMATE_NTSC_LINES = 263;
 enum ULTIMATE_PAL_CENTER = 150;
 enum ULTIMATE_NTSC_CENTER = 140;
-// ctrl_subtune in the shim's control block ($0810): the A value passed to init().
-enum ULTIMATE_SN_SUBTUNE = 0x0812;
+// ctrl_subtune in the shim's control/command block ($0bf0): the A value passed
+// to init(). The block was relocated out of $0810 to free RAM above the text
+// rows so the whole command (request + seeds) is one contiguous writemem.
+enum ULTIMATE_SN_SUBTUNE = 0x0bf2;
 // Fixed addresses of the raster-line table in ultimate_host.acme (poked here).
 enum ULTIMATE_SN_NUMSLOTS = 0x0816;
 enum ULTIMATE_SN_RASLO = 0x0817;   // 16 bytes: low 8 bits of each line
@@ -369,6 +371,11 @@ private ubyte[] wrapWithShim(Song song, bool ntsc, bool autoPlay,
 		format("SUBNOTE = $%04x\n", subnote & 0xffff) ~
 		format("SUBMPLAY = $%04x\n", submplay & 0xffff) ~
 		format("SHTRANSADDR = $%04x\n", shtrans & 0xffff) ~
+		// Destinations the shim copies the host's position seeds into when it
+		// services a restart/keyjam (control block at $0bf0 -> these vars).
+		format("SEEDTRACKLO = $%04x\n", song.offsets[Offsets.TRACKLO] & 0xffff) ~
+		format("SEEDNEWSEQ = $%04x\n", song.offsets[Offsets.NEWSEQ] & 0xffff) ~
+		format("SEEDVOICE = $%04x\n", song.offsets[Offsets.VOICE] & 0xffff) ~
 		format("NEWKEYJAM = %d\n", newKeyjam ? 1 : 0) ~
 		format("FRAMERATE = %d\n", ntsc ? 60 : 50) ~
 		format("STARTMODE = %d\n", autoPlay ? 1 : 0) ~
