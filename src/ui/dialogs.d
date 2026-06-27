@@ -15,6 +15,7 @@ import ct.build : ExportOptions, ExportFormat, isAudioFormat;
 import audio.render : flacAvailable;
 import com.config : Prefs;
 static import audio.audio;
+import audio.resid.filter : FP6581, FP8580;
 import ui.help;
 import ui.ui;
 import ui.input;
@@ -1237,10 +1238,12 @@ class PropertiesDialog : Window {
 		immutable string[] backends = ["local", "ultimate", "vice"];
 		string[] drivers;              // "" (default) + SDL-reported drivers
 		struct Row { string label; char kind; }
-		// kind: b=backend i=ultimate IP p=ultimate port x=x64sc path d=audio driver
-		Row[] rows = [Row("Playback backend", 'b'), Row("Ultimate IP", 'i'),
-					  Row("Ultimate port", 'p'), Row("x64sc path", 'x'),
-					  Row("Audio driver", 'd')];
+		// kind: b=backend m=reSID SID model f=reSID filter preset
+		//       i=ultimate IP p=ultimate port x=x64sc path d=audio driver
+		Row[] rows = [Row("Playback backend", 'b'),
+					  Row("SID model", 'm'), Row("Filter preset", 'f'),
+					  Row("Ultimate IP", 'i'), Row("Ultimate port", 'p'),
+					  Row("x64sc path", 'x'), Row("Audio driver", 'd')];
 		enum TEXT_MAX = 38;            // fits the dialog box
 		enum frameW = 56, lblW = 18;
 	}
@@ -1263,14 +1266,42 @@ class PropertiesDialog : Window {
 		return 0;
 	}
 
+	// Pretty backend label: the local reSID engine is shown as "reSID".
+	private string backendLabel(string b) { return b == "local" ? "reSID" : b; }
+
 	private string valStr(char kind) {
 		switch(kind) {
-		case 'b': return f.backend;
+		case 'b': return backendLabel(f.backend);
+		case 'm': return f.sidModel ? "8580" : "6581";
+		case 'f': return f.sidModel ? FP8580[f.filter8580 % FP8580.length].id
+									: FP6581[f.filter6581 % FP6581.length].id;
 		case 'i': return f.ultimateHost;
 		case 'p': return format("%d", f.ultimatePort);
 		case 'x': return f.x64scPath.length ? f.x64scPath : "(from PATH)";
 		case 'd': return f.audioDriver.length ? f.audioDriver : "(default)";
 		default: return "";
+		}
+	}
+
+	// Which rows apply to the currently-selected backend; the rest are greyed and
+	// skipped by the cursor. reSID model/filter are local-only; Ultimate IP/port
+	// are ultimate-only; x64sc path is vice-only. Backend + audio driver always apply.
+	private bool applies(char kind) {
+		switch(kind) {
+		case 'm': case 'f': return f.backend == "local";
+		case 'i': case 'p': return f.backend == "ultimate";
+		case 'x':           return f.backend == "vice";
+		default:            return true;
+		}
+	}
+
+	// Cursor movement that skips greyed (inapplicable) rows.
+	private void move(int dir) {
+		int n = cast(int)rows.length;
+		int i = sel;
+		foreach(_; 0 .. n) {
+			i = (i + dir + n) % n;
+			if(applies(rows[i].kind)) { sel = i; return; }
 		}
 	}
 
@@ -1283,8 +1314,11 @@ class PropertiesDialog : Window {
 		screen.cprint(x + 2, y, 1, 0, " Properties ");
 		foreach(i, row; rows) {
 			int ry = y + 2 + cast(int)i;
-			int fg = 15, bg = 0;
-			if(cast(int)i == sel) { fg = 1; bg = 4; }
+			bool on = applies(row.kind);
+			int fg, bg;
+			if(cast(int)i == sel) { fg = 1; bg = 4; }       // selected
+			else if(on)           { fg = 15; bg = 0; }      // normal
+			else                  { fg = 11; bg = 0; }      // greyed / inapplicable
 			string v = valStr(row.kind);
 			if((row.kind == 'i' || row.kind == 'x') && cast(int)i == sel) v ~= "_";
 			string line = format(" %s%s", row.label.leftJustify(lblW), v);
@@ -1305,6 +1339,13 @@ class PropertiesDialog : Window {
 	private void adjust(char kind, int delta) {
 		switch(kind) {
 		case 'b': cycle(f.backend, backends, delta); break;
+		case 'm': f.sidModel = (f.sidModel + delta + 2) % 2; break;   // 6581 <-> 8580
+		case 'f': {
+			// Cycle the filter preset for the currently-selected model.
+			if(f.sidModel) { int n = cast(int)FP8580.length; f.filter8580 = (f.filter8580 + delta + n) % n; }
+			else           { int n = cast(int)FP6581.length; f.filter6581 = (f.filter6581 + delta + n) % n; }
+			break;
+		}
 		case 'd': { string drv = f.audioDriver; cycle(drv, drivers, delta); f.audioDriver = drv; break; }
 		case 'p':
 			f.ultimatePort += delta;
@@ -1317,6 +1358,7 @@ class PropertiesDialog : Window {
 
 	override int keypress(Keyinfo key) {
 		if(key.mods & KMOD_ALT) return OK;
+		if(!applies(rows[sel].kind)) move(1);   // a backend change may have greyed the current row
 		char kind = rows[sel].kind;
 		switch(key.raw) {
 		case SDLK_ESCAPE:
@@ -1325,10 +1367,10 @@ class PropertiesDialog : Window {
 			onConfirm(f);
 			return RETURN;
 		case SDLK_UP:
-			sel = (sel - 1 + cast(int)rows.length) % cast(int)rows.length;
+			move(-1);
 			return OK;
 		case SDLK_DOWN:
-			sel = (sel + 1) % cast(int)rows.length;
+			move(1);
 			return OK;
 		default:
 			break;

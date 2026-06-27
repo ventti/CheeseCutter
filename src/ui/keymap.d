@@ -123,7 +123,7 @@ void registerShortcuts(UI ui) {
 	});
 
 	sm.registerMenuOnly("properties", Ctx.global, "File",
-				"Properties: playback backend, Ultimate IP/port, x64sc path, audio driver", {
+				"Properties: playback backend, reSID SID model & filter preset, Ultimate IP/port, x64sc path, audio driver", {
 		activateDialog(propertiesDialog);
 	}, "Properties");
 

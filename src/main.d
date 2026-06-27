@@ -341,6 +341,11 @@ int main(char[][] args) {
 	// Read persisted user preferences (creates the file with defaults if absent).
 	// These seed the backend/driver below; explicit CLI flags still take priority.
 	com.config.load();
+	// Seed the reSID model + filter presets from saved prefs (an explicit CLI
+	// -m / -fpr below still overrides; both take effect once audio inits).
+	audio.player.sidtype = com.config.prefs.sidModel ? 1 : 0;
+	if(FP6581.length) audio.player.curfp6581 = com.config.prefs.filter6581 % cast(int)FP6581.length;
+	if(FP8580.length) audio.player.curfp8580 = com.config.prefs.filter8580 % cast(int)FP8580.length;
   // DerelictSDL2.load();
 
 	scope(exit) {

@@ -266,20 +266,24 @@ started playback at (so *play from cursor* shows that row, not 0) and loops back
 to the song's loop point when the song loops, staying in step with the audio.
 
 You don't have to set the backend on the command line: open **File → Properties**
-to choose the playback backend (Local reSID, C64 Ultimate, or VICE) and switch it
+to choose the playback backend (reSID, C64 Ultimate, or VICE) and switch it
 **while the editor is running** — no restart needed. The same dialog edits the
-Ultimate IP and port, the path to `x64sc` (for the VICE backend), and the SDL
-audio driver (changed live).
+reSID SID model and filter preset, the Ultimate IP and port, the path to `x64sc`
+(for the VICE backend), and the SDL audio driver (changed live). Options that
+don't apply to the selected backend are greyed out and skipped by the cursor.
 
 ## Properties & preferences
 
 **File → Properties** opens a settings dialog (Up/Down to move, Left/Right to
-change a value, type into the IP/path fields, Return to apply, Esc to cancel):
+change a value, type into the IP/path fields, Return to apply, Esc to cancel);
+options that don't apply to the selected backend are greyed and skipped:
 
 | Field | Meaning |
 | --- | --- |
-| Playback backend | Local (reSID) / Ultimate / VICE — applied immediately |
-| Ultimate IP / port | The C64 Ultimate REST endpoint (used by the Ultimate backend) |
+| Playback backend | reSID / Ultimate / VICE — applied immediately |
+| SID model | reSID chip model: 6581 or 8580 (reSID backend only) |
+| Filter preset | reSID filter curve for the chosen SID model (reSID backend only) |
+| Ultimate IP / port | The C64 Ultimate REST endpoint (Ultimate backend only) |
 | x64sc path | Path to the `x64sc` binary for the VICE backend (blank = found on `PATH`) |
 | Audio driver | SDL audio driver for local playback (blank = SDL default); switched live |
 

@@ -29,6 +29,10 @@ struct Prefs {
 	int    ultimatePort = 80;
 	string x64scPath = "";           // empty = launch x64sc from PATH
 	string audioDriver = "";         // empty = SDL default driver
+	// reSID (local) emulation settings — ignored while a remote backend is active.
+	int    sidModel = 0;             // 0 = 6581, 1 = 8580
+	int    filter6581 = 0;           // filter-preset index for the 6581 model
+	int    filter8580 = 0;           // filter-preset index for the 8580 model
 }
 
 __gshared Prefs prefs;
@@ -78,6 +82,9 @@ void load() {
 		integer("ultimatePort", prefs.ultimatePort);
 		str("x64scPath", prefs.x64scPath);
 		str("audioDriver", prefs.audioDriver);
+		integer("sidModel", prefs.sidModel);
+		integer("filter6581", prefs.filter6581);
+		integer("filter8580", prefs.filter8580);
 	}
 	catch(Exception e) {
 		stderr.writeln("config: could not read ", path, " (", e.msg,
@@ -96,6 +103,9 @@ void save() {
 			"ultimatePort": JSONValue(prefs.ultimatePort),
 			"x64scPath":    JSONValue(prefs.x64scPath),
 			"audioDriver":  JSONValue(prefs.audioDriver),
+			"sidModel":     JSONValue(prefs.sidModel),
+			"filter6581":   JSONValue(prefs.filter6581),
+			"filter8580":   JSONValue(prefs.filter8580),
 		];
 		write(configPath(), root.toPrettyString());
 	}
