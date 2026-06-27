@@ -34,7 +34,6 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Shift-F10` | Export song: Full player .prg / Optimized .prg / PSID (options dialog) |
 | `F9` | Open the Load song dialog |
 | `F10` | Open the Save song dialog |
-|  | Properties: playback backend, reSID SID model & filter preset, Ultimate IP/port, x64sc path, audio driver |
 | `Ctrl-F10` | Quick save song (doesn't ask a filename) |
 | `Ctrl-Shift-F10` | Render audio: .wav / .flac (duration, normalize, bit depth, rate) |
 
@@ -77,6 +76,12 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Ctrl-Shift-F8` | Select previous SID filter preset |
 | `Ctrl-F3` | Toggle SID type (6581/8580) |
 | `Ctrl-F2` | Toggle interpolation |
+
+### Properties
+
+| Shortcut | Action |
+|---|---|
+|  | Properties: playback backend, Ultimate IP/port, x64sc path, audio driver |
 
 ### Song management
 

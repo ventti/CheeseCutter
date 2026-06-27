@@ -448,7 +448,7 @@ final class MenuBar {
 
 	void rebuild() {
 		menus.length = 0;
-		addGlobalMenu("File", ["File", "Application"]);   // Application = Quit (last group)
+		addGlobalMenu("File", ["File", "Properties", "Application"]);   // Application = Quit (last group)
 		addGlobalMenu("Edit", ["Edit", "Song management", "Song variables"]);
 		addGlobalMenu("View", ["Display"]);
 		addGlobalMenu("Playback", ["Playback", "Playback options",
@@ -643,8 +643,8 @@ final class MenuBar {
 	// --- Completeness assertion ----------------------------------------------
 
 	void assertCategoryCoverage() {
-		string[] mapped = ["File", "Application", "Edit", "Song management",
-						   "Song variables", "Display", "Playback",
+		string[] mapped = ["File", "Properties", "Application", "Edit",
+						   "Song management", "Song variables", "Display", "Playback",
 						   "Playback options", "Voice control", "Keyjam",
 						   "Window navigation", "Help"];
 		foreach(cat; sm.categoriesForContext(cast(string)Ctx.global)) {
