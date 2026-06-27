@@ -11,7 +11,10 @@ import std.file : exists, read, write, mkdirRecurse;
 import std.path : buildPath;
 import std.process : environment;
 import std.stdio : stderr;
-import com.util : APP_NAME;
+// Stable storage identifier for the per-user config directory. Deliberately a
+// fixed literal, NOT APP_NAME: re-styling the display name (e.g. "Extended" ->
+// "EXTended") must not move the config dir and orphan an existing prefs file.
+private enum CONFIG_DIR = "CheeseCutter-Extended";
 
 // Bumped when the on-disk schema changes incompatibly. Stored as "version" in
 // the JSON so a future load() can migrate; kept separate from APP_VERSION (the
@@ -37,10 +40,10 @@ string configDir() {
 	version(Windows) {
 		string base = environment.get("APPDATA", "");
 		if(base.length == 0) base = environment.get("USERPROFILE", ".");
-		return buildPath(base, APP_NAME);
+		return buildPath(base, CONFIG_DIR);
 	} else version(OSX) {
 		string home = environment.get("HOME", ".");
-		return buildPath(home, "Library", "Application Support", APP_NAME);
+		return buildPath(home, "Library", "Application Support", CONFIG_DIR);
 	} else {
 		string base = environment.get("XDG_CONFIG_HOME", "");
 		if(base.length == 0)

@@ -12,7 +12,10 @@ import std.array;
 
 alias char* PetString;
 
-enum APP_NAME = "CheeseCutter-Extended";
+// Display name (window title, --help, man pages, the on-C64 shim's row 0). NOTE:
+// the per-user config directory must NOT derive from this — see com.config's
+// CONFIG_DIR — so re-styling the name never orphans an existing prefs file.
+enum APP_NAME = "CheeseCutter-EXTended";
 // Single source of truth for the version: the repo-root `Version` file, read at
 // compile time (string import; the Makefiles add -J. and `make` also reads it
 // for dist/tarball names). Bump the version by editing `Version` only.

@@ -1,9 +1,9 @@
-# CheeseCutter-Extended
+# CheeseCutter-EXTended
 
 A tracker-style music editor for the Commodore 64 SID chip — an extended fork of
 CheeseCutter 2.9 by abaddon. Current version 0.4.0.
 
-![CheeseCutter-Extended](guide/pics/ccmain-scaled.png)
+![CheeseCutter-EXTended](guide/pics/ccmain-scaled.png)
 
 ## Features
 
@@ -73,5 +73,5 @@ Licensed under the GNU General Public License (see [`LICENSE.md`](LICENSE.md)).
 
 Binary packages are available for some distributions via
 https://repology.org/metapackage/cheesecutter/versions — the authors of
-CheeseCutter-Extended take no responsibility for binaries downloaded from any
+CheeseCutter-EXTended take no responsibility for binaries downloaded from any
 third-party website, including the one above.
