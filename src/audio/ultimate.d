@@ -13,10 +13,14 @@ module audio.ultimate;
 
 import std.net.curl;
 import std.format;
+import std.string : indexOf;
 import std.process : environment;
 import std.stdio;
-import core.time : dur;
+import core.time : dur, MonoTime;
+import core.thread : Thread;
 import audio.remote;
+
+private enum REBOOT_RUN_TIMEOUT = 12;   // seconds to keep retrying run_prg after a reboot
 
 private class UltimateTransport : RemoteTransport {
 	private string host;
@@ -57,13 +61,13 @@ private class UltimateTransport : RemoteTransport {
 		http.perform();
 		auto code = http.statusLine.code;
 		if(code == 403)
-			throw new Exception("C64 Ultimate: 403 Forbidden — check CHEESECUTTER_ULTIMATE_PASSWORD.");
+			throw new Exception(format("C64 Ultimate %s:%d: 403 Forbidden — check CHEESECUTTER_ULTIMATE_PASSWORD.", host, port));
 		if(code == 404 && path.length >= 8 && path[0 .. 8] == "/v1/runn")
 			// run_prg/load_prg 404 even though the REST API answers: the C64 itself
 			// isn't in a runnable state (powered off, or sitting in the Ultimate menu).
-			throw new Exception("C64 Ultimate: run_prg returned 404 — is the C64 powered on and out of the Ultimate menu?");
+			throw new Exception(format("C64 Ultimate %s:%d: run_prg returned 404 — is the C64 powered on and out of the Ultimate menu?", host, port));
 		if(code >= 400)
-			throw new Exception(format("C64 Ultimate: HTTP %d for %s", code, path));
+			throw new Exception(format("C64 Ultimate %s:%d: HTTP %d for %s", host, port, code, path));
 	}
 
 	// Liveness probe only. We deliberately do NOT issue /v1/machine:reboot: a
@@ -75,8 +79,35 @@ private class UltimateTransport : RemoteTransport {
 		httpRequest("GET", "/v1/version", []);
 	}
 
+	// run_prg injects + runs the resident image. It 404s when the C64 isn't in a
+	// runnable state — most often sitting in the Ultimate menu (e.g. left there by
+	// the machine:reset we issue on exit, or by the user). The original code
+	// rebooted the C64 once on every bring-up; that was dropped for speed, which
+	// exposed this. Keep the fast path (no reboot when the C64 is already
+	// runnable), but on a 404 reboot to BASIC and retry run_prg until it takes
+	// (it keeps 404ing until the C64 is back up). Bounded so a wedged/powered-off
+	// machine can't hang the UI forever.
 	void runProgram(const(ubyte)[] prg) {
-		httpRequest("POST", "/v1/runners:run_prg", prg);
+		try {
+			httpRequest("POST", "/v1/runners:run_prg", prg);
+			return;
+		}
+		catch(Exception e) {
+			if(e.msg.indexOf("404") < 0) throw e;   // not the "menu / not runnable" case
+		}
+		httpRequest("PUT", "/v1/machine:reboot", []);   // exit the menu -> BASIC
+		auto deadline = MonoTime.currTime + dur!"seconds"(REBOOT_RUN_TIMEOUT);
+		Exception last;
+		while(MonoTime.currTime < deadline) {
+			Thread.sleep(dur!"msecs"(750));   // give the C64 time to come up
+			try { httpRequest("POST", "/v1/runners:run_prg", prg); return; }
+			catch(Exception e) {
+				last = e;
+				if(e.msg.indexOf("404") < 0) throw e;   // a real error, not "still booting"
+			}
+		}
+		throw last !is null ? last
+			: new Exception(format("C64 Ultimate %s:%d: run_prg still 404 after reboot", host, port));
 	}
 
 	void writeMem(int addr, const(ubyte)[] data) {
@@ -99,7 +130,7 @@ private class UltimateTransport : RemoteTransport {
 		http.perform();
 		auto code = http.statusLine.code;
 		if(code >= 400)
-			throw new Exception(format("C64 Ultimate: HTTP %d for readmem", code));
+			throw new Exception(format("C64 Ultimate %s:%d: HTTP %d for readmem", host, port, code));
 		return buf;
 	}
 
@@ -117,6 +148,7 @@ private class UltimateTransport : RemoteTransport {
 
 // Enable the Ultimate backend. Call once at startup when --ultimate is given.
 void configure(string host, int port, bool ntsc) {
+	stderr.writeln("Ultimate: backend set to ", host, ":", port);
 	audio.remote.setMode(ntsc);
 	audio.remote.useTransport(new UltimateTransport(host, port));
 }
