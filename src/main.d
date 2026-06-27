@@ -118,10 +118,14 @@ void mainloop(bool verbose) {
 				quit = true;
 				break;
 			case SDL_KEYDOWN:
-				if(mainui.activeInput !is null) {
-					Cursor cursor = mainui.activeInput.cursor;
-					if(cursor !is null) cursor.reset();
-				}
+				// Erase the focused field's cursor highlight before handling the
+				// key, so a move never leaves an inverse-video "shadow" at the old
+				// position (clear() repaints that cell to its original colors). The
+				// cursor is re-established at the new position by the field on
+				// keypress and by the per-frame activeInput.update(). Mirrors the
+				// mouse path (UI.clickedAt clears the cursor up front).
+				if(mainui.activeInput !is null && mainui.activeInput.cursor !is null)
+					mainui.activeInput.cursor.clear();
 				mods = evt.key.keysym.mod;
 				key = evt.key.keysym.sym;
 
