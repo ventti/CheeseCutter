@@ -44,10 +44,17 @@ enum {
 	CTRL_SEED_TRACKLO = 6,   // 6 bytes -> TRACKLO (applied by the shim on restart)
 	CTRL_SEED_NEWSEQ = 12,   // 3 bytes -> NEWSEQ
 	CTRL_SEED_VOICE = 15,    // 3 bytes -> VOICE (restart and keyjam)
-	CTRL_BLOCK_LEN = 18,
+	// Player-position seeds (absolute note-rows, voice 0 = the canonical song
+	// position, matching the editor's playback cursor). The shim seeds its Pos
+	// counter with the start row on restart and wraps loopEnd->loopStart, so the
+	// on-target Pos starts where playback begins and loops with the song.
+	CTRL_SEED_PLAYROW = 18,   // 2 bytes: absolute start row
+	CTRL_SEED_LOOPSTART = 20, // 2 bytes: absolute loop-back (wrap) row
+	CTRL_SEED_LOOPEND = 22,   // 2 bytes: absolute endmark row (0 = no loop info)
+	CTRL_BLOCK_LEN = 24,
 	// Read-only byte the shim writes once at install: $ff=not detected yet,
 	// 0=6581, 1=8580. Outside the command block, so writeCommand never touches it.
-	CTRL_SIDMODEL = 18,
+	CTRL_SIDMODEL = 24,
 }
 enum {
 	REQ_RESTART = 1,
@@ -320,7 +327,8 @@ private void pushBytes(Song song, int addr, int len) {
 // request next IRQ; the writemem DMA is atomic vs that IRQ (the Ultimate halts
 // the CPU during DMA), so the request is never seen with half-written seeds.
 private void writeCommand(Song song, ubyte req, ubyte subtune,
-						  ubyte kjnote, ubyte kjvoice, ubyte kjinstr) {
+						  ubyte kjnote, ubyte kjvoice, ubyte kjinstr,
+						  int startRow = 0, int loopStart = 0, int loopEnd = 0) {
 	ubyte[CTRL_BLOCK_LEN - CTRL_REQ] b;   // CTRL_REQ .. end of block
 	b[CTRL_REQ      - CTRL_REQ] = req;
 	b[CTRL_SUBTUNE  - CTRL_REQ] = subtune;
@@ -333,17 +341,26 @@ private void writeCommand(Song song, ubyte req, ubyte subtune,
 	seed(CTRL_SEED_TRACKLO, song.offsets[Offsets.TRACKLO], 6);
 	seed(CTRL_SEED_NEWSEQ,  song.offsets[Offsets.NEWSEQ], 3);
 	seed(CTRL_SEED_VOICE,   song.offsets[Offsets.VOICE], 3);
+	void put16(int dst, int v) {
+		b[dst - CTRL_REQ]     = cast(ubyte)(v & 0xff);
+		b[dst - CTRL_REQ + 1] = cast(ubyte)((v >> 8) & 0xff);
+	}
+	put16(CTRL_SEED_PLAYROW,   startRow);
+	put16(CTRL_SEED_LOOPSTART, loopStart);
+	put16(CTRL_SEED_LOOPEND,   loopEnd);
 	transport.writeMem(CTRL_ADDR + CTRL_REQ, b[]);
 }
 
 // Start playback from a position. song.memspace must already hold the poked
 // track/sequence offsets (initPlayOffset ran in audio.player); the shim seeds
 // them into the player on restart.
-void cmdRestart(Song song, ubyte subtune) {
+void cmdRestart(Song song, ubyte subtune,
+				int startRow = 0, int loopStart = 0, int loopEnd = 0) {
 	if(transport is null || !loaded) return;
 	try {
 		syncDeltas(song);
-		writeCommand(song, cast(ubyte)REQ_RESTART, subtune, 0, 0, 0);
+		writeCommand(song, cast(ubyte)REQ_RESTART, subtune, 0, 0, 0,
+					 startRow, loopStart, loopEnd);
 	}
 	catch(Exception e) { stderr.writeln("Remote: restart failed: ", e.msg); loaded = false; }
 }

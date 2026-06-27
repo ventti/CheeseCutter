@@ -133,7 +133,8 @@ void playRow(Voice[] voices) {
 
 	if(audio.remote.isActive()) {
 		audio.remote.ensureLoaded(song);
-		audio.remote.cmdRestart(song, 0);
+		int sr, ls, le; remotePosSeed(trk, seq, sr, ls, le);
+		audio.remote.cmdRestart(song, 0, sr, ls, le);
 	}
 
 	SDL_PauseAudio(0);
@@ -158,7 +159,8 @@ void start(int[] trk, int[] seq) {
 
 	if(audio.remote.isActive()) {
 		audio.remote.ensureLoaded(song);
-		audio.remote.cmdRestart(song, 0);
+		int sr, ls, le; remotePosSeed(trk, seq, sr, ls, le);
+		audio.remote.cmdRestart(song, 0, sr, ls, le);
 	}
 
 	SDL_PauseAudio(0);
@@ -331,6 +333,27 @@ void decMultiplier() {
 
 void incMultiplier() {
 	setMultiplier(song.multiplier + 1);
+}
+
+// The position triple the remote shim needs to show "Pos": where playback
+// begins, and the song's loop bounds, all as absolute note-rows of voice 0 (the
+// canonical song position, matching the editor's playback cursor). The shim
+// seeds its counter with startRow and wraps loopEnd->loopStart, so the on-target
+// Pos starts at the play-from row and loops with the song. Recomputed each
+// restart, so it reflects any song-end / loop-point edit made before play.
+private void remotePosSeed(int[] t, int[] s,
+						   out int startRow, out int loopStart, out int loopEnd) {
+	auto tl = song.tracks[0];
+	int trackLen = tl.trackLength;
+	int rowAt(int trkOff, int seqOff) {
+		if(trkOff > trackLen) trkOff = trackLen;
+		int sum = 0;
+		foreach(i; 0 .. trkOff) sum += song.sequence(tl[i]).rows;
+		return sum + seqOff;
+	}
+	startRow  = rowAt(t[0], s[0]);
+	loopStart = rowAt(tl.wrapOffset, 0);
+	loopEnd   = rowAt(trackLen, 0);
 }
 
 private void initPlayOffset(int[] t, int[] s) {

@@ -250,7 +250,9 @@ rst_cpnv	lda seed_newseq,x
 		sta fcnt		; restart the playback clock
 		sta secs
 		sta mins
-		sta pos_rows		; restart the player-position counter
+		lda seed_pos		; restart Pos from the row playback starts at
+		sta pos_rows		; (host-supplied absolute row; wraps at seed_loopend)
+		lda seed_pos+1
 		sta pos_rows+1
 		lda #$ff		; prev-speedcnt sentinel: the player's first
 		sta pos_prev		; speedcnt is < $ff, so the initial count-down
@@ -530,6 +532,14 @@ ctrl_kjinstr	!8 0		; keyjam instrument
 seed_tracklo	!fill 6, 0	; -> TRACKLO (t1/t2/t3 lo, then hi)
 seed_newseq	!fill 3, 0	; -> NEWSEQ (per voice)
 seed_voice	!fill 3, 0	; -> VOICE (voice-on mask)
+;; Player-position seeds (absolute note-rows, voice 0 = the canonical song
+;; position, matching the editor's playback cursor). On restart the shim seeds
+;; pos_rows with seed_pos and then wraps seed_loopend -> seed_loopstart, so the
+;; on-target "Pos" starts at the row playback begins from and loops with the
+;; song. The host recomputes them from the song each restart. lo then hi.
+seed_pos	!fill 2, 0	; absolute start row (where playback begins)
+seed_loopstart	!fill 2, 0	; absolute loop-back row (voice-0 wrap point)
+seed_loopend	!8 $ff, $ff	; absolute endmark row; baked $ffff = no host -> never wraps
 ctrl_sidmodel	!8 $ff		; detected SID: $ff=not yet, 0=6581, 1=8580 (host reads)
 
 ;;; ----------------------------------------
@@ -614,8 +624,24 @@ pos_tick
 		beq pt_done		; unchanged this frame
 		bcc pt_store		; decreased: normal count-down, not a new row
 		inc pos_rows		; increased: row reloaded -> count one row
-		bne pt_store
+		bne pt_wrapchk
 		inc pos_rows+1
+pt_wrapchk
+		;; loop the display when the song loops: once pos_rows reaches the
+		;; host-supplied endmark row, jump back to the wrap row (both voice 0).
+		;; The baked default seed_loopend = $ffff (standalone export, no host) is
+		;; never reached, so a non-hosted PRG just counts up without wrapping.
+		lda pos_rows+1
+		cmp seed_loopend+1
+		bcc pt_store
+		bne pt_wrap
+		lda pos_rows
+		cmp seed_loopend
+		bcc pt_store
+pt_wrap		lda seed_loopstart
+		sta pos_rows
+		lda seed_loopstart+1
+		sta pos_rows+1
 pt_store	stx pos_prev
 pt_done		rts
 
