@@ -19,6 +19,8 @@ import std.format;
 import std.stdio;
 import core.time : MonoTime, dur;
 import core.thread : Thread;
+import core.sync.mutex : Mutex;
+import core.sync.condition : Condition;
 import ct.base;
 import ct.build;
 static import com.session;
@@ -116,6 +118,119 @@ private __gshared MonoTime nextRetry;        // earliest next (re)establish atte
 private __gshared bool wasDown = false;       // one-shot "backend lost" logging
 enum RETRY_BACKOFF = 2;                       // seconds between recovery attempts
 
+// ---------------------------------------------------------------- async I/O
+// A synchronous writemem is ~150ms on the Ultimate (fresh HTTP per request, no
+// keep-alive), so mirroring edits on the UI thread stalls typing during live
+// playback. A single background writer thread drains a FIFO of pre-diffed byte
+// spans: every write (edits, commands, mute, modified-flag) is enqueued and the
+// editor returns instantly. FIFO order means an edit always lands before the
+// restart that follows it, with no explicit flush. Reads (SID probe, shim-ready)
+// and connect/run_prg stay on the main thread but take transportMutex so they
+// never race the worker's writemem. The queue is cleared on (re)inject (stale for
+// the new image) and the worker is quiesced before a backend swap / on shutdown.
+private struct WriteOp { int addr; immutable(ubyte)[] data; }
+private __gshared WriteOp[] writeQueue;
+private __gshared bool workerBusy = false;
+private __gshared bool workerStop = false;
+private __gshared bool ioFailed = false;
+private __gshared string ioFailMsg;
+private __gshared Thread ioThread;
+private __gshared Mutex ioMutex;        // guards writeQueue / workerBusy / ioFailed
+private __gshared Condition ioCond;     // signals queue-nonempty / worker-idle / stop
+private __gshared Mutex transportMutex; // serializes all actual transport access
+private enum FLUSH_TIMEOUT_S = 5;
+
+private void startWorker() {
+	if(ioThread !is null) return;
+	ioMutex = new Mutex();
+	ioCond = new Condition(ioMutex);
+	transportMutex = new Mutex();
+	workerStop = false;
+	ioThread = new Thread(&ioWorkerLoop);
+	ioThread.isDaemon = true;
+	ioThread.start();
+}
+
+// Serialize a transport access (lock_nothrow so it's usable from nothrow paths).
+private void txLock() nothrow { if(transportMutex !is null) transportMutex.lock_nothrow(); }
+private void txUnlock() nothrow { if(transportMutex !is null) transportMutex.unlock_nothrow(); }
+
+private void ioWorkerLoop() {
+	for(;;) {
+		WriteOp op;
+		try {
+			synchronized(ioMutex) {
+				while(writeQueue.length == 0 && !workerStop) ioCond.wait();
+				if(workerStop) return;
+				op = writeQueue[0];
+				writeQueue = writeQueue[1 .. $];
+				workerBusy = true;
+			}
+		}
+		catch(Throwable) { return; }
+		try {
+			txLock(); scope(exit) txUnlock();
+			if(transport !is null) transport.writeMem(op.addr, op.data);
+		}
+		catch(Exception e) {
+			try { synchronized(ioMutex) { ioFailed = true; ioFailMsg = e.msg; writeQueue.length = 0; } }
+			catch(Throwable) {}
+		}
+		try { synchronized(ioMutex) { workerBusy = false; ioCond.notifyAll(); } }
+		catch(Throwable) {}
+	}
+}
+
+private void enqueueWrite(int addr, const(ubyte)[] data) nothrow {
+	if(ioMutex is null) return;
+	try {
+		auto copy = data.idup;
+		synchronized(ioMutex) { writeQueue ~= WriteOp(addr, copy); ioCond.notifyAll(); }
+	}
+	catch(Throwable) {}
+}
+
+private void clearWriteQueue() nothrow {
+	if(ioMutex is null) return;
+	try { synchronized(ioMutex) { writeQueue.length = 0; } } catch(Throwable) {}
+}
+
+// Wait until the queue is empty and no write is in flight (worker idle). Bounded
+// so a wedged backend can't hang the UI. Used before swapping the transport.
+private void flushWrites() nothrow {
+	if(ioMutex is null) return;
+	try {
+		synchronized(ioMutex) {
+			auto deadline = MonoTime.currTime + dur!"seconds"(FLUSH_TIMEOUT_S);
+			while((writeQueue.length > 0 || workerBusy) && MonoTime.currTime < deadline)
+				ioCond.wait(dur!"msecs"(100));
+		}
+	}
+	catch(Throwable) {}
+}
+
+// One-shot: did a background write fail (backend lost)? Caller resets the link.
+private bool takeIoFailed(out string msg) nothrow {
+	if(ioMutex is null) return false;
+	try {
+		synchronized(ioMutex) {
+			if(!ioFailed) return false;
+			ioFailed = false; msg = ioFailMsg; return true;
+		}
+	}
+	catch(Throwable) { return false; }
+}
+
+private void stopWorker() nothrow {
+	if(ioThread is null) return;
+	try {
+		synchronized(ioMutex) { workerStop = true; ioCond.notifyAll(); }
+		ioThread.join();
+	}
+	catch(Throwable) {}
+	ioThread = null;
+}
+
 bool isActive() nothrow { return transport !is null; }
 bool isLoaded() nothrow { return loaded; }
 
@@ -138,7 +253,8 @@ private void pollSidModel() nothrow {
 	nextSidPoll = MonoTime.currTime + dur!"msecs"(250);
 	sidPollTries++;
 	try {
-		auto b = transport.readMem(CTRL_ADDR + CTRL_SIDMODEL, 1);
+		ubyte[] b;
+		{ txLock(); scope(exit) txUnlock(); b = transport.readMem(CTRL_ADDR + CTRL_SIDMODEL, 1); }
 		if(b.length < 1) return;
 		if(b[0] == 0)      { sidModel = "6581"; sidModelKnown = true; }
 		else if(b[0] == 1) { sidModel = "8580"; sidModelKnown = true; }
@@ -160,8 +276,8 @@ private void pushModifiedFlag(Song song) nothrow {
 		if(modSynced && mod == lastMod) return;
 		int len = cast(int)com.session.state.filename.length;
 		if(len > 0)
-			transport.writeMem(0x0400 + 2*40 + 6 + len + 1,
-							   [cast(ubyte)(mod ? 0x2a : 0x20)]);
+			enqueueWrite(0x0400 + 2*40 + 6 + len + 1,
+						 [cast(ubyte)(mod ? 0x2a : 0x20)]);
 		lastMod = mod;
 		modSynced = true;
 	}
@@ -173,6 +289,10 @@ private void pushModifiedFlag(Song song) nothrow {
 // transport down first and flags a re-inject so the next ensureLoaded brings the
 // new backend up. Pass null to return to local-only playback.
 void useTransport(RemoteTransport t) {
+	if(t !is null) startWorker();   // ensure the writer thread + locks exist
+	clearWriteQueue();              // drop writes destined for the old transport
+	flushWrites();                  // and let any in-flight one finish (worker idle)
+	txLock(); scope(exit) txUnlock();
 	if(transport !is null && transport !is t) {
 		try { transport.shutdown(); } catch(Throwable) {}
 	}
@@ -237,6 +357,14 @@ private void buildRegions(Song song) {
 // pending. Throttled by a backoff so a downed backend isn't hammered per frame.
 void ensureLoaded(Song song) {
 	if(transport is null) return;
+	// A background write failed -> the backend was lost. Reset the link so the
+	// path below re-establishes it (re-upload), throttled by the backoff.
+	string failMsg;
+	if(takeIoFailed(failMsg)) {
+		loaded = false;
+		nextRetry = MonoTime.currTime + dur!"seconds"(RETRY_BACKOFF);
+		if(!wasDown) { stderr.writeln("Remote: backend lost (", failMsg, "); retrying..."); wasDown = true; }
+	}
 	if(loaded && !reloadPending) {
 		// Shim already injected: read back its one-shot SID probe (self-throttled,
 		// no-op once known). Driven from here so the SID readback belongs to the
@@ -248,8 +376,9 @@ void ensureLoaded(Song song) {
 	// Backoff applies only between consecutive failed attempts (nextRetry is set
 	// in the failure path), so the first recovery after a loss is immediate.
 	if(MonoTime.currTime < nextRetry) return;
+	clearWriteQueue();   // any queued writes are stale for the image we're about to (re)upload
 	try {
-		transport.connect();   // (re)launch / (re)connect; idempotent
+		{ txLock(); scope(exit) txUnlock(); transport.connect(); }   // (re)launch / (re)connect; idempotent
 		// Assemble the resident image only when it's actually stale (first bring-up
 		// or a song change). On a plain connection retry we reuse the cached bytes,
 		// so the leaky ACME assembler is never re-run in a tight retry loop.
@@ -260,7 +389,7 @@ void ensureLoaded(Song song) {
 										   com.session.state.filename.idup);
 			prgValid = true;
 		}
-		transport.runProgram(cachedPrg);
+		{ txLock(); scope(exit) txUnlock(); transport.runProgram(cachedPrg); }
 		shadow[] = song.memspace[];
 		awaitShimReady();   // don't write until the freshly-injected shim is up
 		loaded = true;
@@ -311,7 +440,8 @@ private void awaitShimReady() {
 	auto deadline = MonoTime.currTime + dur!"seconds"(SHIM_READY_TIMEOUT);
 	while(MonoTime.currTime < deadline) {
 		try {
-			auto b = transport.readMem(CTRL_ADDR + CTRL_SIDMODEL, 1);
+			ubyte[] b;
+			{ txLock(); scope(exit) txUnlock(); b = transport.readMem(CTRL_ADDR + CTRL_SIDMODEL, 1); }
 			if(b.length && b[0] != 0xff) return;   // shim installed and running
 		}
 		catch(Exception) { /* still resetting / transient — keep polling */ }
@@ -354,20 +484,20 @@ private void syncDeltasNow(Song song) {
 				if(song.memspace[i] != shadow[i]) { if(lo < 0) lo = i; hi = i; }
 			if(lo < 0) continue;   // region unchanged
 			int spanEnd = hi + 1;
-			transport.writeMem(lo, song.memspace[lo .. spanEnd]);
-			shadow[lo .. spanEnd] = song.memspace[lo .. spanEnd];
+			enqueueWrite(lo, song.memspace[lo .. spanEnd]);   // queued; the writer thread does the HTTP
+			shadow[lo .. spanEnd] = song.memspace[lo .. spanEnd];   // optimistic; a failed write forces a full re-upload
 		}
 	}
 	catch(Exception e) {
-		stderr.writeln("Remote: writemem failed: ", e.msg);
-		loaded = false;   // trigger reconnect + re-upload on the next ensureLoaded
+		stderr.writeln("Remote: sync failed: ", e.msg);
+		loaded = false;
 	}
 }
 
 // ---------------------------------------------------------------- commands
 
 private void pushBytes(Song song, int addr, int len) {
-	transport.writeMem(addr, song.memspace[addr .. addr + len]);
+	enqueueWrite(addr, song.memspace[addr .. addr + len]);
 	shadow[addr .. addr + len] = song.memspace[addr .. addr + len];
 }
 
@@ -399,7 +529,9 @@ private void writeCommand(Song song, ubyte req, ubyte subtune,
 	put16(CTRL_SEED_PLAYROW,   startRow);
 	put16(CTRL_SEED_LOOPSTART, loopStart);
 	put16(CTRL_SEED_LOOPEND,   loopEnd);
-	transport.writeMem(CTRL_ADDR + CTRL_REQ, b[]);
+	// Enqueued like edits, so FIFO order guarantees the seeds/restart land after
+	// the syncDeltasNow edits the caller queued just before (no explicit flush).
+	enqueueWrite(CTRL_ADDR + CTRL_REQ, b[]);
 }
 
 // Start playback from a position. song.memspace must already hold the poked
@@ -409,7 +541,7 @@ void cmdRestart(Song song, ubyte subtune,
 				int startRow = 0, int loopStart = 0, int loopEnd = 0) {
 	if(transport is null || !loaded) return;
 	try {
-		syncDeltasNow(song);   // immediate: the restart must see the latest edits
+		syncDeltasNow(song);   // queue the latest edits; FIFO lands them before the restart
 		writeCommand(song, cast(ubyte)REQ_RESTART, subtune, 0, 0, 0,
 					 startRow, loopStart, loopEnd);
 	}
@@ -419,7 +551,7 @@ void cmdRestart(Song song, ubyte subtune,
 void cmdKeyjam(Song song, int note, int voice, int instr) {
 	if(transport is null || !loaded) return;
 	try {
-		syncDeltasNow(song);   // immediate: voice-on mask (set by playNote) rides along as the voice seed
+		syncDeltasNow(song);   // queue edits (voice-on mask rides along) before the keyjam
 		writeCommand(song, cast(ubyte)REQ_KEYJAM, 0,
 					 cast(ubyte)note, cast(ubyte)voice, cast(ubyte)instr);
 	}
@@ -428,8 +560,7 @@ void cmdKeyjam(Song song, int note, int voice, int instr) {
 
 void cmdStop() nothrow {
 	if(transport is null || !loaded) return;
-	try { transport.writeMem(CTRL_ADDR + CTRL_REQ, [cast(ubyte)REQ_STOP]); }
-	catch(Throwable) { loaded = false; }
+	enqueueWrite(CTRL_ADDR + CTRL_REQ, [cast(ubyte)REQ_STOP]);
 }
 
 // Mirror the voice-on/off mask (mute toggles) to the resident player.
@@ -441,6 +572,7 @@ void pushVoice(Song song) nothrow {
 
 // Tear down on exit.
 void shutdown() nothrow {
+	stopWorker();   // stop + join the writer (abandons any queued writes) before teardown
 	if(transport is null) return;
 	transport.shutdown();
 	loaded = false;
