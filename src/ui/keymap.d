@@ -112,21 +112,6 @@ void registerShortcuts(UI ui) {
 		activateDialog(savedialog);
 	});
 
-	sm.register("export_song", Ctx.global, "File",
-				"Export song: Full player .prg / Optimized .prg / PSID (options dialog)", SDLK_F10, KMOD_SHIFT, {
-		activateDialog(exportDialog);
-	});
-
-	sm.register("render_audio", Ctx.global, "File",
-				"Render audio: .wav / .flac (duration, normalize, bit depth, rate)", SDLK_F10, KMOD_CTRL | KMOD_SHIFT, {
-		activateDialog(renderDialog);
-	});
-
-	sm.registerMenuOnly("properties", Ctx.global, "File",
-				"Properties: playback backend, reSID SID model & filter preset, Ultimate IP/port, x64sc path, audio driver", {
-		activateDialog(propertiesDialog);
-	}, "Properties");
-
 	sm.register("quick_save", Ctx.global, "File",
 				"Quick save song (doesn't ask a filename)", SDLK_F10, KMOD_CTRL, {
 		string s = savedialog.filename;
@@ -137,6 +122,23 @@ void registerShortcuts(UI ui) {
 			statusline.display(format("Saved \"%s\".",s));
 		}
 	});
+
+	sm.register("export_song", Ctx.global, "File",
+				"Export song: Full player .prg / Optimized .prg / PSID (options dialog)", SDLK_F10, KMOD_SHIFT, {
+		activateDialog(exportDialog);
+	});
+
+	sm.register("render_audio", Ctx.global, "File",
+				"Render audio: .wav / .flac (duration, normalize, bit depth, rate)", SDLK_F10, KMOD_CTRL | KMOD_SHIFT, {
+		activateDialog(renderDialog);
+	});
+
+	// Its own "Properties" category isolates it in a divider-separated group
+	// between the file commands above and the trailing Quit group.
+	sm.registerMenuOnly("properties", Ctx.global, "Properties",
+				"Properties: playback backend, reSID SID model & filter preset, Ultimate IP/port, x64sc path, audio driver", {
+		activateDialog(propertiesDialog);
+	}, "Properties");
 
 	// Undo/Redo
 	sm.register("undo", Ctx.global, "Edit", "Undo", SDLK_z, KMOD_CTRL, {
