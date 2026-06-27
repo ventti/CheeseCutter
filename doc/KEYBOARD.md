@@ -81,7 +81,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 
 | Shortcut | Action |
 |---|---|
-|  | Properties: playback backend, Ultimate IP/port, x64sc path, audio driver |
+|  | Properties: playback backend, reSID SID model & filter preset, Ultimate IP/port, x64sc path, audio driver |
 
 ### Song management
 
