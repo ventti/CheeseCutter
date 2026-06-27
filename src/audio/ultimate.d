@@ -105,6 +105,10 @@ private class UltimateTransport : RemoteTransport {
 
 	string name() nothrow { return "Ultimate"; }
 
+	// readmem is a DMA GET that doesn't halt the CPU, so it's safe to poll while
+	// the C64 is still booting after a fresh run_prg (see awaitShimReady).
+	bool readMemIsPassive() nothrow { return true; }
+
 	void shutdown() nothrow {
 		try { httpRequest("PUT", "/v1/machine:reset", []); }
 		catch(Throwable e) { try { stderr.writeln("Ultimate: reset failed: ", e.msg); } catch(Throwable) {} }

@@ -288,6 +288,11 @@ private class ViceTransport : RemoteTransport {
 
 	string name() nothrow { return "Vice"; }
 
+	// A monitor MEM_GET halts the CPU, so polling it during the autostart would
+	// race the boot; and MEM_SET works mid-boot anyway, so no readiness wait is
+	// needed (see awaitShimReady).
+	bool readMemIsPassive() nothrow { return false; }
+
 	void shutdown() nothrow {
 		// Leave any launched x64sc running so the user keeps hearing it. VICE
 		// "opens" (pauses) the monitor when a client disconnects, so resume

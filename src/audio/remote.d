@@ -18,6 +18,7 @@ module audio.remote;
 import std.format;
 import std.stdio;
 import core.time : MonoTime, dur;
+import core.thread : Thread;
 import ct.base;
 import ct.build;
 static import com.session;
@@ -80,6 +81,12 @@ interface RemoteTransport {
 	void shutdown() nothrow;
 	// Short backend name for the UI (e.g. "Ultimate", "Vice").
 	string name() nothrow;
+	// True if readMem is a passive, non-intrusive read (Ultimate's DMA readmem
+	// GET) that can be polled while the target is still booting after a fresh
+	// runProgram without disturbing it. False for backends whose read halts the
+	// CPU (the VICE monitor), where polling would race the autostart. Drives the
+	// post-inject readiness wait (awaitShimReady).
+	bool readMemIsPassive() nothrow;
 }
 
 private struct Region { int addr; int len; }
@@ -255,6 +262,7 @@ void ensureLoaded(Song song) {
 		}
 		transport.runProgram(cachedPrg);
 		shadow[] = song.memspace[];
+		awaitShimReady();   // don't write until the freshly-injected shim is up
 		loaded = true;
 		reloadPending = false;
 		// Let the target boot + run install (which does the SID probe) uninterrupted
@@ -282,6 +290,32 @@ void ensureLoaded(Song song) {
 			stderr.writeln("Remote: backend lost (", e.msg, "); retrying...");
 			wasDown = true;
 		}
+	}
+}
+
+// After a fresh inject, run_prg has reset the C64, which then boots, autostarts
+// and installs the shim (the install flips ctrl_sidmodel from $ff to 0/1). On the
+// Ultimate a writemem (POST) issued during that window 404s — so loading a new
+// tune and pressing Play back-to-back raced the reset and lost playback (the
+// first load was masked because the inject happens at startup, long before Play).
+// Wait for the install marker before declaring the backend ready, so the first
+// cmdRestart lands on a running machine. The poll uses a passive DMA read that
+// doesn't disturb the target; it's skipped for monitor backends (writes work
+// mid-boot there, and a monitor read would race the autostart). Bounded so a
+// target stuck in the Ultimate menu can't hang the UI — on timeout we proceed and
+// the normal write-failure/retry path takes over.
+private enum SHIM_READY_TIMEOUT = 6;   // seconds
+private enum SHIM_READY_POLL_MS = 120;
+private void awaitShimReady() {
+	if(transport is null || !transport.readMemIsPassive()) return;
+	auto deadline = MonoTime.currTime + dur!"seconds"(SHIM_READY_TIMEOUT);
+	while(MonoTime.currTime < deadline) {
+		try {
+			auto b = transport.readMem(CTRL_ADDR + CTRL_SIDMODEL, 1);
+			if(b.length && b[0] != 0xff) return;   // shim installed and running
+		}
+		catch(Exception) { /* still resetting / transient — keep polling */ }
+		Thread.sleep(dur!"msecs"(SHIM_READY_POLL_MS));
 	}
 }
 
