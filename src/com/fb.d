@@ -226,21 +226,25 @@ class VideoStandard : Video {
 		height = requestedHeight;
 		useFullscreen = fs;
 
-		// Create window with proper dimensions and fullscreen flag
-		SDL_WindowFlags flags = cast(SDL_WindowFlags)0;
-		if(fs) {
-			flags = SDL_WINDOW_FULLSCREEN_DESKTOP;
+		SDL_WindowFlags flags = fs ? SDL_WINDOW_FULLSCREEN_DESKTOP
+								   : cast(SDL_WindowFlags)0;
+
+		if(window is null) {
+			// First call: create the window + renderer.
+			SDL_CreateWindowAndRenderer(width, height, flags, &window, &renderer);
+			if(window is null || renderer is null) {
+				throw new DisplayError("Unable to initialize graphics mode.");
+			}
+			SDL_SetWindowTitle(window, com.util.APP_NAME);
+			SDL_StartTextInput();
+		} else {
+			// Subsequent toggles: switch the EXISTING window in place. Recreating
+			// the window/renderer here leaked the old fullscreen window — it stayed
+			// on screen behind the new one, showing the last fullscreen frame.
+			SDL_SetWindowFullscreen(window, flags);
 		}
 
-		SDL_CreateWindowAndRenderer(width, height, flags, &window, &renderer);
-		if(window is null || renderer is null) {
-			throw new DisplayError("Unable to initialize graphics mode.");
-		}
-
-		SDL_SetWindowTitle(window, com.util.APP_NAME);
-		SDL_StartTextInput();
 		SDL_RaiseWindow(window);
-
 		screen.refresh();
 	}
 
