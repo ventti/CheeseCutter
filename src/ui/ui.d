@@ -508,6 +508,13 @@ final class UI {
 		if(p.audioDriver != prefs.audioDriver)
 			audio.audio.setAudioDriver(p.audioDriver);
 
+		// Apply the reSID model + filter presets to the local engine (effective when
+		// reSID is the active backend; harmless to set while a remote backend plays).
+		audio.player.curfp6581 = p.filter6581;
+		audio.player.curfp8580 = p.filter8580;
+		audio.player.setSidModel(p.sidModel ? 1 : 0);   // reinits if the model changed
+		audio.player.initFP();                           // apply the active model's preset
+
 		switch(p.backend) {
 		case "ultimate": audio.ultimate.configure(p.ultimateHost, p.ultimatePort, ntsc); break;
 		case "vice":     audio.vice.configure(p.x64scPath, 0, ntsc); break;
