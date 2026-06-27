@@ -319,6 +319,23 @@ private void awaitShimReady() {
 	}
 }
 
+// Per-UI-frame mirror of edited song data, throttled (this is what the main loop
+// calls). A synchronous writemem is ~150ms on the Ultimate, so pushing every
+// frame stalls the UI thread while you type. Coalesce instead: skip if we synced
+// very recently — the syncDeltasNow diff naturally batches every edit since the
+// last push, so one throttled write per window carries them all (and we never
+// enqueue faster than the device drains). Commands (restart/keyjam) bypass this
+// and call syncDeltasNow directly so they're never delayed.
+private __gshared MonoTime lastFrameSync = MonoTime.zero;
+private enum FRAME_SYNC_MIN_MS = 200;
+void syncDeltas(Song song) {
+	if(transport is null || !loaded) return;
+	auto now = MonoTime.currTime;
+	if(now - lastFrameSync < dur!"msecs"(FRAME_SYNC_MIN_MS)) return;
+	lastFrameSync = now;
+	syncDeltasNow(song);
+}
+
 // Push edited song-data bytes to C64 RAM. Cheap when nothing changed.
 //
 // One writemem per dirty *region*, covering its first..last changed byte in a
@@ -327,7 +344,7 @@ private void awaitShimReady() {
 // region's scattered edits (and the clean bytes between them) into one write is
 // always the win. Each region is bounded mirror data, so the span never reaches
 // runtime/position vars or I/O.
-void syncDeltas(Song song) {
+private void syncDeltasNow(Song song) {
 	if(transport is null || !loaded) return;
 	try {
 		foreach(r; regions) {
@@ -392,7 +409,7 @@ void cmdRestart(Song song, ubyte subtune,
 				int startRow = 0, int loopStart = 0, int loopEnd = 0) {
 	if(transport is null || !loaded) return;
 	try {
-		syncDeltas(song);
+		syncDeltasNow(song);   // immediate: the restart must see the latest edits
 		writeCommand(song, cast(ubyte)REQ_RESTART, subtune, 0, 0, 0,
 					 startRow, loopStart, loopEnd);
 	}
@@ -402,7 +419,7 @@ void cmdRestart(Song song, ubyte subtune,
 void cmdKeyjam(Song song, int note, int voice, int instr) {
 	if(transport is null || !loaded) return;
 	try {
-		syncDeltas(song);   // voice-on mask (set by playNote) rides along as the voice seed
+		syncDeltasNow(song);   // immediate: voice-on mask (set by playNote) rides along as the voice seed
 		writeCommand(song, cast(ubyte)REQ_KEYJAM, 0,
 					 cast(ubyte)note, cast(ubyte)voice, cast(ubyte)instr);
 	}
