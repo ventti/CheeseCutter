@@ -16,7 +16,7 @@
 ;;; and take the hardware IRQ vector at $fffe (no KERNAL available).
 ;;;
 ;;; Display (black screen, light-grey text, lowercase/mixed charset):
-;;;   row 0  CheeseCutter-Extended <ver>
+;;;   row 0  CheeseCutter-EXTended <ver>
 ;;;   row 1  Player: <playerID>
 ;;;   row 3  <title>
 ;;;   row 4  <author>

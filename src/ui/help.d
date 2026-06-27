@@ -74,10 +74,10 @@ Ctrl-C..................Copy instrument to clipboard
 Ctrl-V..................Paste instrument from clipboard
 
 `+dPlayer reference\n
-Check out the bundled CheeseCutter-Extended user guide.
+Check out the bundled CheeseCutter-EXTended user guide.
 
 `+dAbout:
-CheeseCutter-Extended 0.1.0, based on CheeseCutter 2.9
+CheeseCutter-EXTended 0.1.0, based on CheeseCutter 2.9
 
 "]);
 

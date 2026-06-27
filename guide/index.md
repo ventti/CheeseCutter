@@ -1,5 +1,5 @@
 ---
-title: CheeseCutter-Extended User Guide
+title: CheeseCutter-EXTended User Guide
 ---
 
 {% include_relative README.md %}

@@ -61,7 +61,7 @@ The dependency graph and module list are generated from the source; the only han
 
 | Module | Synopsis | Depends on |
 | --- | --- | --- |
-| `config` | User preferences persisted as JSON in an OS-specific config directory — backend/connection/audio settings read at startup and editable at… | `com.util` |
+| `config` | User preferences persisted as JSON in an OS-specific config directory — backend/connection/audio settings read at startup and editable at… | — |
 | `cpu` | Cycle-stepped MOS 6510 CPU emulator that runs the C64 player code in-process. | — |
 | `fb` | Text-mode framebuffer — Video/Screen abstraction, character-cell rendering and the Visualizer interface. | `audio.audio`, `com.util` |
 | `kbd` | Keyboard scancode translation, including the super/cmd layer, into editor key events. | `ui.input` |
