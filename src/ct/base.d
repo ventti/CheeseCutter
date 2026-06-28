@@ -1863,6 +1863,21 @@ class Song {
 		chordIndexTable[crd++] = cast(ubyte)(p);
 	}
 
+	// Signed transpose offsets of chord `idx` ($00-$3f up, $40-$7f down), read
+	// from chordTable starting at chordIndexTable[idx] until the >=$80 loop/end
+	// marker. Shared by the sequence effect-column help and the chord table help.
+	int[] chordProgram(int idx) {
+		int[] offs;
+		if(idx < 0 || idx >= chordIndexTable.length) return offs;
+		int start = chordIndexTable[idx];
+		for(int k = start; k < chordTable.length && k < start + 64; k++) {
+			ubyte b = chordTable[k];
+			if(b >= 0x80) break;
+			offs ~= (b < 0x40) ? b : (b - 0x80);
+		}
+		return offs;
+	}
+
 	void importData(Song insong) {
 	  buffer[0xdfe .. 0xdfe + playerBinary.length] = playerBinary[];
 	  ver = SONG_REVISION;

@@ -197,13 +197,7 @@ class SeqVoice : Voice, Undoable {
 	// are signed 7-bit ($00-$3f up, $40-$7f down).
 	private string describeChordCommand(ubyte v) {
 		int ci = v & 0x1f;
-		int[] offs;
-		int start = song.chordIndexTable[ci];
-		for(int k = start; k < song.chordTable.length && k < start + 64; k++) {
-			ubyte b = song.chordTable[k];
-			if(b >= 0x80) break;
-			offs ~= (b < 0x40) ? b : (b - 0x80);
-		}
+		int[] offs = song.chordProgram(ci);
 		if(offs.length == 0)
 			return format("Cmd %02X: Chord %d (empty)", v, ci);
 		string list;

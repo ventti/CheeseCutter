@@ -13,6 +13,7 @@ import com.session;
 import com.util;
 import ct.purge;
 import ct.base : MAX_SEQ_NUM, NOTES, noteName, commandName, commandParameterDescription;
+import ct.chordname : chordQualityName;
 import derelict.sdl2.sdl;
 import com.palette : Role, idx;
 import std.string;
@@ -887,6 +888,25 @@ class ChordTable : HexTable {
 				return;
 			}
 		}
+	}
+
+	override void showByteDescription() {
+		if(!state.displayHelp) return;
+		// Which chord does the cursor row belong to? Every >=$80 byte ends a chord.
+		int chordIdx = 0;
+		for(int i = 0; i < row && i < song.chordTable.length; i++)
+			if(song.chordTable[i] >= 0x80) chordIdx++;
+		int[] offs = song.chordProgram(chordIdx);
+		if(offs.length == 0) {
+			UI.statusline.display(format("Chord %d (empty)", chordIdx));
+			return;
+		}
+		string list;
+		foreach(o; offs)
+			list ~= format("%+d ", o);
+		string name = chordQualityName(offs);
+		UI.statusline.display(format("Chord %d: [%s]%s", chordIdx, strip(list),
+									 name is null ? "" : " (" ~ name ~ ")"));
 	}
 
 	override void update() {
