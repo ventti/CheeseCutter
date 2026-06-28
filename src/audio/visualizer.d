@@ -121,6 +121,9 @@ enum PlaybackTable {
 private __gshared int[3] activeWaveRows = [-1, -1, -1];
 private __gshared int[3] activePulseRows = [-1, -1, -1];
 private __gshared int[3] activeChordRows = [-1, -1, -1];
+// Previous frame's raw chord-walk pointer per voice (0x80+ = idle), used to
+// recover the currently-sounding chord row from the post-incremented pointer.
+private __gshared int[3] prevChordtpos = [0xff, 0xff, 0xff];
 private __gshared int activeFilterRow = -1;
 
 // ---- §11.1 per-voice per-frame RECORDING of the real SID state ----------------
@@ -282,8 +285,22 @@ void updateSidRegisters(const ubyte[] sidreg, const ubyte[] playerMem, int playe
 		if(playerStateOffset > 0 && playerStateOffset + 118 < playerMem.length) {
 			activeWaveRows[v] = playerMem[playerStateOffset + 110 + v];
 			activePulseRows[v] = playerMem[playerStateOffset + 80 + v] >> 2;
+			// chordtpos is the player's chord-walk pointer. The walker reads a
+			// chord byte then *post-increments* (or rewinds on loop), so it
+			// always points one row ahead of the row currently sounding. To
+			// highlight the sounding row, track the previous pointer: when it
+			// advances this frame the row just consumed is the previous value;
+			// on hold frames (slow arps) keep the last highlight. Bit 7 set =
+			// chord stream idle.
 			int chordPos = playerMem[playerStateOffset + 116 + v];
-			activeChordRows[v] = chordPos < 0x80 ? chordPos : -1;
+			if(chordPos >= 0x80)
+				activeChordRows[v] = -1;                       // chord idle
+			else if(prevChordtpos[v] >= 0x80 || chordPos > prevChordtpos[v] + 1)
+				activeChordRows[v] = chordPos;                 // freshly set, not yet walked
+			else if(chordPos != prevChordtpos[v])
+				activeChordRows[v] = prevChordtpos[v];         // stepped/looped: row just consumed
+			// else: no advance this frame (slow arp) - keep the last highlight
+			prevChordtpos[v] = chordPos;
 		}
 
 		// Detect gate on transition
@@ -655,6 +672,7 @@ void resetVisualizer() nothrow {
 		recLen[v] = 0;
 		recActive[v] = false;
 		recPrevGate[v] = false;
+		prevChordtpos[v] = 0xff;
 	}
 	activeFilterRow = -1;
 	instrumentBrightness[] = 0.0f;
