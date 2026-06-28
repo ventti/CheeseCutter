@@ -16,6 +16,7 @@ OBJS= \
 	src/ct/modimport.o \
 	src/ct/dump.o \
 	src/ct/build.o \
+	src/ct/chordname.o \
 	src/com/fb.o \
 	src/com/cpu.o \
 	src/com/kbd.o \
