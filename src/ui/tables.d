@@ -890,12 +890,18 @@ class ChordTable : HexTable {
 		}
 	}
 
+	// Which chord does chord-table row `r` belong to? Every >=$80 byte ends a
+	// chord, so the index is the number of markers strictly before the row.
+	private int chordIndexOfRow(int r) {
+		int idx = 0;
+		for(int i = 0; i < r && i < song.chordTable.length; i++)
+			if(song.chordTable[i] >= 0x80) idx++;
+		return idx;
+	}
+
 	override void showByteDescription() {
 		if(!state.displayHelp) return;
-		// Which chord does the cursor row belong to? Every >=$80 byte ends a chord.
-		int chordIdx = 0;
-		for(int i = 0; i < row && i < song.chordTable.length; i++)
-			if(song.chordTable[i] >= 0x80) chordIdx++;
+		int chordIdx = chordIndexOfRow(row);
 		int[] offs = song.chordProgram(chordIdx);
 		if(offs.length == 0) {
 			UI.statusline.display(format("Chord %d (empty)", chordIdx));
@@ -920,6 +926,10 @@ class ChordTable : HexTable {
 			int row = (i + viewOffset) & 0x7f;
 			string col = "`05";
 			if(data[row] >= 0x80) col = "`0d";
+			// Cursor hint: tint the data values of the chord referenced by the
+			// sequence cursor cyan (same hint colour as the active instrument).
+			else if(state.cursorChord >= 0 && chordIndexOfRow(row) == state.cursorChord)
+				col = format("`0%x", activeInstrumentColor);
 			int indexColor = playbackIndexColor(
 				audio.visualizer.getTableRowBrightness(audio.visualizer.PlaybackTable.Chord, row));
 

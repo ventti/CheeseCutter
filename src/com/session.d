@@ -55,6 +55,10 @@ struct EditorState {
 	PosDataTable fplayPos, seqPos;
 	int octave = 3;
 	int activeInstrument;
+	// Chord referenced by the effect cell under the sequence cursor (0..31), or
+	// -1 when the cursor is not on a chord command. Drives the cyan cursor hint
+	// on the matching chord-table rows, mirroring the active-instrument hint.
+	int cursorChord = -1;
 	bool autoinsertInstrument = true;
 	bool shortTitles = true;
 	bool displayHelp = true;

@@ -719,6 +719,12 @@ Notes and quirks:
   the scope still shows an approximation of the output.
 - It is a single combined trace — there are no per-voice scopes.
 
+With context help on (<kbd>Alt</kbd>-<kbd>H</kbd>), the chord table's statusline
+shows the chord under the cursor (number, transpose offsets and derived name).
+When the sequence cursor is on a chord command (`80-9F`), that chord's values are
+tinted cyan in the chord table, the same cursor hint used for the active
+instrument.
+
 ## Practical Tips
 
 Keep sequence `00` empty unless you specifically need it; it is commonly used

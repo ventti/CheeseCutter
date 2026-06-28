@@ -606,6 +606,7 @@ class SequenceTable : VoiceTable, Undoable {
 	// stale text instead of letting it time out to blank. Drives keyboard and
 	// mouse navigation alike.
 	void refreshContextHelp() {
+		updateCursorChord();
 		if(!state.displayHelp) { lastHelpKey = null; return; }
 		SeqVoice v = cast(SeqVoice)activeVoice;
 		string help = v.contextHelpString();
@@ -615,6 +616,20 @@ class SequenceTable : VoiceTable, Undoable {
 		lastHelpKey = key;
 		if(help.length) UI.statusline.display(help);
 		else UI.statusline.clear();
+	}
+
+	// Track which chord (if any) the effect cell under the cursor references, so
+	// the chord table can tint that chord's rows cyan (a cursor hint like the
+	// active-instrument highlight). Runs regardless of the help-text toggle.
+	private void updateCursorChord() {
+		SeqVoice v = cast(SeqVoice)activeVoice;
+		Element e = v.activeRow.element;
+		int c = -1;
+		if((cast(InputSeq)v.seqinput).activeColumn == 3) {
+			ubyte cmd = e.cmd.rawValue;
+			if(cmd >= 0x80 && cmd <= 0x9f) c = cmd & 0x1f;
+		}
+		state.cursorChord = c;
 	}
 
 	override int keypress(Keyinfo key) {
