@@ -167,7 +167,7 @@ class SeqVoice : Voice, Undoable {
 	// entry, $40-$5f set pulse, $60-$7f set filter, $80-$9f set chord,
 	// $a0-$ef ADSR/volume nibbles, $f0-$ff song speed.
 	private string describeSuperCommand(ubyte v) {
-		if(v == 0) return "";
+		if(v == 0) return "Cmd 00: no command";
 		if(v < 0x40)
 			return format("Cmd %02X: %s", v, commandName(song.superTable[v] & 15));
 		if(v < 0x60)
@@ -600,16 +600,33 @@ class SequenceTable : VoiceTable, Undoable {
 	override void clickedAt(int x, int y, int button, int clicks = 1) {
 		y -= 1;
 		step(y-posTable.normalPointerOffset);
+		refreshContextHelp();
+	}
+
+	private string lastHelpKey;
+
+	// Update the statusline help to match the cell under the cursor, but only
+	// when the cursor (voice/column/row) or the cell's help text has actually
+	// changed. Keys that don't move the cursor (e.g. Ctrl-T) leave their own
+	// transient status messages intact; moving onto a no-help cell clears any
+	// stale text instead of letting it time out to blank. Drives keyboard and
+	// mouse navigation alike.
+	void refreshContextHelp() {
+		if(!state.displayHelp) { lastHelpKey = null; return; }
+		SeqVoice v = cast(SeqVoice)activeVoice;
+		string help = v.contextHelpString();
+		string key = format("%d:%d:%d:%s", activeVoiceNum,
+							(cast(InputSeq)v.seqinput).activeColumn, activeRowAbs(), help);
+		if(key == lastHelpKey) return;
+		lastHelpKey = key;
+		if(help.length) UI.statusline.display(help);
+		else UI.statusline.clear();
 	}
 
 	override int keypress(Keyinfo key) {
 		// Block-selection commands (copy/cut/paste/merge/paste-new/markers) get
 		// first refusal; if consumed, don't fall through to editing.
 		if(handleSelectionKey(key)) return OK;
-		// Snapshot the cell help before the key is processed; if it changes we
-		// refresh the statusline at the end (and only then, so transient status
-		// messages from keys that don't move the cursor survive).
-		string helpBefore = (cast(SeqVoice)activeVoice).contextHelpString();
 		// With an active selection, the transpose keys apply to the whole block
 		// rather than the active voice's cursor-to-end default.
 		if(sel.active && (key.mods & KMOD_ALT)) {
@@ -715,9 +732,7 @@ class SequenceTable : VoiceTable, Undoable {
 				break;
 			}
 		}
-		string helpAfter = (cast(SeqVoice)activeVoice).contextHelpString();
-		if(helpAfter.length && helpAfter != helpBefore)
-			UI.statusline.display(helpAfter);
+		refreshContextHelp();
 		return OK;
 	}
 
