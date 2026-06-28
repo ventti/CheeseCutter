@@ -139,7 +139,7 @@ bar it flips the highlighted on/off item), but it works fine inside a query
 | <kbd>F12</kbd> again in context help | Global help |
 | <kbd>Ctrl</kbd>-<kbd>F12</kbd> | Screenshot |
 | <kbd>Shift</kbd>-<kbd>F12</kbd> | Toggle the oscilloscope overlay (see [Oscilloscope](#oscilloscope)) |
-| <kbd>Alt</kbd>-<kbd>H</kbd> | Toggle table byte help |
+| <kbd>Alt</kbd>-<kbd>H</kbd> | Toggle context help (table bytes + sequence-editor cells) |
 | <kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>F</kbd> | Toggle the filter track column (see [Filter Track](#filter-track)) |
 | <kbd>Alt</kbd>-<kbd>F4</kbd> | Quit (asks for confirmation) |
 
@@ -473,6 +473,10 @@ listed in the **Navigate** menu and the command palette:
 | <kbd>Alt</kbd>-<kbd>E</kbd> | Toggle row counters |
 | <kbd>Alt</kbd>-<kbd>T</kbd> | Toggle relative notes |
 | <kbd>Ctrl</kbd>-<kbd>Space</kbd> or <kbd>Ctrl</kbd>-<kbd>K</kbd> | Toggle keyjam (use <kbd>Ctrl</kbd>-<kbd>K</kbd> on macOS, which claims Ctrl-Space) |
+
+With context help on (<kbd>Alt</kbd>-<kbd>H</kbd>), moving the cursor in the note
+column shows a statusline explanation of the cell under it: the **instrument**
+column shows that instrument's description.
 
 ### Block Selection (copy / cut / paste / merge)
 

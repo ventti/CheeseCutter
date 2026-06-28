@@ -140,6 +140,25 @@ class SeqVoice : Voice, Undoable {
 		(cast(InputSeq)seqinput).setElement(activeRow.element);
 	}
 
+	// Contextual Alt-H help for the cell under the cursor, or "" when there is
+	// nothing to explain. SequenceTable.keypress shows this on the statusline.
+	// Columns: 0 note, 1 octave, 2 instrument, 3 command (see InputSeq).
+	string contextHelpString() {
+		if(!state.displayHelp) return "";
+		InputSeq i = cast(InputSeq)seqinput;
+		Element e = activeRow.element;
+		switch(i.activeColumn) {
+		case 2:
+			if(!e.instr.hasValue) return "";
+			string label = strip(format("%s", song.insLabels[e.instr.value][0..32]));
+			return label.length ?
+				format("Instr %02X: %s", e.instr.value, label) :
+				format("Instr %02X", e.instr.value);
+		default:
+			return "";
+		}
+	}
+
 	override void update() {
 		RowData wseq;
 		int scry = area.y + area.height;
@@ -515,6 +534,10 @@ class SequenceTable : VoiceTable, Undoable {
 		// Block-selection commands (copy/cut/paste/merge/paste-new/markers) get
 		// first refusal; if consumed, don't fall through to editing.
 		if(handleSelectionKey(key)) return OK;
+		// Snapshot the cell help before the key is processed; if it changes we
+		// refresh the statusline at the end (and only then, so transient status
+		// messages from keys that don't move the cursor survive).
+		string helpBefore = (cast(SeqVoice)activeVoice).contextHelpString();
 		// With an active selection, the transpose keys apply to the whole block
 		// rather than the active voice's cursor-to-end default.
 		if(sel.active && (key.mods & KMOD_ALT)) {
@@ -620,6 +643,9 @@ class SequenceTable : VoiceTable, Undoable {
 				break;
 			}
 		}
+		string helpAfter = (cast(SeqVoice)activeVoice).contextHelpString();
+		if(helpAfter.length && helpAfter != helpBefore)
+			UI.statusline.display(helpAfter);
 		return OK;
 	}
 
