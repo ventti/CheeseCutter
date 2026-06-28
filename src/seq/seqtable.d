@@ -606,6 +606,11 @@ class SequenceTable : VoiceTable, Undoable {
 	// stale text instead of letting it time out to blank. Drives keyboard and
 	// mouse navigation alike.
 	void refreshContextHelp() {
+		// A move only updates `pos`; the active row/element is otherwise resynced
+		// one frame later by update() (via refreshPointer(pointerOffset)), so
+		// reading activeRow here would lag a step behind the cursor. Resync now
+		// so the help matches the cell the cursor just landed on.
+		syncActiveRow();
 		updateCursorChord();
 		if(!state.displayHelp) { lastHelpKey = null; return; }
 		SeqVoice v = cast(SeqVoice)activeVoice;
