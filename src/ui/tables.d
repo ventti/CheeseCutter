@@ -12,7 +12,7 @@ import ui.help;
 import com.session;
 import com.util;
 import ct.purge;
-import ct.base : MAX_SEQ_NUM, NOTES;
+import ct.base : MAX_SEQ_NUM, NOTES, commandName, commandParameterDescription;
 import derelict.sdl2.sdl;
 import com.palette : Role, idx;
 import std.string;
@@ -866,48 +866,6 @@ private:
 		if(byteNo == 1)
 			return format("Byte 1: Command $%X: %s", cmd, commandName(cmd));
 		return format("Byte %d: %s", byteNo, commandParameterDescription(cmd, byteNo));
-	}
-
-	string commandName(int cmd) {
-		switch(cmd) {
-		case 0: return "Slide up";
-		case 1: return "Slide down";
-		case 2: return "Hi-fi vibrato";
-		case 3: return "Detune current note";
-		case 4: return "Set ADSR for the current note";
-		case 5: return "Lo-fi vibrato";
-		case 6: return "Set wave";
-		case 7: return "Portamento a tie note";
-		case 8: return "Stop portamento";
-		default: return "Unknown command";
-		}
-	}
-
-	string commandParameterDescription(int cmd, int byteNo) {
-		switch(cmd) {
-		case 0, 1:
-			return byteNo == 2 ? "Slide speed high byte (signed 16-bit)." :
-				"Slide speed low byte (signed 16-bit).";
-		case 2:
-			return byteNo == 2 ? "Hi-fi vibrato feel in low nibble." :
-				"Hi-fi vibrato speed in high nibble, depth divider in low nibble.";
-		case 3:
-			return byteNo == 2 ? "Detune high byte (signed 16-bit)." :
-				"Detune low byte (signed 16-bit).";
-		case 4:
-			return byteNo == 2 ? "Attack / decay." : "Sustain / release.";
-		case 5:
-			return byteNo == 2 ? "Lo-fi vibrato speed." : "Lo-fi vibrato depth.";
-		case 6:
-			return byteNo == 2 ? "Unused." : "SID control register waveform value.";
-		case 7:
-			return byteNo == 2 ? "Portamento speed high byte." :
-				"Portamento speed low byte. Runs until command $8.";
-		case 8:
-			return "Unused. Command $8 stops portamento.";
-		default:
-			return "Parameter value.";
-		}
 	}
 
 }

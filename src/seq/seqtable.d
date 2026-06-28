@@ -13,6 +13,7 @@ import seq.sequencer;
 import com.session;
 import com.selection;
 import ct.base;
+import ct.chordname : chordQualityName;
 import ui.input;
 import derelict.sdl2.sdl;
 import std.string;
@@ -154,9 +155,63 @@ class SeqVoice : Voice, Undoable {
 			return label.length ?
 				format("Instr %02X: %s", e.instr.value, label) :
 				format("Instr %02X", e.instr.value);
+		case 3:
+			return describeSuperCommand(e.cmd.rawValue);
 		default:
 			return "";
 		}
+	}
+
+	// Decode a sequence effect-column byte. It is a range-dispatched "super
+	// command" (see src/c64/player_v4.acme): $00 none, $01-$3f command-table
+	// entry, $40-$5f set pulse, $60-$7f set filter, $80-$9f set chord,
+	// $a0-$ef ADSR/volume nibbles, $f0-$ff song speed.
+	private string describeSuperCommand(ubyte v) {
+		if(v == 0) return "";
+		if(v < 0x40)
+			return format("Cmd %02X: %s", v, commandName(song.superTable[v] & 15));
+		if(v < 0x60)
+			return format("Cmd %02X: Set pulse program %X", v, v & 0x1f);
+		if(v < 0x80)
+			return format("Cmd %02X: Set filter program %X", v, v & 0x1f);
+		if(v < 0xa0)
+			return describeChordCommand(v);
+		if(v < 0xb0)
+			return format("Cmd %02X: Set attack %X", v, v & 0x0f);
+		if(v < 0xc0)
+			return format("Cmd %02X: Set decay %X", v, v & 0x0f);
+		if(v < 0xd0)
+			return format("Cmd %02X: Set sustain %X", v, v & 0x0f);
+		if(v < 0xe0)
+			return format("Cmd %02X: Set release %X", v, v & 0x0f);
+		if(v < 0xf0)
+			return format("Cmd %02X: Set master volume %X", v, v & 0x0f);
+		if(v == 0xf0)
+			return format("Cmd %02X: Song speed 0 (global sync tick)", v);
+		return format("Cmd %02X: Set song speed %X", v, v & 0x0f);
+	}
+
+	// $80-$9f: "set chord N". Show the chord's signed transpose offsets and,
+	// when recognisable, its quality name. Chord N starts at chordIndexTable[N]
+	// and runs through chordTable until a >=$80 loop/end marker; transpose bytes
+	// are signed 7-bit ($00-$3f up, $40-$7f down).
+	private string describeChordCommand(ubyte v) {
+		int ci = v & 0x1f;
+		int[] offs;
+		int start = song.chordIndexTable[ci];
+		for(int k = start; k < song.chordTable.length && k < start + 64; k++) {
+			ubyte b = song.chordTable[k];
+			if(b >= 0x80) break;
+			offs ~= (b < 0x40) ? b : (b - 0x80);
+		}
+		if(offs.length == 0)
+			return format("Cmd %02X: Chord %d (empty)", v, ci);
+		string list;
+		foreach(o; offs)
+			list ~= format("%+d ", o);
+		string name = chordQualityName(offs);
+		return format("Cmd %02X: Chord %d [%s]%s", v, ci, strip(list),
+					  name is null ? "" : " (" ~ name ~ ")");
 	}
 
 	override void update() {

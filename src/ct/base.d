@@ -96,9 +96,54 @@ struct Cmd {
 
 	string toPlainString() {
 		ubyte v = data[3];
-		if(v > 0) 
+		if(v > 0)
 			return format("%02X", v);
-		else return "--"; 
+		else return "--";
+	}
+}
+
+// Human-readable name of a command-table command (low nibble 0..8). Shared by
+// the command-table byte help and the sequence-editor effect-column help.
+string commandName(int cmd) {
+	switch(cmd) {
+	case 0: return "Slide up";
+	case 1: return "Slide down";
+	case 2: return "Hi-fi vibrato";
+	case 3: return "Detune current note";
+	case 4: return "Set ADSR for the current note";
+	case 5: return "Lo-fi vibrato";
+	case 6: return "Set wave";
+	case 7: return "Portamento a tie note";
+	case 8: return "Stop portamento";
+	default: return "Unknown command";
+	}
+}
+
+// Description of a command-table command's parameter byte (byteNo 2 or 3).
+string commandParameterDescription(int cmd, int byteNo) {
+	switch(cmd) {
+	case 0, 1:
+		return byteNo == 2 ? "Slide speed high byte (signed 16-bit)." :
+			"Slide speed low byte (signed 16-bit).";
+	case 2:
+		return byteNo == 2 ? "Hi-fi vibrato feel in low nibble." :
+			"Hi-fi vibrato speed in high nibble, depth divider in low nibble.";
+	case 3:
+		return byteNo == 2 ? "Detune high byte (signed 16-bit)." :
+			"Detune low byte (signed 16-bit).";
+	case 4:
+		return byteNo == 2 ? "Attack / decay." : "Sustain / release.";
+	case 5:
+		return byteNo == 2 ? "Lo-fi vibrato speed." : "Lo-fi vibrato depth.";
+	case 6:
+		return byteNo == 2 ? "Unused." : "SID control register waveform value.";
+	case 7:
+		return byteNo == 2 ? "Portamento speed high byte." :
+			"Portamento speed low byte. Runs until command $8.";
+	case 8:
+		return "Unused. Command $8 stops portamento.";
+	default:
+		return "Parameter value.";
 	}
 }
 

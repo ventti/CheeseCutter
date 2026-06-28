@@ -476,7 +476,10 @@ listed in the **Navigate** menu and the command palette:
 
 With context help on (<kbd>Alt</kbd>-<kbd>H</kbd>), moving the cursor in the note
 column shows a statusline explanation of the cell under it: the **instrument**
-column shows that instrument's description.
+column shows that instrument's description, and the **command** column explains
+the effect value (command-table entry / set pulse / filter / chord / ADSR /
+volume / song speed). When the command selects a chord, the chord's transpose
+offsets and derived chord name are shown, e.g. `Chord 0 [+0 +3 +7] (min)`.
 
 ### Block Selection (copy / cut / paste / merge)
 
