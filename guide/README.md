@@ -484,7 +484,8 @@ column shows a statusline explanation of the cell under it: the **instrument**
 column shows that instrument's description, and the **command** column explains
 the effect value (command-table entry / set pulse / filter / chord / ADSR /
 volume / song speed). When the command selects a chord, the chord's transpose
-offsets and derived chord name are shown, e.g. `Chord 0 [+0 +3 +7] (min)`.
+offsets and derived chord name (rooted on the row's note) are shown, e.g.
+`Chord 0 [+0 +3 +7] (Gmin)`.
 
 ### Block Selection (copy / cut / paste / merge)
 

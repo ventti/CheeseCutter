@@ -210,8 +210,25 @@ class SeqVoice : Voice, Undoable {
 		foreach(o; offs)
 			list ~= format("%+d ", o);
 		string name = chordQualityName(offs);
-		return format("Cmd %02X: Chord %d [%s]%s", v, ci, strip(list),
-					  name is null ? "" : " (" ~ name ~ ")");
+		string nameStr;
+		if(name !is null)
+			nameStr = " (" ~ chordRootName(offs) ~ name ~ ")";
+		return format("Cmd %02X: Chord %d [%s]%s", v, ci, strip(list), nameStr);
+	}
+
+	// Pitch-class name of the chord's root for the cell under the cursor: the
+	// row's note plus the chord's lowest offset (the root, since naming treats
+	// the lowest note as the root). Returns "" when the row has no concrete note
+	// (rest/tie/continue) - then only the quality is shown. Honours the sharp/
+	// flat display toggle via noteName.
+	private string chordRootName(const(int)[] offs) {
+		Element e = activeRow.element;
+		if(e.note.value < 3) return "";   // ---, ===, +++ : no concrete root
+		int minOff = offs[0];
+		foreach(o; offs) if(o < minOff) minOff = o;
+		string nm = noteName(e.note.value + e.transpose + minOff);
+		if(nm.length < 2 || nm == "???") return "";
+		return nm[1] == '-' ? nm[0 .. 1] : nm[0 .. 2];  // strip octave/natural dash
 	}
 
 	override void update() {
