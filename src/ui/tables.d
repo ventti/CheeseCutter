@@ -12,7 +12,7 @@ import ui.help;
 import com.session;
 import com.util;
 import ct.purge;
-import ct.base : MAX_SEQ_NUM, NOTES, commandName, commandParameterDescription;
+import ct.base : MAX_SEQ_NUM, NOTES, noteName, commandName, commandParameterDescription;
 import derelict.sdl2.sdl;
 import com.palette : Role, idx;
 import std.string;
@@ -1780,7 +1780,7 @@ private:
 						  byteHex(value), byteHex(waveValue));
 		if(value >= 0x80 && value <= 0xdf) {
 			int note = value & 0x7f;
-			string noteText = note < NOTES.length ? " (" ~ NOTES[note] ~ ")" : "";
+			string noteText = note < NOTES.length ? " (" ~ noteName(note) ~ ")" : "";
 			return format("%s absolute note %d%s.", byteHex(value), note, noteText);
 		}
 		return byteHex(value) ~ " reserved transpose value.";

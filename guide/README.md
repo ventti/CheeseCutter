@@ -83,6 +83,11 @@ bar remembers the last menu and item you used, so re-opening with <kbd>Esc</kbd>
 returns you to the same place. Hovering an item for a second shows its full
 description as a tooltip.
 
+The **View** menu also has a **Flat note names** toggle: when on, all note names
+are displayed with flats (`Db`, `Eb`, …) instead of sharps (`C#`, `D#`, …). It is
+purely cosmetic — it changes how notes are shown everywhere (the note column and
+the wave-table absolute-note help), not the stored data.
+
 On/off commands (voices, interpolation, keyjam, help texts, fullscreen, tracking)
 show their current state with a `[x]` / `[ ]` checkbox in an aligned column; each
 item's keyboard shortcut is shown on the right. <kbd>Space</kbd> flips such an
