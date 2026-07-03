@@ -1855,7 +1855,13 @@ class Song {
 	void importModule(ModModule mod, ModImportOptions opt) {
 		enum MAX_CHUNKS = 2;                 // a pattern yields at most 2 seqs
 		enum SLIDE_SCALE = 16;               // MOD slide/porta unit -> SID freq/tick (approx)
-		int voices = mod.channels < 3 ? mod.channels : 3;
+
+		// Source channel for each voice: the first three channels other than the
+		// excluded one (1-based opt.excludeChannel; 0 = exclude none).
+		int[] srcChannel;
+		for(int ch = 1; ch <= mod.channels && srcChannel.length < 3; ch++)
+			if(ch != opt.excludeChannel) srcChannel ~= ch - 1;
+		int voices = cast(int)srcChannel.length;
 
 		clearSeqs();
 		// Command and chord tables are rebuilt from the module (any prior/demo
@@ -1973,11 +1979,11 @@ class Song {
 			}
 		}
 
-		void buildSeq(int seqno, int pat, int voice, int startRow, int rowCount) {
+		void buildSeq(int seqno, int pat, int srcCh, int startRow, int rowCount) {
 			ubyte[] raw = seqs[seqno].data.raw;
 			raw[] = 0;
 			for(int r = 0; r < rowCount; r++) {
-				ModCell c = mod.patterns[pat][startRow + r][voice];
+				ModCell c = mod.patterns[pat][startRow + r][srcCh];
 				int b = r * 4;
 				ubyte tied = 0xf0, cmd = 0;
 				bool hasNote = c.note >= 0;
@@ -2031,7 +2037,7 @@ class Song {
 								"The module has too many patterns to fit " ~
 								"CheeseCutter's 128 sequences.");
 						seqNumber[pat][v][c] = nextSeq++;
-						buildSeq(seqNumber[pat][v][c], pat, v, cStart[c], cLen[c]);
+						buildSeq(seqNumber[pat][v][c], pat, srcChannel[v], cStart[c], cLen[c]);
 					}
 					orderBytes[v] ~= [cast(ubyte)0xa0,
 									  cast(ubyte)seqNumber[pat][v][c]];

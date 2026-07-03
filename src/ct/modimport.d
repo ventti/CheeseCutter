@@ -27,20 +27,45 @@ struct ModImportOptions {
 	bool portamento = true;  // 3xx  -> tied note + tone-portamento command
 	bool vibrato = true;     // 4xy  -> command vibrato
 	bool speed = true;       // Fxx  -> song speed / per-row speed changes
+	// 1-based channel to leave out (0 = none). The three voices take the first
+	// three channels other than this one; default 4 imports channels 1,2,3.
+	int excludeChannel = 4;
 }
 
-// A parsed ProTracker module. `patterns[p][row][voice]` covers only the first
-// three channels (voice 0..2); higher channels are read for sizing but dropped.
+// A parsed ProTracker module. All channels are kept (patterns[p][row][ch], ch in
+// 0..channels-1) so the importer can map any chosen channels to the three SID
+// voices; the channel choice is made after parsing.
 struct ModModule {
 	string title;
 	string[32] sampleNames;   // indexed by MOD sample number 1..31
-	int channels;             // channels in the file (>= voices we keep)
+	int channels;             // channels in the file
 	int songLength;           // number of played order positions
 	ubyte[128] order;         // order table (pattern number per position)
 	int numPatterns;          // unique patterns stored in the file
-	ModCell[3][64][] patterns; // [pattern][row 0..63][voice 0..2]
+	ModCell[][64][] patterns; // [pattern][row 0..63][channel 0..channels-1]
 	int[] patternLen;         // effective rows per pattern (see below), 1..64
 	int[64][] patternSpeed;   // [pattern][row]: MOD Fxx speed set that row, or -1
+}
+
+// Header-only module info for the file dialog's preview (title + channel count),
+// read without decoding pattern data. valid=false on any non-module / error.
+struct ModInfo {
+	bool valid;
+	string title;
+	int channels;
+}
+
+// Read just the title and channel count of a .mod (cheap; used by the file
+// dialog while browsing). Mirrors ct.base.readSongInfo for .ct files.
+ModInfo readModInfo(const(ubyte)[] data) {
+	ModInfo info;
+	if(data.length < 1084) return info;
+	int ch = channelsFromTag(cast(string)data[1080 .. 1084].idup);
+	if(ch == 0) return info;
+	info.title = cleanName(data[0 .. 20]);
+	info.channels = ch;
+	info.valid = true;
+	return info;
 }
 
 // Amiga period table for finetune 0, three octaves C-1..B-3 (index 0 == C-1).
@@ -141,6 +166,7 @@ ModModule parseModule(const(ubyte)[] data) {
 		int breakRow = -1;
 		m.patternSpeed[pat][] = -1;
 		for(int row = 0; row < 64; row++) {
+			m.patterns[pat][row].length = m.channels;
 			for(int ch = 0; ch < m.channels; ch++) {
 				ubyte b0 = data[p], b1 = data[p + 1], b2 = data[p + 2], b3 = data[p + 3];
 				p += 4;
@@ -150,7 +176,6 @@ ModModule parseModule(const(ubyte)[] data) {
 				// Speed (Fxx) is global; capture it from any channel (first wins).
 				if(effect == 0x0F && m.patternSpeed[pat][row] < 0)
 					m.patternSpeed[pat][row] = b3;
-				if(ch >= 3) continue;
 				int sample = (b0 & 0xF0) | (b2 >> 4);
 				int period = ((b0 & 0x0F) << 8) | b1;
 				m.patterns[pat][row][ch] =

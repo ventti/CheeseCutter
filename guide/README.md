@@ -161,16 +161,21 @@ In the load (<kbd>F9</kbd>), save (<kbd>F10</kbd>) and `.prg` export dialogs:
 ## Importing ProTracker modules (.mod)
 
 **File → Import .mod...** (<kbd>Shift</kbd>-<kbd>F9</kbd>) brings in a ProTracker
-`.mod` as a starting point for a SID arrangement. A small dialog first lets you
-choose which effect groups to translate (all on by default) — **Arpeggios**,
-**Pitch slides**, **Tone portamento**, **Vibrato** and **Speed &amp; groove**;
-<kbd>Space</kbd> toggles the highlighted row, <kbd>Return</kbd> continues to the
-file picker, <kbd>Esc</kbd> cancels. The import then replaces the current song's
-sequences and orderlist. It is meant as a rough transcription — what carries
-over, and what does not:
+`.mod` as a starting point for a SID arrangement. Pick a `.mod` in the file
+browser — which previews each file's **Title** and **channel count** the way the
+Load dialog previews `.ct` songs. After you choose the file, an options dialog
+(all defaults on) lets you set which **channel to exclude** and which effect
+groups to translate — **Arpeggios**, **Pitch slides**, **Tone portamento**,
+**Vibrato** and **Speed &amp; groove**; <kbd>Up</kbd>/<kbd>Down</kbd> moves,
+<kbd>Space</kbd>/<kbd>←</kbd>/<kbd>→</kbd> changes a row, <kbd>Return</kbd>
+imports, <kbd>Esc</kbd> cancels. The import replaces the current song's sequences
+and orderlist. It is meant as a rough transcription — what carries over, and what
+does not:
 
-- **First three channels only.** MOD channels 1–3 map to voices 1–3; any extra
-  channels (4-, 6-, 8-channel modules) are ignored.
+- **Three channels.** The three SID voices take the first three channels other
+  than the excluded one (the **Exclude channel** setting, default 4 → channels
+  1–3). Set it to `none` to import channels 1–3 regardless, or to any channel to
+  drop that one.
 - **Patterns become sequences, cut at pattern breaks.** A pattern is cut at the
   first row with a pattern-break (`Dxx`) or position-jump (`Bxx`) effect on *any*
   channel — that row is where ProTracker leaves the pattern, so the rows below it

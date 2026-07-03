@@ -17,18 +17,20 @@ CheeseCutter 2.9 by Abaddon.
 - Export to C64 `.prg` (full player or optimized) and PSID `.sid`, plus offline
   audio render to `.wav` / `.flac` with normalize, bit depth and sample-rate
   options.
-- Import ProTracker modules (**File → Import .mod...**, `Shift-F9`): the first three channels
-  of a `.mod` become tracks — each pattern is cut at its pattern-break (`Dxx`)
-  row (dead rows below are dropped) and becomes a sequence per voice, numbered
-  running and deduplicated so the orderlist replays the module's pattern order
-  and loops. Sample names become instrument descriptions and the sample numbers
-  are preserved as instrument numbers. A dialog (default all-on) chooses which
-  effects to translate: **arpeggios** (`0xy`, into the chord table), **pitch
-  slides** (`1xx`/`2xx`), **tone portamento** (`3xx`, via tied notes),
-  **vibrato** (`4xy`), and **speed/funk-groove** (`Fxx`, alternating speeds
-  become the break-speed table). Sampled audio, volume, panning and Amiga-filter
-  effects can't map to the SID and are not imported — you design the SID
-  instruments yourself; the pitch effects are approximate.
+- Import ProTracker modules (**File → Import .mod...**, `Shift-F9`): three of the
+  module's channels become tracks (the file browser previews each `.mod`'s title
+  and channel count). Each pattern is cut at its pattern-break (`Dxx`) row (dead
+  rows below are dropped) and becomes a sequence per voice, numbered running and
+  deduplicated so the orderlist replays the module's pattern order and loops.
+  Sample names become instrument descriptions and the sample numbers are
+  preserved as instrument numbers. After you pick the file, a dialog (defaults
+  all-on) chooses which channel to **exclude** (default 4, so channels 1–3
+  import) and which effects to translate: **arpeggios** (`0xy`, into the chord
+  table), **pitch slides** (`1xx`/`2xx`), **tone portamento** (`3xx`, via tied
+  notes), **vibrato** (`4xy`), and **speed/funk-groove** (`Fxx`, alternating
+  speeds become the break-speed table). Sampled audio, volume, panning and
+  Amiga-filter effects can't map to the SID and are not imported — you design the
+  SID instruments yourself; the pitch effects are approximate.
 - Instrument color tags (`$X` / `$XY`) in instrument descriptions.
 - Read-only **filter track** column in the pattern view (between voice 3 and the
   instrument table): per-row SID filter registers (cutoff, resonance, mode and a

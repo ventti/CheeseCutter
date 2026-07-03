@@ -63,7 +63,8 @@ final class UI {
 		AboutDialog aboutdialog;
 		FileSelectorDialog loaddialog, savedialog, exportsavedialog, modimportdialog;
 		ModImportOptionsDialog modImportOptionsDialog;
-		ModImportOptions pendingModOptions;   // chosen in the options dialog
+		ModModule pendingMod;        // parsed module, awaiting the options dialog
+		string pendingModFile;       // its path (for the post-import status/name)
 		ExportOptionsDialog exportDialog, renderDialog;
 		PropertiesDialog propertiesDialog;
 		ExportOptions exportOpts;
@@ -108,6 +109,7 @@ final class UI {
 												  dialog_width), &saveExportCallback, "Export song");
 		modimportdialog = new FileSelectorDialog(Rectangle(dialog_x, dialog_y, dialog_height,
 												  dialog_width), "Import ProTracker module", &modImportCallback);
+		modimportdialog.modPreview = true;   // preview shows the .mod title + channels
 		modImportOptionsDialog = new ModImportOptionsDialog(&modImportConfirm);
 		exportDialog = new ExportOptionsDialog(&exportConfirm, false);
 		renderDialog = new ExportOptionsDialog(&exportConfirm, true);
@@ -596,14 +598,8 @@ final class UI {
 	// imported, so this always alters the current song without matching a file
 	// on disk; the save name is cleared (with a .ct suggestion) so a later save
 	// never clobbers the source .mod.
-	// The import options dialog confirmed: remember the chosen feature toggles
-	// and proceed to the file picker (mirrors the export options -> save flow).
-	private void modImportConfirm(ModImportOptions o) {
-		pendingModOptions = o;
-		modimportdialog.setDirectory(getcwd());
-		activateDialog(modimportdialog);
-	}
-
+	// A .mod file was chosen: parse it, then open the options dialog (which now
+	// knows the module's channel count). The import itself waits for the dialog.
 	void modImportCallback(string s) {
 		stop();
 		if(std.file.exists(s) == 0 || std.file.isDir(s)) {
@@ -611,19 +607,34 @@ final class UI {
 			return;
 		}
 		try {
-			auto mod = ct.modimport.parseModule(cast(ubyte[])std.file.read(s));
-			song.importModule(mod, pendingModOptions);
+			pendingMod = ct.modimport.parseModule(cast(ubyte[])std.file.read(s));
 		}
 		catch(Exception e) {
 			statusline.display("Error: " ~ e.msg);
 			return;
 		}
+		pendingModFile = s;
+		modImportOptionsDialog.setChannels(pendingMod.channels);
+		activateDialog(modImportOptionsDialog);
+	}
 
-		finishLoad(s, true, "ProTracker module imported.");
+	// The options dialog confirmed: import the parsed module with the chosen
+	// feature/channel options. Samples/effects that can't map are dropped, so
+	// this always alters the current song; the save name is cleared (with a .ct
+	// suggestion) so a later save never clobbers the source .mod.
+	private void modImportConfirm(ModImportOptions o) {
+		try {
+			song.importModule(pendingMod, o);
+		}
+		catch(Exception e) {
+			statusline.display("Error: " ~ e.msg);
+			return;
+		}
+		finishLoad(pendingModFile, true, "ProTracker module imported.");
 
 		import std.path : baseName, stripExtension;
 		state.filename = "";
-		string suggest = stripExtension(baseName(s.strip())) ~ ".ct";
+		string suggest = stripExtension(baseName(pendingModFile.strip())) ~ ".ct";
 		foreach(d; [loaddialog, savedialog, exportsavedialog])
 			d.setFilename(suggest);
 	}
