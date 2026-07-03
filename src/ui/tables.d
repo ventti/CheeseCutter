@@ -14,6 +14,7 @@ import com.util;
 import ct.purge;
 import ct.base : MAX_SEQ_NUM, NOTES;
 import derelict.sdl2.sdl;
+import com.palette : Role, idx;
 import std.string;
 import std.stdio : stderr;
 import std.file;
@@ -58,7 +59,7 @@ private int playbackIndexColor(float brightness, int defaultColor = 12) {
 	return defaultColor;
 }
 
-enum activeInstrumentColor = 3;
+@property int activeInstrumentColor() { return idx(Role.activeInstrument); } // was 3 (cyan)
 
 private string byteHex(int value) {
 	return format("$%02X", value & 0xff);

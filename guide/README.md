@@ -296,6 +296,60 @@ that session. The file lives in the per-OS config directory:
 - **Linux:** `$XDG_CONFIG_HOME/cheesecutter-extended/config.json` (or
   `~/.config/cheesecutter-extended/config.json`)
 
+## Colors (palette)
+
+Colors are configurable through a JSON palette. The editor renders from a
+32-entry color table (16 base C64 colors, plus a fixed brightness gradient used
+for the ADSR/playback fade); the palette file lets you redefine the base colors
+and re-map the UI's semantic **roles** onto them. With no palette file the
+built-in defaults reproduce the classic C64 colors exactly.
+
+The file is loaded at startup, in this order:
+
+1. `--palette <file>` on the command line, if given; otherwise
+2. `palette.json` in the config directory (same folder as `config.json`, see
+   above); otherwise
+3. the built-in defaults.
+
+A malformed file, a missing `--palette` file, or an unreadable one is reported
+on standard error and the editor falls back to the defaults — it always starts
+with a usable palette.
+
+The schema has two tiers (both optional; anything omitted keeps its default):
+
+```json
+{
+  "colors": { "green": "#55ac4d", "blue": "#2d2b9a" },
+  "roles":  { "frame": "green", "playbackBar": "blue" }
+}
+```
+
+- **`colors`** redefines any of the 16 base colors by name to a `#rrggbb` hex
+  value. Names: `black`, `white`, `red`, `cyan`, `purple`, `green`, `blue`,
+  `yellow`, `orange`, `brown`, `lightred`, `darkgray`, `gray`, `lightgreen`,
+  `lightblue`, `lightgray`.
+- **`roles`** points a semantic UI role at one of those base color names, so you
+  choose colors by *purpose* rather than by hue:
+
+  | Role | Used for |
+  | --- | --- |
+  | `background` | the editor backdrop / default cell background |
+  | `text` | default light text |
+  | `cursor` | edit cursor / current-row highlight |
+  | `frame` | window and box frame lines |
+  | `playbackBar` | the row the player is currently on |
+  | `wrapBar` | the pattern wrap indicator bar |
+  | `selectionBar` | block-selection highlight bar |
+  | `activeInstrument` | the playing voice's instrument number |
+  | `filterStatic` | filter value taken verbatim from the table |
+  | `filterCalc` | filter cutoff being swept/calculated |
+  | `filterEmpty` | in-song filter row with no active value |
+  | `filterHeader` | the filter table header |
+
+A complete, ready-to-edit default palette (every color and role spelled out)
+ships as [`doc/palette.json`](../doc/palette.json) — copy it to the config
+directory as `palette.json` and tweak.
+
 ## Window Navigation
 
 | Shortcut | Action |

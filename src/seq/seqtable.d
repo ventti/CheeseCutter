@@ -22,7 +22,7 @@ static import audio.audio;
 static import audio.remote;
 import seq.filtertrace;
 
-private enum activeInstrumentColor = 3;
+@property private int activeInstrumentColor() { return idx(Role.activeInstrument); } // was 3 (cyan)
 
 class SeqVoice : Voice, Undoable {
 	InputSeq seqinput;
@@ -407,7 +407,7 @@ class SequenceTable : VoiceTable, Undoable {
 			// The playing row is the cursor: draw its filter values white so they
 			// stay readable on the blue cursor bar drawn below.
 			bool cursorRow = (rowCounter == playRow);
-			enum cursorColor = 1; // white
+			int cursorColor = idx(Role.cursor); // was 1 (white)
 
 			// Past the loop point (or before song start) the trace has no data:
 			// leave the cell blank. Within the song, rows with no active filter

@@ -28,18 +28,20 @@ import audio.audio, audio.player;
 enum PAGESTEP = 2;
 enum Jump { toBeginning = 0, toMark = -1, toEnd = -2, toWrapMark = -3 };
 
-enum playbackBarColor = 6;
-enum wrapBarColor = 4;
-enum selectionBarColor = 5;
+// Colors are now semantic roles resolved at runtime from the (JSON-loadable)
+// palette; the defaults reproduce the historical indices noted alongside.
+@property int playbackBarColor() { return idx(Role.playbackBar); }   // was 6 (blue)
+@property int wrapBarColor() { return idx(Role.wrapBar); }           // was 4 (purple)
+@property int selectionBarColor() { return idx(Role.selectionBar); } // was 5 (green)
 
 // Read-only filter-track column: width (chars) reserved to the right of voice 3
 // and the colors distinguishing table-exact (static) from swept (calculated)
 // filter values.
 enum filterTrackWidth = 15;
-enum filterStaticColor = 15; // light gray: values taken exactly from the filter table
-enum filterCalcColor = 12;   // mid gray: cutoff being calculated (swept)
-enum filterEmptyColor = 11;  // dark gray: in-song row with no active filter (dashes)
-enum filterHeaderColor = 11;
+@property int filterStaticColor() { return idx(Role.filterStatic); } // was 15: light gray, values taken exactly from the filter table
+@property int filterCalcColor() { return idx(Role.filterCalc); }     // was 12: mid gray, cutoff being calculated (swept)
+@property int filterEmptyColor() { return idx(Role.filterEmpty); }   // was 11: dark gray, in-song row with no active filter (dashes)
+@property int filterHeaderColor() { return idx(Role.filterHeader); } // was 11: dark gray
 // Toggle (View shortcut). Drawing only; the column space is reserved in the
 // adjacent layout regardless.
 bool showFilterTrack = true;

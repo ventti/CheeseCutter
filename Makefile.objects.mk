@@ -21,6 +21,7 @@ OBJS= \
 	src/com/session.o \
 	src/com/util.o \
 	src/com/config.o \
+	src/com/palette.o \
 	src/com/shortcuts.o \
 	src/com/selection.o \
 	src/manpage.o \
