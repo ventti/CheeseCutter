@@ -107,6 +107,11 @@ void registerShortcuts(UI ui) {
 		activateDialog(loaddialog);
 	});
 
+	sm.registerMenuOnly("import_mod", Ctx.global, "File",
+				"Import a ProTracker module (.mod): its first three channels become tracks; samples/effects are not imported", {
+		activateDialog(modimportdialog);
+	}, "Import module...");
+
 	sm.register("save_file", Ctx.global, "File",
 				"Open the Save song dialog", SDLK_F10, 0, {
 		activateDialog(savedialog);

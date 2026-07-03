@@ -163,6 +163,16 @@ private bool processCommand(string arg) {
 			mainui.loadCallback(val);
 			stderr.writefln("loaded %s", val);
 			break;
+		case "modimport":
+			// modimport:<file.mod> — import a ProTracker module (File-menu action).
+			mainui.modImportCallback(val);
+			stderr.writefln("modimport %s", val);
+			break;
+		case "save":
+			// save:<file.ct> — write the current song as a .ct (round-trip test).
+			song.save(val);
+			stderr.writefln("saved %s", val);
+			break;
 		case "palette":
 			// palette:<file> — load a JSON palette at runtime, then force a full
 			// repaint so the new colors take effect on the next shot.

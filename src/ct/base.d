@@ -7,6 +7,7 @@ module ct.base;
 import com.cpu;
 import com.util;
 import ct.purge;
+import ct.modimport;
 import std.string;
 import std.file;
 import std.zlib;
@@ -1825,7 +1826,105 @@ class Song {
 	  subtunes.activate(0);
 	}
 
-	// hack to help sequencer rowcounting 
+	// Import a parsed ProTracker module (ct.modimport) into this song. Replaces
+	// all sequences and the subtune-0 orderlist, and overwrites the title and
+	// the instrument labels for the module's samples. Samples and effects are
+	// NOT imported (only the sample *numbers* survive, as instrument numbers);
+	// the existing instrument definitions are left in place as placeholders.
+	//
+	// The module's first three channels map to voices 0..2. Each 64-row pattern
+	// is split into 32-row half-sequences per voice (a full page is 256 bytes,
+	// leaving no room for a 64-row sequence's end mark), numbered in running
+	// order and deduplicated per pattern so a repeated pattern reuses its
+	// sequences. The orderlist replays the module's order table and loops back
+	// to the start.
+	void importModule(ModModule mod) {
+		enum SEQ_SPLIT = 32;                 // rows per CheeseCutter sequence
+		enum HALVES = 64 / SEQ_SPLIT;        // half-sequences per MOD pattern
+		int voices = mod.channels < 3 ? mod.channels : 3;
+
+		clearSeqs();
+
+		// seqNumber[pattern][voice][half], -1 == not yet allocated.
+		int[HALVES][3][] seqNumber;
+		seqNumber.length = mod.numPatterns;
+		foreach(ref perVoice; seqNumber)
+			foreach(ref halves; perVoice)
+				halves[] = -1;
+
+		int nextSeq = 1;   // sequence 0 stays the empty default
+
+		void buildSeq(int seqno, int pat, int voice, int half) {
+			ubyte[] raw = seqs[seqno].data.raw;
+			raw[] = 0;
+			int startRow = half * SEQ_SPLIT;
+			for(int r = 0; r < SEQ_SPLIT; r++) {
+				ModCell c = mod.patterns[pat][startRow + r][voice];
+				int b = r * 4;
+				raw[b + 0] = (c.instr > 0 && c.instr < 0x30) ?
+					cast(ubyte)(c.instr + 0xc0) : 0xf0;   // instrument (or none)
+				raw[b + 1] = 0xf0;                            // not tied
+				raw[b + 2] = (c.note >= 0) ?
+					cast(ubyte)(c.note + 0x60) : 0x60;        // note (or ---)
+				raw[b + 3] = 0x00;                            // no command
+			}
+			raw[SEQ_SPLIT * 4] = SEQ_END_MARK;
+			seqs[seqno].refresh();
+		}
+
+		// Walk the played order; allocate/build sequences on first use and
+		// append each voice's orderlist as [transpose=0xa0, seqnumber] pairs.
+		ubyte[][3] orderBytes;
+		for(int step = 0; step < mod.songLength; step++) {
+			int pat = mod.order[step];
+			if(pat >= mod.numPatterns) continue;
+			for(int v = 0; v < voices; v++) {
+				for(int h = 0; h < HALVES; h++) {
+					if(seqNumber[pat][v][h] < 0) {
+						if(nextSeq >= MAX_SEQ_NUM)
+							throw new UserException(
+								"The module has too many patterns to fit " ~
+								"CheeseCutter's 128 sequences.");
+						seqNumber[pat][v][h] = nextSeq++;
+						buildSeq(seqNumber[pat][v][h], pat, v, h);
+					}
+					orderBytes[v] ~= [cast(ubyte)0xa0,
+									  cast(ubyte)seqNumber[pat][v][h]];
+				}
+			}
+		}
+
+		// Terminate each voice's orderlist with an end-mark track that wraps
+		// back to offset 0, and install it into subtune 0's track array.
+		for(int v = 0; v < 3; v++) {
+			if(orderBytes[v].length == 0)
+				orderBytes[v] ~= [cast(ubyte)0xa0, cast(ubyte)0];
+			orderBytes[v] ~= [cast(ubyte)0xf0, cast(ubyte)0x00];
+			ubyte[] dst = subtunes.subtunes[0][v][];
+			dst[] = 0;
+			dst[0 .. orderBytes[v].length] = orderBytes[v][];
+		}
+
+		// Sample names -> instrument labels (numbers preserved).
+		for(int i = 1; i < 32; i++) {
+			string nm = mod.sampleNames[i];
+			if(nm.length > 32) nm = nm[0 .. 32];
+			insLabels[i][] = ' ';
+			insLabels[i][0 .. nm.length] = nm[];
+		}
+
+		// Title.
+		string t = mod.title;
+		if(t.length > 32) t = t[0 .. 32];
+		title[] = ' ';
+		title[0 .. t.length] = t[];
+
+		subtune = 0;
+		subtunes.activate(0, false);   // push subtune-0 tracks into the image
+		generateChordIndex();
+	}
+
+	// hack to help sequencer rowcounting
 	Sequence sequence(Track t) {
 		return seqs[t.number];
 	}

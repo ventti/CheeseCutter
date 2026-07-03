@@ -13,6 +13,7 @@ OBJS= \
 	src/audio/vice.o \
 	src/ct/purge.o \
 	src/ct/base.o \
+	src/ct/modimport.o \
 	src/ct/dump.o \
 	src/ct/build.o \
 	src/com/fb.o \
@@ -94,6 +95,7 @@ C_OBJS	= $(C_SRCS:.c=.o)
 
 UTILOBJS = src/ct2util.o \
 	src/ct/base.o \
+	src/ct/modimport.o \
 	src/com/cpu.o \
 	src/com/util.o \
 	src/ct/purge.o \

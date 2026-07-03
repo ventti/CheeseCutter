@@ -18,6 +18,7 @@ import std.conv;
 import main;
 import ct.base;
 import ct.build;
+import ct.modimport;
 import com.session;
 import ct.purge;
 import ui.help;
@@ -60,7 +61,7 @@ final class UI {
 	package {
 		int vismode = VisMode.Regs;
 		AboutDialog aboutdialog;
-		FileSelectorDialog loaddialog, savedialog, exportsavedialog;
+		FileSelectorDialog loaddialog, savedialog, exportsavedialog, modimportdialog;
 		ExportOptionsDialog exportDialog, renderDialog;
 		PropertiesDialog propertiesDialog;
 		ExportOptions exportOpts;
@@ -103,6 +104,8 @@ final class UI {
 												  dialog_width), &saveCallback);
 		exportsavedialog = new SaveFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
 												  dialog_width), &saveExportCallback, "Export song");
+		modimportdialog = new FileSelectorDialog(Rectangle(dialog_x, dialog_y, dialog_height,
+												  dialog_width), "Import ProTracker module", &modImportCallback);
 		exportDialog = new ExportOptionsDialog(&exportConfirm, false);
 		renderDialog = new ExportOptionsDialog(&exportConfirm, true);
 		propertiesDialog = new PropertiesDialog(&propertiesConfirm);
@@ -582,6 +585,43 @@ final class UI {
 			return;
 		}
 
+		finishLoad(s, doImport, doImport ? "Song data imported." : "");
+	}
+
+	// Import a ProTracker .mod: parse it and merge its first three channels into
+	// the current song (see Song.importModule). Samples/effects are not
+	// imported, so this always alters the current song without matching a file
+	// on disk; the save name is cleared (with a .ct suggestion) so a later save
+	// never clobbers the source .mod.
+	void modImportCallback(string s) {
+		stop();
+		if(std.file.exists(s) == 0 || std.file.isDir(s)) {
+			statusline.display("File not found or not accessible: " ~ s);
+			return;
+		}
+		try {
+			auto mod = ct.modimport.parseModule(cast(ubyte[])std.file.read(s));
+			song.importModule(mod);
+		}
+		catch(Exception e) {
+			statusline.display("Error: " ~ e.msg);
+			return;
+		}
+
+		finishLoad(s, true, "ProTracker module imported.");
+
+		import std.path : baseName, stripExtension;
+		state.filename = "";
+		string suggest = stripExtension(baseName(s.strip())) ~ ".ct";
+		foreach(d; [loaddialog, savedialog, exportsavedialog])
+			d.setFilename(suggest);
+	}
+
+	// Shared tail of a load/import: refresh every view and dialog, resync the
+	// audio backend and player variables, reset undo history and force a
+	// filter-track recompute. `doneMsg` (if non-empty) is shown on the status
+	// line; `modified` seeds the song-modified flag.
+	private void finishLoad(string s, bool modified, string doneMsg) {
 		// A new song image means the resident remote-backend copy is stale.
 		if(audio.remote.isActive())
 			audio.remote.markReload();
@@ -613,16 +653,15 @@ final class UI {
 
 		toplevel.reset();
 
-		if(doImport) {
-			statusline.display("Song data imported.");
-		}
+		if(doneMsg.length)
+			statusline.display(doneMsg);
 
 		import com.session;
 		com.session.state.undoQueue.clear();
 		com.session.state.redoQueue.clear();
 		// A plain load matches the file on disk; an import alters the current
 		// song without touching its file.
-		com.session.state.songModified = doImport;
+		com.session.state.songModified = modified;
 		// Force the filter-track trace to recompute against the new song data.
 		com.session.state.editGeneration++;
 	}

@@ -157,6 +157,37 @@ In the load (<kbd>F9</kbd>), save (<kbd>F10</kbd>) and `.prg` export dialogs:
   **Title / Author / Release** are shown above the Directory row, so you can
   identify a tune without loading it.
 
+## Importing ProTracker modules (.mod)
+
+**File → Import module...** brings in a ProTracker `.mod` as a starting point for
+a SID arrangement. Pick a `.mod` in the file dialog; the import replaces the
+current song's sequences and orderlist. It is meant as a rough transcription —
+what carries over, and what does not:
+
+- **First three channels only.** MOD channels 1–3 map to voices 1–3; any extra
+  channels (4-, 6-, 8-channel modules) are ignored.
+- **Patterns become sequences.** Each 64-row MOD pattern is split into two
+  32-row sequences per voice (a CheeseCutter sequence page holds at most 63 rows
+  plus its end mark). Sequences are numbered in running order and deduplicated,
+  so a pattern that appears several times in the order list reuses the same
+  sequences; the orderlist replays the module's order and loops back to the
+  start.
+- **Notes** are transcribed by name (a MOD `C-2` becomes a `C-2`), snapping any
+  off-table period to the nearest note.
+- **Sample names → instrument descriptions**, and the MOD sample *numbers* are
+  kept as the instrument numbers, so you can see at a glance which instrument
+  each part expects (e.g. sample 1 "bass" → instrument `01`).
+- **Samples and effects are not imported.** Sampled audio cannot become a SID
+  voice, so the instrument *definitions* are left untouched as placeholders — you
+  design the wave/pulse/filter programs for each instrument number yourself.
+  Because of this an imported song will not export to `.prg`/`.sid` until you
+  have set up valid instruments.
+
+Importing does not touch the file on disk and leaves the song unnamed (with a
+`.ct` name suggested), so a later save never overwrites the source `.mod`. A
+module with more unique patterns than fit CheeseCutter's 128 sequence slots
+(roughly 21) is rejected with a message rather than importing partially.
+
 ## Playback
 
 | Shortcut | Action |

@@ -55,6 +55,8 @@ SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./ccdriver \
 Run `./ccdriver -h` for the full, authoritative command list. Commands (in
 order, repeatable):
 - `load:<file.ct>` — load a song
+- `modimport:<file.mod>` — import a ProTracker module (File → Import module...)
+- `save:<file.ct>` — write the current song as a .ct (round-trip test helper)
 - `key:<spec>` — inject a keypress; `spec = [Ctrl-][Alt-][Shift-]NAME`, where
   NAME is `F1`..`F12`, `ESC`, `RET`, `SPACE`, `TAB`, `UP`/`DOWN`/`LEFT`/`RIGHT`,
   `HOME`/`END`/`PGUP`/`PGDN`, `INS`, `DEL`, `BACKSPACE`, `SCRLOCK`, keypad
