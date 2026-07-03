@@ -127,6 +127,7 @@ bar it flips the highlighted on/off item), but it works fine inside a query
 | <kbd>Esc</kbd>, then type | Command palette: search commands and songs (see [Command Palette](#command-palette)) |
 | <kbd>Alt</kbd>-<kbd>Return</kbd> | Toggle fullscreen |
 | <kbd>F9</kbd> | Load song |
+| <kbd>Shift</kbd>-<kbd>F9</kbd> | Import ProTracker module (`.mod`) |
 | <kbd>F10</kbd> | Save song |
 | <kbd>Shift</kbd>-<kbd>F10</kbd> | Export song (Full player `.prg` / Optimized `.prg` / PSID; options dialog) |
 | <kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>F10</kbd> | Render audio (`.wav` / `.flac`; duration, normalize, bit depth, rate) |
@@ -159,8 +160,9 @@ In the load (<kbd>F9</kbd>), save (<kbd>F10</kbd>) and `.prg` export dialogs:
 
 ## Importing ProTracker modules (.mod)
 
-**File → Import .mod** brings in a ProTracker `.mod` as a starting point for a
-SID arrangement. Pick a `.mod` in the file dialog; the import replaces the
+**File → Import .mod...** (<kbd>Shift</kbd>-<kbd>F9</kbd>) brings in a ProTracker
+`.mod` as a starting point for a SID arrangement. Pick a `.mod` in the file
+dialog; the import replaces the
 current song's sequences and orderlist. It is meant as a rough transcription —
 what carries over, and what does not:
 
