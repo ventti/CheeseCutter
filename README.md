@@ -1,7 +1,7 @@
 # CheeseCutter-EXTended
 
-A tracker-style music editor for the Commodore 64 SID chip — an extended fork of
-CheeseCutter 2.9 by abaddon. Current version 0.4.0.
+A tracker-style music editor for the Commodore 64 SID chip — an EXTended fork of
+CheeseCutter 2.9 by Abaddon.
 
 ![CheeseCutter-EXTended](guide/pics/ccmain-scaled.png)
 
@@ -55,7 +55,7 @@ make -f Makefile.mac LIBSPATH="$(brew --prefix)/lib"
 
 ## Credits
 
-Programmed by abaddon 2009-2017.
+Programmed by Abaddon 2009-2017.
 
 Mac OSX and D2 port by Ruk 2013.
 
