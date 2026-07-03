@@ -107,11 +107,6 @@ void registerShortcuts(UI ui) {
 		activateDialog(loaddialog);
 	});
 
-	sm.registerMenuOnly("import_mod", Ctx.global, "File",
-				"Import a ProTracker module (.mod): its first three channels become tracks; samples/effects are not imported", {
-		activateDialog(modimportdialog);
-	}, "Import module...");
-
 	sm.register("save_file", Ctx.global, "File",
 				"Open the Save song dialog", SDLK_F10, 0, {
 		activateDialog(savedialog);
@@ -127,6 +122,11 @@ void registerShortcuts(UI ui) {
 			statusline.display(format("Saved \"%s\".",s));
 		}
 	});
+
+	sm.registerMenuOnly("import_mod", Ctx.global, "File",
+				"Import a ProTracker module (.mod): its first three channels become tracks; samples/effects are not imported", {
+		activateDialog(modimportdialog);
+	}, "Import .mod");
 
 	sm.register("export_song", Ctx.global, "File",
 				"Export song: Full player .prg / Optimized .prg / PSID (options dialog)", SDLK_F10, KMOD_SHIFT, {

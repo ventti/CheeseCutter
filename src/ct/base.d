@@ -1832,33 +1832,42 @@ class Song {
 	// NOT imported (only the sample *numbers* survive, as instrument numbers);
 	// the existing instrument definitions are left in place as placeholders.
 	//
-	// The module's first three channels map to voices 0..2. Each 64-row pattern
-	// is split into 32-row half-sequences per voice (a full page is 256 bytes,
-	// leaving no room for a 64-row sequence's end mark), numbered in running
-	// order and deduplicated per pattern so a repeated pattern reuses its
-	// sequences. The orderlist replays the module's order table and loops back
-	// to the start.
+	// The module's first three channels map to voices 0..2. A pattern is cut at
+	// its first pattern-break/position-jump row (mod.patternLen) and the dead
+	// rows below are dropped; the kept rows become one sequence per voice, or
+	// two (split in half) when a break-less 64-row pattern won't fit a page (a
+	// page is 256 bytes, one byte short of 64 rows plus an end mark). Sequences
+	// are numbered in running order and deduplicated per pattern, and the
+	// orderlist replays the module's order table and loops back to the start.
 	void importModule(ModModule mod) {
-		enum SEQ_SPLIT = 32;                 // rows per CheeseCutter sequence
-		enum HALVES = 64 / SEQ_SPLIT;        // half-sequences per MOD pattern
+		enum MAX_CHUNKS = 2;                 // a pattern yields at most 2 seqs
 		int voices = mod.channels < 3 ? mod.channels : 3;
 
 		clearSeqs();
 
-		// seqNumber[pattern][voice][half], -1 == not yet allocated.
-		int[HALVES][3][] seqNumber;
+		// Split a pattern's kept row count into sequence-sized chunks (each fits
+		// a page with its end mark): one chunk up to 63 rows, otherwise halved.
+		static int chunkLayout(int rows, ref int[MAX_CHUNKS] start,
+							    ref int[MAX_CHUNKS] len) {
+			if(rows <= 63) { start[0] = 0; len[0] = rows; return 1; }
+			start[0] = 0;       len[0] = rows / 2;
+			start[1] = rows / 2; len[1] = rows - rows / 2;
+			return 2;
+		}
+
+		// seqNumber[pattern][voice][chunk], -1 == not yet allocated.
+		int[MAX_CHUNKS][3][] seqNumber;
 		seqNumber.length = mod.numPatterns;
 		foreach(ref perVoice; seqNumber)
-			foreach(ref halves; perVoice)
-				halves[] = -1;
+			foreach(ref chunks; perVoice)
+				chunks[] = -1;
 
 		int nextSeq = 1;   // sequence 0 stays the empty default
 
-		void buildSeq(int seqno, int pat, int voice, int half) {
+		void buildSeq(int seqno, int pat, int voice, int startRow, int rowCount) {
 			ubyte[] raw = seqs[seqno].data.raw;
 			raw[] = 0;
-			int startRow = half * SEQ_SPLIT;
-			for(int r = 0; r < SEQ_SPLIT; r++) {
+			for(int r = 0; r < rowCount; r++) {
 				ModCell c = mod.patterns[pat][startRow + r][voice];
 				int b = r * 4;
 				raw[b + 0] = (c.instr > 0 && c.instr < 0x30) ?
@@ -1868,7 +1877,7 @@ class Song {
 					cast(ubyte)(c.note + 0x60) : 0x60;        // note (or ---)
 				raw[b + 3] = 0x00;                            // no command
 			}
-			raw[SEQ_SPLIT * 4] = SEQ_END_MARK;
+			raw[rowCount * 4] = SEQ_END_MARK;
 			seqs[seqno].refresh();
 		}
 
@@ -1878,18 +1887,20 @@ class Song {
 		for(int step = 0; step < mod.songLength; step++) {
 			int pat = mod.order[step];
 			if(pat >= mod.numPatterns) continue;
+			int[MAX_CHUNKS] cStart, cLen;
+			int nChunks = chunkLayout(mod.patternLen[pat], cStart, cLen);
 			for(int v = 0; v < voices; v++) {
-				for(int h = 0; h < HALVES; h++) {
-					if(seqNumber[pat][v][h] < 0) {
+				for(int c = 0; c < nChunks; c++) {
+					if(seqNumber[pat][v][c] < 0) {
 						if(nextSeq >= MAX_SEQ_NUM)
 							throw new UserException(
 								"The module has too many patterns to fit " ~
 								"CheeseCutter's 128 sequences.");
-						seqNumber[pat][v][h] = nextSeq++;
-						buildSeq(seqNumber[pat][v][h], pat, v, h);
+						seqNumber[pat][v][c] = nextSeq++;
+						buildSeq(seqNumber[pat][v][c], pat, v, cStart[c], cLen[c]);
 					}
 					orderBytes[v] ~= [cast(ubyte)0xa0,
-									  cast(ubyte)seqNumber[pat][v][h]];
+									  cast(ubyte)seqNumber[pat][v][c]];
 				}
 			}
 		}

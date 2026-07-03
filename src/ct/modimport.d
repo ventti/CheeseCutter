@@ -24,6 +24,7 @@ struct ModModule {
 	ubyte[128] order;         // order table (pattern number per position)
 	int numPatterns;          // unique patterns stored in the file
 	ModCell[3][64][] patterns; // [pattern][row 0..63][voice 0..2]
+	int[] patternLen;         // effective rows per pattern (see below), 1..64
 }
 
 // Amiga period table for finetune 0, three octaves C-1..B-3 (index 0 == C-1).
@@ -112,12 +113,22 @@ ModModule parseModule(const(ubyte)[] data) {
 		throw new UserException("ProTracker module is truncated (missing pattern data).");
 
 	m.patterns.length = m.numPatterns;
+	m.patternLen.length = m.numPatterns;
 	int p = HEADER_END;
 	for(int pat = 0; pat < m.numPatterns; pat++) {
+		// A pattern break (Dxx) or position jump (Bxx) on ANY channel ends the
+		// pattern at that row and moves to the next order position, so rows
+		// below it never play. Record the first such row (breakRow) — scanning
+		// every channel, since the effect may sit on a channel we don't import
+		// — and treat the rows past it as dead code (dropped on import).
+		int breakRow = -1;
 		for(int row = 0; row < 64; row++) {
 			for(int ch = 0; ch < m.channels; ch++) {
 				ubyte b0 = data[p], b1 = data[p + 1], b2 = data[p + 2];
 				p += 4;   // b3 (effect parameter) discarded
+				int effect = b2 & 0x0F;
+				if(breakRow < 0 && (effect == 0x0D || effect == 0x0B))
+					breakRow = row;
 				if(ch >= 3) continue;
 				int sample = (b0 & 0xF0) | (b2 >> 4);
 				int period = ((b0 & 0x0F) << 8) | b1;
@@ -125,6 +136,7 @@ ModModule parseModule(const(ubyte)[] data) {
 					ModCell(periodToNote(period), sample);
 			}
 		}
+		m.patternLen[pat] = (breakRow >= 0) ? breakRow + 1 : 64;
 	}
 	return m;
 }

@@ -17,12 +17,13 @@ CheeseCutter 2.9 by Abaddon.
 - Export to C64 `.prg` (full player or optimized) and PSID `.sid`, plus offline
   audio render to `.wav` / `.flac` with normalize, bit depth and sample-rate
   options.
-- Import ProTracker modules (**File → Import module...**): the first three
-  channels of a `.mod` become tracks — each 64-row pattern is split into two
-  32-row sequences per voice, numbered running and deduplicated so the orderlist
-  replays the module's pattern order and loops. Sample names become instrument
-  descriptions and the sample numbers are preserved as instrument numbers.
-  Samples and effects are not imported (you design the SID instruments yourself).
+- Import ProTracker modules (**File → Import .mod**): the first three channels
+  of a `.mod` become tracks — each pattern is cut at its pattern-break (`Dxx`)
+  row (dead rows below are dropped) and becomes a sequence per voice, numbered
+  running and deduplicated so the orderlist replays the module's pattern order
+  and loops. Sample names become instrument descriptions and the sample numbers
+  are preserved as instrument numbers. Samples and effects are not imported (you
+  design the SID instruments yourself).
 - Instrument color tags (`$X` / `$XY`) in instrument descriptions.
 - Read-only **filter track** column in the pattern view (between voice 3 and the
   instrument table): per-row SID filter registers (cutoff, resonance, mode and a

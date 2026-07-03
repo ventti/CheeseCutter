@@ -159,19 +159,22 @@ In the load (<kbd>F9</kbd>), save (<kbd>F10</kbd>) and `.prg` export dialogs:
 
 ## Importing ProTracker modules (.mod)
 
-**File → Import module...** brings in a ProTracker `.mod` as a starting point for
-a SID arrangement. Pick a `.mod` in the file dialog; the import replaces the
+**File → Import .mod** brings in a ProTracker `.mod` as a starting point for a
+SID arrangement. Pick a `.mod` in the file dialog; the import replaces the
 current song's sequences and orderlist. It is meant as a rough transcription —
 what carries over, and what does not:
 
 - **First three channels only.** MOD channels 1–3 map to voices 1–3; any extra
   channels (4-, 6-, 8-channel modules) are ignored.
-- **Patterns become sequences.** Each 64-row MOD pattern is split into two
-  32-row sequences per voice (a CheeseCutter sequence page holds at most 63 rows
-  plus its end mark). Sequences are numbered in running order and deduplicated,
-  so a pattern that appears several times in the order list reuses the same
-  sequences; the orderlist replays the module's order and loops back to the
-  start.
+- **Patterns become sequences, cut at pattern breaks.** A pattern is cut at the
+  first row with a pattern-break (`Dxx`) or position-jump (`Bxx`) effect on *any*
+  channel — that row is where ProTracker leaves the pattern, so the rows below it
+  are dead code and are dropped. The kept rows become one sequence per voice
+  (a break-less 64-row pattern is split into two, since a sequence page holds at
+  most 63 rows plus its end mark). Sequences are numbered in running order and
+  deduplicated, so a pattern that appears several times in the order list reuses
+  the same sequences; the orderlist replays the module's order and loops back to
+  the start.
 - **Notes** are transcribed by name (a MOD `C-2` becomes a `C-2`), snapping any
   off-table period to the nearest note.
 - **Sample names → instrument descriptions**, and the MOD sample *numbers* are
