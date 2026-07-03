@@ -124,8 +124,8 @@ void registerShortcuts(UI ui) {
 	});
 
 	sm.register("import_mod", Ctx.global, "File",
-				"Import a ProTracker module (.mod): its first three channels become tracks; samples/effects are not imported", SDLK_F9, KMOD_SHIFT, {
-		activateDialog(modimportdialog);
+				"Import a ProTracker module (.mod): its first three channels become tracks; choose which effects to translate", SDLK_F9, KMOD_SHIFT, {
+		activateDialog(modImportOptionsDialog);
 	}, "Import .mod...");
 
 	sm.register("export_song", Ctx.global, "File",

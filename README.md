@@ -22,8 +22,13 @@ CheeseCutter 2.9 by Abaddon.
   row (dead rows below are dropped) and becomes a sequence per voice, numbered
   running and deduplicated so the orderlist replays the module's pattern order
   and loops. Sample names become instrument descriptions and the sample numbers
-  are preserved as instrument numbers. Samples and effects are not imported (you
-  design the SID instruments yourself).
+  are preserved as instrument numbers. A dialog (default all-on) chooses which
+  effects to translate: **arpeggios** (`0xy`, into the chord table), **pitch
+  slides** (`1xx`/`2xx`), **tone portamento** (`3xx`, via tied notes),
+  **vibrato** (`4xy`), and **speed/funk-groove** (`Fxx`, alternating speeds
+  become the break-speed table). Sampled audio, volume, panning and Amiga-filter
+  effects can't map to the SID and are not imported — you design the SID
+  instruments yourself; the pitch effects are approximate.
 - Instrument color tags (`$X` / `$XY`) in instrument descriptions.
 - Read-only **filter track** column in the pattern view (between voice 3 and the
   instrument table): per-row SID filter registers (cutoff, resonance, mode and a

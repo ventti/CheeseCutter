@@ -12,6 +12,7 @@ import com.util;
 import com.session;
 private import ct.base;
 import ct.build : ExportOptions, ExportFormat, isAudioFormat;
+import ct.modimport : ModImportOptions;
 import audio.render : flacAvailable;
 import com.config : Prefs;
 static import audio.audio;
@@ -1219,6 +1220,95 @@ class ExportOptionsDialog : Window {
 			if(key.unicode == '<') { adjust(kind, -1); return OK; }
 			if(key.unicode == '>') { adjust(kind, +1); return OK; }
 			editDigit(kind, key.unicode);
+			return OK;
+		}
+	}
+}
+
+// File -> Import .mod: pick which MOD effect groups to translate before choosing
+// the file. All default on; toggles map to ct.modimport.ModImportOptions. On
+// Return it hands the options to onConfirm (which opens the file dialog); Esc
+// cancels. Modeled on ExportOptionsDialog's row navigation.
+class ModImportOptionsDialog : Window {
+	alias void delegate(ModImportOptions) ConfirmCB;
+
+	private {
+		ConfirmCB onConfirm;
+		int sel;
+		ModImportOptions opts;
+		static immutable string[] labels = [
+			"Arpeggios (0xy)", "Pitch slides (1xx/2xx)",
+			"Tone portamento (3xx)", "Vibrato (4xy)", "Speed & groove (Fxx)" ];
+	}
+
+	this(ConfirmCB cb) {
+		super(Rectangle(0, 0, 1));
+		onConfirm = cb;
+	}
+
+	// Toggle by row index (order matches `labels`).
+	private void toggle(int i) {
+		switch(i) {
+		case 0: opts.arpeggio = !opts.arpeggio; break;
+		case 1: opts.slide = !opts.slide; break;
+		case 2: opts.portamento = !opts.portamento; break;
+		case 3: opts.vibrato = !opts.vibrato; break;
+		default: opts.speed = !opts.speed; break;
+		}
+	}
+
+	private bool state(int i) {
+		final switch(i) {
+		case 0: return opts.arpeggio;
+		case 1: return opts.slide;
+		case 2: return opts.portamento;
+		case 3: return opts.vibrato;
+		case 4: return opts.speed;
+		}
+	}
+
+	override void activate() { sel = 0; opts = ModImportOptions.init; }
+
+	override void update() {
+		int fw = 40;
+		int h = cast(int)labels.length + 6;
+		int x = screen.width / 2 - (fw + 2) / 2;
+		int y = screen.height / 2 - h / 2;
+		drawFrame(Rectangle(x, y, h, fw + 2));
+		screen.cprint(x + 2, y, 1, 0, " Import ProTracker module ");
+		foreach(i, lab; labels) {
+			int ry = y + 2 + cast(int)i;
+			int fg = 15, bg = 0;
+			if(cast(int)i == sel) { fg = 1; bg = 4; }
+			string line = format(" %s %s", state(cast(int)i) ? "[x]" : "[ ]", lab);
+			screen.cprint(x + 2, ry, fg, bg, line.leftJustify(fw - 2));
+		}
+		screen.cprint(x + 2, y + h - 3, 12, 0, "Up/Down: Navigate   Space: Toggle");
+		screen.cprint(x + 2, y + h - 2, 12, 0, "Return: Import   Esc: Cancel");
+	}
+
+	override int keypress(Keyinfo key) {
+		if(key.mods & KMOD_ALT) return OK;
+		int n = cast(int)labels.length;
+		switch(key.raw) {
+		case SDLK_ESCAPE:
+			return CANCEL;
+		case SDLK_RETURN:
+			onConfirm(opts);   // opens the file dialog; keep the loop from closing us
+			return OK;
+		case SDLK_UP:
+			sel = (sel - 1 + n) % n;
+			return OK;
+		case SDLK_DOWN:
+			sel = (sel + 1) % n;
+			return OK;
+		case SDLK_SPACE:
+		case SDLK_LEFT:
+		case SDLK_RIGHT:
+			toggle(sel);
+			return OK;
+		default:
+			if(key.unicode == '<' || key.unicode == '>') toggle(sel);
 			return OK;
 		}
 	}

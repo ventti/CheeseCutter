@@ -1840,17 +1840,170 @@ class Song {
 	// are numbered in running order and deduplicated per pattern, and the
 	// orderlist replays the module's order table and loops back to the start.
 	void importModule(ModModule mod) {
+		importModule(mod, ModImportOptions.init);
+	}
+
+	// Effect-aware overload. `opt` selects which MOD effects to translate; see
+	// ct.modimport.ModImportOptions. Effects share the single per-row command
+	// byte the player latches after a note token (see updseq/checksuper in the
+	// player): arpeggios become chord-table entries selected by an inline
+	// $80|chord byte, pitch slides/vibrato become command-table entries, and
+	// tone-portamento (3xx) becomes a tied target note carrying command 7.
+	// Speed (Fxx) sets the song speed, and an alternating-speed "funk" groove is
+	// installed as the break-speed table in chord set 0 (song speed 0). Since
+	// most effects only fire on a note-on, they are emitted on note rows only.
+	void importModule(ModModule mod, ModImportOptions opt) {
 		enum MAX_CHUNKS = 2;                 // a pattern yields at most 2 seqs
+		enum SLIDE_SCALE = 16;               // MOD slide/porta unit -> SID freq/tick (approx)
 		int voices = mod.channels < 3 ? mod.channels : 3;
 
 		clearSeqs();
+		// Command and chord tables are rebuilt from the module (any prior/demo
+		// contents are irrelevant — every cmd byte we emit is set here).
+		superTable[] = 0;
+		chordTable[] = 0;
 
-		// Split a pattern's kept row count into sequence-sized chunks (each fits
-		// a page with its end mark): one chunk up to 63 rows, otherwise halved.
+		// --- speed timeline + funk-groove detection -----------------------
+		// Row-by-row global speed across the played song (MOD speed persists
+		// until the next Fxx; BPM values >=0x20 are ignored).
+		int initialSpeed = 6;
+		ubyte[] groove;      // detected repeating speed cycle, else empty
+		if(opt.speed) {
+			int[] timeline;
+			int cur = 6;
+			for(int step = 0; step < mod.songLength; step++) {
+				int pat = mod.order[step];
+				if(pat >= mod.numPatterns) continue;
+				for(int r = 0; r < mod.patternLen[pat]; r++) {
+					int s = mod.patternSpeed[pat][r];
+					if(s >= 1 && s <= 0x1f) cur = s;
+					timeline ~= cur;
+				}
+			}
+			if(timeline.length) initialSpeed = timeline[0];
+			// A groove is a short cycle (period 2..16) that the whole timeline
+			// repeats, using at least two distinct speeds.
+			for(int p = 2; p <= 16 && p * 2 <= timeline.length; p++) {
+				bool periodic = true;
+				foreach(i, v; timeline)
+					if(v != timeline[i % p]) { periodic = false; break; }
+				if(!periodic) continue;
+				bool varied = false;
+				foreach(v; timeline[0 .. p]) if(v != timeline[0]) varied = true;
+				if(!varied) continue;
+				foreach(v; timeline[0 .. p]) {
+					int c = v < 2 ? 2 : (v > 0x7f ? 0x7f : v);
+					groove ~= cast(ubyte)c;
+				}
+				break;
+			}
+		}
+		if(initialSpeed < 2) initialSpeed = 2;   // <2 triggers break-speed mode
+
+		// --- command-table allocator (dedupes into indices 1..0x3f) --------
+		int nextCmd = 1;
+		int[string] cmdMap;
+		int allocCmd(int op, int hi, int lo) {
+			string key = format("%d.%d.%d", op, hi, lo);
+			if(auto pp = key in cmdMap) return *pp;
+			if(nextCmd > 0x3f) return -1;    // table full: drop this effect
+			int idx = nextCmd++;
+			superTable[idx]        = cast(ubyte)op;
+			superTable[idx + 64]   = cast(ubyte)hi;
+			superTable[idx + 128]  = cast(ubyte)lo;
+			cmdMap[key] = idx;
+			return idx;
+		}
+
+		// --- chord (arpeggio) allocator ------------------------------------
+		// Each arp is [0, x, y, $80|start]; chord ordinal N -> inline cmd $80|N.
+		// If a groove was detected it occupies chord set 0 (its $80 loop marker
+		// is the delimiter), so arps start at ordinal 1 / just past it.
+		int nextChordPos = 0, nextChordNo = 0;
+		if(groove.length) {
+			chordTable[0 .. groove.length] = groove[];
+			chordTable[groove.length] = 0x80;         // wrap-to-0 speed-table end
+			nextChordPos = cast(int)groove.length + 1;
+			nextChordNo = 1;
+		}
+		int[string] chordMap;
+		int allocChord(int x, int y) {
+			string key = format("%d.%d", x, y);
+			if(auto pp = key in chordMap) return *pp;
+			if(nextChordNo >= 31 || nextChordPos + 4 > 128) return -1;
+			int start = nextChordPos;
+			chordTable[start]     = 0;
+			chordTable[start + 1] = cast(ubyte)(x & 0x3f);
+			chordTable[start + 2] = cast(ubyte)(y & 0x3f);
+			chordTable[start + 3] = cast(ubyte)(0x80 | start);
+			nextChordPos += 4;
+			int no = nextChordNo++;
+			chordMap[key] = no;
+			return no;
+		}
+
+		// Map a cell's MOD effect to the note's command byte (0 = none).
+		// Portamento is handled in buildSeq (it needs the tie flag).
+		ubyte cellCmd(ModCell c) {
+			int prm = c.fxparam;
+			switch(c.fx) {
+			case 0x0:                                   // arpeggio 0xy
+				if(opt.arpeggio && prm != 0) {
+					int no = allocChord(prm >> 4, prm & 0x0f);
+					if(no >= 0) return cast(ubyte)(0x80 | no);
+				}
+				return 0;
+			case 0x1: case 0x2:                          // slide up / down
+				if(opt.slide && prm != 0) {
+					int v = prm * SLIDE_SCALE;
+					int idx = allocCmd(c.fx == 0x1 ? 0 : 1, (v >> 8) & 0xff, v & 0xff);
+					if(idx > 0) return cast(ubyte)idx;
+				}
+				return 0;
+			case 0x4:                                    // vibrato 4xy
+				if(opt.vibrato) {
+					int div = 8 - ((prm & 0x0f) >> 1);
+					if(div < 1) div = 1;
+					int idx = allocCmd(2, 0, ((prm >> 4) << 4) | div);
+					if(idx > 0) return cast(ubyte)idx;
+				}
+				return 0;
+			default:
+				return 0;
+			}
+		}
+
+		void buildSeq(int seqno, int pat, int voice, int startRow, int rowCount) {
+			ubyte[] raw = seqs[seqno].data.raw;
+			raw[] = 0;
+			for(int r = 0; r < rowCount; r++) {
+				ModCell c = mod.patterns[pat][startRow + r][voice];
+				int b = r * 4;
+				ubyte tied = 0xf0, cmd = 0;
+				bool hasNote = c.note >= 0;
+				// Tone portamento: the note is the glide target and must not
+				// retrigger, so it becomes a tied note carrying command 7.
+				if(opt.portamento && c.fx == 0x3 && hasNote) {
+					int v = c.fxparam * SLIDE_SCALE;
+					int idx = allocCmd(7, (v >> 8) & 0xff, v & 0xff);
+					if(idx > 0) { tied = 0x5f; cmd = cast(ubyte)idx; }
+				}
+				else if(hasNote)
+					cmd = cellCmd(c);
+				raw[b + 0] = (c.instr > 0 && c.instr < 0x30) ?
+					cast(ubyte)(c.instr + 0xc0) : 0xf0;
+				raw[b + 1] = tied;
+				raw[b + 2] = hasNote ? cast(ubyte)(c.note + 0x60) : 0x60;
+				raw[b + 3] = cmd;
+			}
+			raw[rowCount * 4] = SEQ_END_MARK;
+			seqs[seqno].refresh();
+		}
+
 		static int chunkLayout(int rows, ref int[MAX_CHUNKS] start,
 							    ref int[MAX_CHUNKS] len) {
 			if(rows <= 63) { start[0] = 0; len[0] = rows; return 1; }
-			start[0] = 0;       len[0] = rows / 2;
+			start[0] = 0;        len[0] = rows / 2;
 			start[1] = rows / 2; len[1] = rows - rows / 2;
 			return 2;
 		}
@@ -1864,25 +2017,6 @@ class Song {
 
 		int nextSeq = 1;   // sequence 0 stays the empty default
 
-		void buildSeq(int seqno, int pat, int voice, int startRow, int rowCount) {
-			ubyte[] raw = seqs[seqno].data.raw;
-			raw[] = 0;
-			for(int r = 0; r < rowCount; r++) {
-				ModCell c = mod.patterns[pat][startRow + r][voice];
-				int b = r * 4;
-				raw[b + 0] = (c.instr > 0 && c.instr < 0x30) ?
-					cast(ubyte)(c.instr + 0xc0) : 0xf0;   // instrument (or none)
-				raw[b + 1] = 0xf0;                            // not tied
-				raw[b + 2] = (c.note >= 0) ?
-					cast(ubyte)(c.note + 0x60) : 0x60;        // note (or ---)
-				raw[b + 3] = 0x00;                            // no command
-			}
-			raw[rowCount * 4] = SEQ_END_MARK;
-			seqs[seqno].refresh();
-		}
-
-		// Walk the played order; allocate/build sequences on first use and
-		// append each voice's orderlist as [transpose=0xa0, seqnumber] pairs.
 		ubyte[][3] orderBytes;
 		for(int step = 0; step < mod.songLength; step++) {
 			int pat = mod.order[step];
@@ -1933,6 +2067,9 @@ class Song {
 		subtune = 0;
 		subtunes.activate(0, false);   // push subtune-0 tracks into the image
 		generateChordIndex();
+		// Speed: 0 selects the break-speed groove in chord set 0; otherwise the
+		// flat initial speed.
+		speed = groove.length ? 0 : initialSpeed;
 	}
 
 	// hack to help sequencer rowcounting

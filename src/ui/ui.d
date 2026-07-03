@@ -62,6 +62,8 @@ final class UI {
 		int vismode = VisMode.Regs;
 		AboutDialog aboutdialog;
 		FileSelectorDialog loaddialog, savedialog, exportsavedialog, modimportdialog;
+		ModImportOptionsDialog modImportOptionsDialog;
+		ModImportOptions pendingModOptions;   // chosen in the options dialog
 		ExportOptionsDialog exportDialog, renderDialog;
 		PropertiesDialog propertiesDialog;
 		ExportOptions exportOpts;
@@ -106,6 +108,7 @@ final class UI {
 												  dialog_width), &saveExportCallback, "Export song");
 		modimportdialog = new FileSelectorDialog(Rectangle(dialog_x, dialog_y, dialog_height,
 												  dialog_width), "Import ProTracker module", &modImportCallback);
+		modImportOptionsDialog = new ModImportOptionsDialog(&modImportConfirm);
 		exportDialog = new ExportOptionsDialog(&exportConfirm, false);
 		renderDialog = new ExportOptionsDialog(&exportConfirm, true);
 		propertiesDialog = new PropertiesDialog(&propertiesConfirm);
@@ -593,6 +596,14 @@ final class UI {
 	// imported, so this always alters the current song without matching a file
 	// on disk; the save name is cleared (with a .ct suggestion) so a later save
 	// never clobbers the source .mod.
+	// The import options dialog confirmed: remember the chosen feature toggles
+	// and proceed to the file picker (mirrors the export options -> save flow).
+	private void modImportConfirm(ModImportOptions o) {
+		pendingModOptions = o;
+		modimportdialog.setDirectory(getcwd());
+		activateDialog(modimportdialog);
+	}
+
 	void modImportCallback(string s) {
 		stop();
 		if(std.file.exists(s) == 0 || std.file.isDir(s)) {
@@ -601,7 +612,7 @@ final class UI {
 		}
 		try {
 			auto mod = ct.modimport.parseModule(cast(ubyte[])std.file.read(s));
-			song.importModule(mod);
+			song.importModule(mod, pendingModOptions);
 		}
 		catch(Exception e) {
 			statusline.display("Error: " ~ e.msg);

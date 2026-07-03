@@ -32,7 +32,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 |---|---|
 | `Ctrl-N` | Clear the song and start a new project |
 | `Shift-F10` | Export song: Full player .prg / Optimized .prg / PSID (options dialog) |
-| `Shift-F9` | Import a ProTracker module (.mod): its first three channels become tracks; samples/effects are not imported |
+| `Shift-F9` | Import a ProTracker module (.mod): its first three channels become tracks; choose which effects to translate |
 | `F9` | Open the Load song dialog |
 | `F10` | Open the Save song dialog |
 | `Ctrl-F10` | Quick save song (doesn't ask a filename) |

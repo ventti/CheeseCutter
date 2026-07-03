@@ -7,11 +7,26 @@ module ct.modimport;
 import com.util;
 import std.string;
 
-// One imported cell: a CheeseCutter note value (or -1 = none) and the MOD
-// sample number that triggered it (0 = none). Effects are discarded.
+// One imported cell: a CheeseCutter note value (or -1 = none), the MOD sample
+// number that triggered it (0 = none), and the raw MOD effect (command nibble
+// 0..F + parameter byte). The effect is interpreted at import time per the
+// selected ModImportOptions; sample data itself is never imported.
 struct ModCell {
-	int note = -1;   // CheeseCutter note value (see periodToNote), or -1
-	int instr = 0;   // MOD sample number 1..31, or 0 for none
+	int note = -1;    // CheeseCutter note value (see periodToNote), or -1
+	int instr = 0;    // MOD sample number 1..31, or 0 for none
+	ubyte fx = 0;     // MOD effect command nibble (0..F)
+	ubyte fxparam = 0;// MOD effect parameter byte
+}
+
+// Which MOD effects the importer should translate. All default on; the editor's
+// import dialog lets the user turn individual groups off. Notes, instruments and
+// pattern breaks are always imported (they are not effects in this sense).
+struct ModImportOptions {
+	bool arpeggio = true;    // 0xy  -> chord-table arpeggio
+	bool slide = true;       // 1xx/2xx -> command slide up/down
+	bool portamento = true;  // 3xx  -> tied note + tone-portamento command
+	bool vibrato = true;     // 4xy  -> command vibrato
+	bool speed = true;       // Fxx  -> song speed / per-row speed changes
 }
 
 // A parsed ProTracker module. `patterns[p][row][voice]` covers only the first
@@ -25,6 +40,7 @@ struct ModModule {
 	int numPatterns;          // unique patterns stored in the file
 	ModCell[3][64][] patterns; // [pattern][row 0..63][voice 0..2]
 	int[] patternLen;         // effective rows per pattern (see below), 1..64
+	int[64][] patternSpeed;   // [pattern][row]: MOD Fxx speed set that row, or -1
 }
 
 // Amiga period table for finetune 0, three octaves C-1..B-3 (index 0 == C-1).
@@ -114,6 +130,7 @@ ModModule parseModule(const(ubyte)[] data) {
 
 	m.patterns.length = m.numPatterns;
 	m.patternLen.length = m.numPatterns;
+	m.patternSpeed.length = m.numPatterns;
 	int p = HEADER_END;
 	for(int pat = 0; pat < m.numPatterns; pat++) {
 		// A pattern break (Dxx) or position jump (Bxx) on ANY channel ends the
@@ -122,18 +139,22 @@ ModModule parseModule(const(ubyte)[] data) {
 		// every channel, since the effect may sit on a channel we don't import
 		// — and treat the rows past it as dead code (dropped on import).
 		int breakRow = -1;
+		m.patternSpeed[pat][] = -1;
 		for(int row = 0; row < 64; row++) {
 			for(int ch = 0; ch < m.channels; ch++) {
-				ubyte b0 = data[p], b1 = data[p + 1], b2 = data[p + 2];
-				p += 4;   // b3 (effect parameter) discarded
+				ubyte b0 = data[p], b1 = data[p + 1], b2 = data[p + 2], b3 = data[p + 3];
+				p += 4;
 				int effect = b2 & 0x0F;
 				if(breakRow < 0 && (effect == 0x0D || effect == 0x0B))
 					breakRow = row;
+				// Speed (Fxx) is global; capture it from any channel (first wins).
+				if(effect == 0x0F && m.patternSpeed[pat][row] < 0)
+					m.patternSpeed[pat][row] = b3;
 				if(ch >= 3) continue;
 				int sample = (b0 & 0xF0) | (b2 >> 4);
 				int period = ((b0 & 0x0F) << 8) | b1;
 				m.patterns[pat][row][ch] =
-					ModCell(periodToNote(period), sample);
+					ModCell(periodToNote(period), sample, cast(ubyte)effect, b3);
 			}
 		}
 		m.patternLen[pat] = (breakRow >= 0) ? breakRow + 1 : 64;

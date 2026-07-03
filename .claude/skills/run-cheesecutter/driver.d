@@ -173,6 +173,17 @@ private bool processCommand(string arg) {
 			song.save(val);
 			stderr.writefln("saved %s", val);
 			break;
+		case "dumptables":
+			// dumptables — print chord table + command table + speed (import test).
+			stderr.writef("chord: ");
+			foreach(i; 0 .. 12) stderr.writef("%02x ", song.chordTable[i]);
+			stderr.writeln();
+			stderr.writef("cmd:   ");
+			foreach(i; 0 .. 8)
+				stderr.writef("[%x:%02x%02x] ", song.superTable[i] & 15,
+					song.superTable[i + 64], song.superTable[i + 128]);
+			stderr.writefln("\nspeed: %d", song.speed);
+			break;
 		case "palette":
 			// palette:<file> — load a JSON palette at runtime, then force a full
 			// repaint so the new colors take effect on the next shot.

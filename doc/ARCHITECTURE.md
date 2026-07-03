@@ -96,7 +96,7 @@ The dependency graph and module list are generated from the source; the only han
 
 | Module | Synopsis | Depends on |
 | --- | --- | --- |
-| `dialogs` | Modal dialogs — query / confirm / string-entry and the help viewer (QueryDialog family). | `audio.audio`, `audio.render`, `audio.resid.filter`, `com.config`, `com.fb`, `com.session`, `com.util`, `ct.base`, `ct.build`, `main`, `ui.help`, `ui.input`, `ui.ui` |
+| `dialogs` | Modal dialogs — query / confirm / string-entry and the help viewer (QueryDialog family). | `audio.audio`, `audio.render`, `audio.resid.filter`, `com.config`, `com.fb`, `com.session`, `com.util`, `ct.base`, `ct.build`, `ct.modimport`, `main`, `ui.help`, `ui.input`, `ui.ui` |
 | `help` | ContextHelp data type backing the F12 per-context help pages. | `com.util` |
 | `input` | Editor input primitives — Cursor, Keyinfo and the value-changed handler mixin for editable fields. | `audio.player`, `com.fb`, `com.session`, `com.util`, `ct.base`, `seq.sequencer`, `ui.ui` |
 | `keymap` | Registers all editor shortcuts and context bindings into com.shortcuts and applies derived menu labels. | `audio.audio`, `audio.callback`, `audio.player`, `audio.timer`, `com.fb`, `com.session`, `com.shortcuts`, `com.util`, `ct.base`, `ct.build`, `ct.purge`, `main`, `seq.fplay`, `seq.sequencer`, `ui.dialogs`, `ui.help`, `ui.input`, `ui.menubar`, `ui.shorthelp`, `ui.statusbar`, `ui.tables`, `ui.toplevel`, `ui.ui`, `ui.window` |

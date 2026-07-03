@@ -161,10 +161,13 @@ In the load (<kbd>F9</kbd>), save (<kbd>F10</kbd>) and `.prg` export dialogs:
 ## Importing ProTracker modules (.mod)
 
 **File → Import .mod...** (<kbd>Shift</kbd>-<kbd>F9</kbd>) brings in a ProTracker
-`.mod` as a starting point for a SID arrangement. Pick a `.mod` in the file
-dialog; the import replaces the
-current song's sequences and orderlist. It is meant as a rough transcription —
-what carries over, and what does not:
+`.mod` as a starting point for a SID arrangement. A small dialog first lets you
+choose which effect groups to translate (all on by default) — **Arpeggios**,
+**Pitch slides**, **Tone portamento**, **Vibrato** and **Speed &amp; groove**;
+<kbd>Space</kbd> toggles the highlighted row, <kbd>Return</kbd> continues to the
+file picker, <kbd>Esc</kbd> cancels. The import then replaces the current song's
+sequences and orderlist. It is meant as a rough transcription — what carries
+over, and what does not:
 
 - **First three channels only.** MOD channels 1–3 map to voices 1–3; any extra
   channels (4-, 6-, 8-channel modules) are ignored.
@@ -182,11 +185,26 @@ what carries over, and what does not:
 - **Sample names → instrument descriptions**, and the MOD sample *numbers* are
   kept as the instrument numbers, so you can see at a glance which instrument
   each part expects (e.g. sample 1 "bass" → instrument `01`).
-- **Samples and effects are not imported.** Sampled audio cannot become a SID
-  voice, so the instrument *definitions* are left untouched as placeholders — you
-  design the wave/pulse/filter programs for each instrument number yourself.
-  Because of this an imported song will not export to `.prg`/`.sid` until you
-  have set up valid instruments.
+- **Some effects are translated (approximately).** Each maps onto CheeseCutter's
+  own per-row command / chord machinery:
+  - **Arpeggio** (`0xy`) → a chord-table entry (`base, +x, +y`) triggered on the
+    note; identical arps are shared.
+  - **Pitch slides** (`1xx`/`2xx`) and **tone portamento** (`3xx`) → the slide
+    and portamento commands (portamento arrives as a *tied* target note). Slide
+    rates are approximate — the SID works in frequency units, ProTracker in
+    Amiga periods.
+  - **Vibrato** (`4xy`) → the hi-fi vibrato command.
+  - **Speed** (`Fxx`) → the song speed; an alternating-speed "funk" groove is
+    installed as the break-speed table (the tune then runs at song speed `0`).
+
+  Effects fire on the note they accompany. What can't map to the SID is dropped:
+  sampled audio, per-channel **volume** / volume slides / tremolo (the SID has
+  only one global volume), **panning**, sample offset and the Amiga LED filter.
+- **Samples are not imported.** Sampled audio cannot become a SID voice, so the
+  instrument *definitions* are left as placeholders — you design the
+  wave/pulse/filter programs for each instrument number yourself. Because of this
+  an imported song will not export to `.prg`/`.sid` until you have set up valid
+  instruments.
 
 Importing does not touch the file on disk and leaves the song unnamed (with a
 `.ct` name suggested), so a later save never overwrites the source `.mod`. A
