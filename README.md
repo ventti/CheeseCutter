@@ -26,6 +26,11 @@ CheeseCutter 2.9 by abaddon. Current version 0.4.0.
 - Hardware and emulator playback (C64 Ultimate, VICE), switchable at runtime from
   **File → Properties** along with the Ultimate IP/port, `x64sc` path and SDL
   audio driver — persisted to a JSON preferences file in the per-OS config dir.
+- Configurable colors via a JSON palette: redefine the 16 base colors and assign
+  them to semantic UI **roles** (background, cursor, frame, playbackBar, …). Load
+  `palette.json` from the config dir automatically, or point `--palette <file>`
+  at your own; defaults reproduce the classic C64 colors. See
+  [`doc/palette.json`](doc/palette.json).
 - Companion `ct2util` CLI for headless convert / export / merge / dump.
 
 See the [user guide](guide/README.md) for details on every feature.

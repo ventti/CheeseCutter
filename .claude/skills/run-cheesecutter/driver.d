@@ -18,6 +18,7 @@ module main;
 
 import derelict.sdl2.sdl;
 import com.fb, com.session, com.kbd, com.util, ct.base;
+static import com.palette;
 import ui.ui, ui.input, seq.sequencer;
 import audio.player;
 static import audio.callback;
@@ -112,6 +113,7 @@ private void usage(File f) {
 "\n" ~
 "Editor commands:\n" ~
 "  load:<file.ct>   load a song\n" ~
+"  palette:<file>   load a JSON color palette at runtime (repaints)\n" ~
 "  key:<spec>       inject a keypress; spec = [Ctrl-][Alt-][Shift-]NAME\n" ~
 "                   NAME = F1..F12, ESC, RET, SPACE, TAB, UP/DOWN/LEFT/RIGHT,\n" ~
 "                   HOME, END, PGUP, PGDN, INS, DEL, BACKSPACE, SCRLOCK,\n" ~
@@ -160,6 +162,13 @@ private bool processCommand(string arg) {
 		case "load":
 			mainui.loadCallback(val);
 			stderr.writefln("loaded %s", val);
+			break;
+		case "palette":
+			// palette:<file> — load a JSON palette at runtime, then force a full
+			// repaint so the new colors take effect on the next shot.
+			com.palette.initPalette(val);
+			screen.refresh();
+			stderr.writefln("palette %s", val);
 			break;
 		case "key":
 			press(val);

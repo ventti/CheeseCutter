@@ -20,6 +20,7 @@ static import audio.remote;
 static import audio.ultimate;
 static import audio.vice;
 static import com.config;
+static import com.palette;
 import manpage;
 import std.stdio;
 import std.string;
@@ -288,6 +289,7 @@ CliOpt[] cliOptions() {
 		CliOpt("--ultimate-port", "[n]", "REST API port for --ultimate (def=80)"),
 		CliOpt("--vice", "", "Play on a VICE x64sc (launches x64sc from PATH). --vice=host:port attaches to a running -binarymonitor; --vice=/path/x64sc launches that binary"),
 		CliOpt("--vice-port", "[n]", "Binary-monitor port for --vice (def=6502)"),
+		CliOpt("--palette", "[file]", "Load a JSON color palette (default: palette.json in the config dir)"),
 		CliOpt("--verbose", "", "Enable verbose logging"),
 	];
 }
@@ -341,6 +343,7 @@ int main(char[][] args) {
 	bool viceOn = false;
 	string viceTarget;
 	int vicePort = 0; // 0 => transport default (6502)
+	string paletteFile = null; // null => load the per-user default path (if any)
 
 	// Read persisted user preferences (creates the file with defaults if absent).
 	// These seed the backend/driver below; explicit CLI flags still take priority.
@@ -475,6 +478,12 @@ int main(char[][] args) {
 			vicePort = intOption(args, i, "--vice-port");
 			i++;
 			break;
+		case "--palette":
+			if(i + 1 >= args.length)
+				throw new UserException("Option --palette requires a file path.");
+			paletteFile = cast(string)args[i + 1].dup;
+			i++;
+			break;
 		case "--verbose":
 			verbose = true;
 			break;
@@ -541,6 +550,11 @@ int main(char[][] args) {
 	// device is open; setAudioDriver re-opens it with the chosen driver.
 	if(com.config.prefs.audioDriver.length)
 		audio.audio.setAudioDriver(com.config.prefs.audioDriver);
+
+	// Load the color palette (JSON) before any rendering. An explicit --palette
+	// path wins; otherwise the per-user default is used if present; any error
+	// falls back to the built-in C64 defaults.
+	com.palette.initPalette(paletteFile);
 
 	// Initialize video and get the actual sequencer height
 	int actualSeqHeight;
