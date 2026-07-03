@@ -127,45 +127,11 @@ abstract class Video {
     +/
 	}
 
-	void saveScreenshot(string filename) {
-		import std.stdio : writefln;
-		import std.datetime.systime : Clock;
-		import std.format : format;
-		import std.string : toStringz;
-
-		// Generate filename if not provided
-		if(filename == "") {
-			auto now = Clock.currTime();
-			filename = format("screenshot_%04d%02d%02d_%02d%02d%02d.bmp",
-				now.year, now.month, now.day, now.hour, now.minute, now.second);
-		}
-
-		// Create a surface to capture the renderer content
-		SDL_Surface* surface = SDL_CreateRGBSurface(0, width, height, 32,
-			0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
-
-		if(surface is null) {
-			writefln("Error: Could not create surface for screenshot");
-			return;
-		}
-
-		// Read pixels from renderer
-		SDL_RenderReadPixels(renderer, null, SDL_PIXELFORMAT_ARGB8888, surface.pixels, surface.pitch);
-
-		// Save to BMP file using SDL_SaveBMP_RW
-		SDL_RWops* rw = SDL_RWFromFile(filename.toStringz(), "wb");
-		if(rw !is null) {
-			if(SDL_SaveBMP_RW(surface, rw, 1) == 0) {
-				writefln("Screenshot saved: %s", filename);
-			} else {
-				writefln("Error saving screenshot: %s", SDL_GetError());
-			}
-		} else {
-			writefln("Error opening file for screenshot: %s", SDL_GetError());
-		}
-
-		SDL_FreeSurface(surface);
-	}
+	// Capture the current frame to a PNG in the current working directory.
+	// If filename is empty a timestamped name is generated. Implemented by the
+	// concrete subclass, which owns the render helpers needed to redraw the
+	// frame into the backbuffer before the pixel readback.
+	abstract void saveScreenshot(string filename);
 
 	// When set, updateFrame() blits the splash image instead of the text grid.
 	// Toggled by AboutDialog (ui.dialogs). Declared as a trailing field and with
@@ -292,6 +258,13 @@ class VideoStandard : Video {
 	// Not an override: kept off the base Video vtable so stale objects keep
 	// calling updateFrame() at the right slot (no dep tracking in this repo).
 	void drawSplash() {
+		drawSplashBody();
+		SDL_RenderPresent(renderer);
+	}
+
+	// Splash draw without the final present, so saveScreenshot() can read the
+	// backbuffer before it is swapped out.
+	private void drawSplashBody() {
 		// Lazily upload the 320x200 indexed artwork into an ARGB texture, then
 		// blit it centered at SPLASH_SCALE with a black margin.
 		if(splashTexture is null) {
@@ -314,14 +287,22 @@ class VideoStandard : Video {
 		SDL_RenderClear(renderer);
 		SDL_RenderCopy(renderer, splashTexture, null, &dst);
 		if(splashScroll) drawScroller(dst);
-		SDL_RenderPresent(renderer);
 	}
 
 	override void updateFrame() {
+		if(splashActive) { drawSplash(); return; }
+		if (!isDirty) return;
+		isDirty = false;
+		renderGrid();
+		SDL_RenderPresent(renderer);
+	}
+
+	// Draw the text grid into the backbuffer without presenting. Split out of
+	// updateFrame() so saveScreenshot() can render a fresh frame and read it
+	// back before the present (reading after SDL_RenderPresent is undefined).
+	private void renderGrid() {
 		int x, y;
 		int a,b,c;
-
-		if(splashActive) { drawSplash(); return; }
 
 		Uint32* bptr = &screen.data[0];
 		Uint32* cptr = &screen.olddata[0];
@@ -330,9 +311,6 @@ class VideoStandard : Video {
 		Uint8* bp;
 		Uint8 ubg, ufg;
 		int outx, outy;
-
-			if (!isDirty) return;
-		isDirty = false;
 
         SDL_Rect rect;
         rect.x = 0;
@@ -432,9 +410,114 @@ class VideoStandard : Video {
 		}
 			//SDL_UnlockSurface(surface);
 			//SDL_Flip(surface);
-    SDL_RenderPresent(renderer);
 	}
 
+	// Capture the current frame to a PNG in the current working directory.
+	// If filename is empty a timestamped name is generated.
+	override void saveScreenshot(string filename) {
+		import std.stdio : writefln;
+		import std.datetime.systime : Clock;
+		import std.format : format;
+
+		// Generate filename if not provided
+		if(filename == "") {
+			auto now = Clock.currTime();
+			filename = format("screenshot_%04d%02d%02d_%02d%02d%02d.png",
+				now.year, now.month, now.day, now.hour, now.minute, now.second);
+		}
+
+		// Render a fresh frame into the backbuffer so the readback captures the
+		// current screen: SDL_RenderReadPixels is only defined *before* the
+		// present that swaps the buffer out (which the event loop already did).
+		if(splashActive) drawSplashBody();
+		else renderGrid();
+
+		// Grab the freshly drawn backbuffer (ARGB8888) before presenting it.
+		SDL_Surface* surface = SDL_CreateRGBSurface(0, width, height, 32,
+			0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
+		if(surface is null) {
+			writefln("Error: could not create surface for screenshot: %s", SDL_GetError());
+			return;
+		}
+		int rc = SDL_RenderReadPixels(renderer, null, SDL_PIXELFORMAT_ARGB8888,
+									  surface.pixels, surface.pitch);
+
+		// Present so the user still sees this frame (matches the old flow where
+		// updateFrame() would have presented).
+		SDL_RenderPresent(renderer);
+
+		if(rc != 0) {
+			writefln("Error reading pixels for screenshot: %s", SDL_GetError());
+			SDL_FreeSurface(surface);
+			return;
+		}
+
+		// Extract RGB from the ARGB surface (accounting for pitch) and write PNG.
+		auto rgb = new ubyte[width * height * 3];
+		foreach(y; 0 .. height) {
+			auto row = cast(Uint32*)(cast(ubyte*)surface.pixels + y * surface.pitch);
+			foreach(x; 0 .. width) {
+				Uint32 p = row[x];
+				size_t o = (y * width + x) * 3;
+				rgb[o + 0] = cast(ubyte)((p >> 16) & 0xff); // R
+				rgb[o + 1] = cast(ubyte)((p >> 8) & 0xff);  // G
+				rgb[o + 2] = cast(ubyte)(p & 0xff);         // B
+			}
+		}
+		SDL_FreeSurface(surface);
+
+		try {
+			writePng(filename, width, height, rgb);
+			writefln("Screenshot saved: %s", filename);
+		} catch(Exception e) {
+			writefln("Error saving screenshot %s: %s", filename, e.msg);
+		}
+	}
+
+}
+
+// Minimal PNG writer (8-bit truecolor RGB, no interlace). Kept dependency-free
+// on purpose: SDL2_image is not linked, so instead of pulling in IMG_SavePNG we
+// build the chunks by hand and reuse Phobos' zlib (the deflate stream and the
+// per-chunk CRC-32 are exactly what PNG's IDAT/chunk framing require).
+private void writePng(string filename, int w, int h, const(ubyte)[] rgb) {
+	import std.zlib : compress, crc32;
+	import std.bitmanip : nativeToBigEndian;
+	import std.stdio : File;
+
+	// One filter byte (0 = None) per scanline, followed by the RGB triples.
+	auto raw = new ubyte[(w * 3 + 1) * h];
+	foreach(y; 0 .. h) {
+		size_t dst = cast(size_t)y * (w * 3 + 1);
+		raw[dst] = 0;
+		raw[dst + 1 .. dst + 1 + w * 3] = rgb[cast(size_t)y * w * 3 .. cast(size_t)(y + 1) * w * 3];
+	}
+	auto idat = cast(ubyte[])compress(raw, 6);
+
+	auto file = File(filename, "wb");
+	ubyte[8] sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+	file.rawWrite(sig[]);
+
+	void chunk(string type, const(ubyte)[] data) {
+		file.rawWrite(nativeToBigEndian(cast(uint)data.length)[]);
+		file.rawWrite(type);
+		if(data.length) file.rawWrite(data);
+		uint c = crc32(0, cast(const(ubyte)[])type);
+		c = crc32(c, data);
+		file.rawWrite(nativeToBigEndian(c)[]);
+	}
+
+	ubyte[13] ihdr;
+	ihdr[0 .. 4] = nativeToBigEndian(w)[];
+	ihdr[4 .. 8] = nativeToBigEndian(h)[];
+	ihdr[8]  = 8;   // bit depth
+	ihdr[9]  = 2;   // color type: truecolor RGB
+	ihdr[10] = 0;   // compression: deflate
+	ihdr[11] = 0;   // filter method
+	ihdr[12] = 0;   // interlace: none
+	chunk("IHDR", ihdr[]);
+	chunk("IDAT", idat);
+	chunk("IEND", []);
 }
 
 class Screen {

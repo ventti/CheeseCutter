@@ -8,7 +8,7 @@
  *
  * Example:
  *   SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./ccdriver \
- *     load:tunes/vent-arkijuusto.ct key:F2 ff:50 shot:/tmp/play.bmp state
+ *     load:tunes/vent-arkijuusto.ct key:F2 ff:50 shot:/tmp/play.png state
  *
  * This is module `main` (it provides the `main` ModuleInfo the editor modules
  * import) and links against every object except src/main.o — see the
@@ -132,7 +132,7 @@ private void usage(File f) {
 "  frames:<n>       render n UI frames\n" ~
 "  tick:[n]         drive the 50Hz timerEvent n times (default 2) for\n" ~
 "                   timerEvent-only rendering (e.g. SID regs while playing)\n" ~
-"  shot:<file.bmp>  write a screenshot (BMP) of the current screen\n" ~
+"  shot:<file.png>  write a screenshot (PNG) of the current screen\n" ~
 "  sleep:<ms>       sleep this many milliseconds\n" ~
 "  state            print editor state to stderr (title/seqs/playing/SID regs)\n" ~
 "  seqdump:<n>      dump sequence n's rows as hex (read-only edit oracle)\n" ~
@@ -150,7 +150,7 @@ private void usage(File f) {
 "\n" ~
 "Example:\n" ~
 "  SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./ccdriver \\\n" ~
-"    load:tunes/vent-arkijuusto.ct key:F2 ff:50 shot:/tmp/play.bmp state\n");
+"    load:tunes/vent-arkijuusto.ct key:F2 ff:50 shot:/tmp/play.png state\n");
 }
 
 // Run a single command. Returns false for an unrecognized command (caller

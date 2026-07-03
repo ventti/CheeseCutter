@@ -7,7 +7,7 @@ CheeseCutter-Extended is an SDL2 desktop SID-music editor written in D (built
 with `Makefile.mac` via `ldc2` + the embedded ACME assembler). It normally
 opens a window, but it **renders fine headless**: under `SDL_VIDEODRIVER=dummy`
 SDL still software-renders to a readable framebuffer, so the editor's own
-`saveScreenshot` produces a real BMP. The agent path is **`./ccdriver`** — a
+`saveScreenshot` produces a real PNG. The agent path is **`./ccdriver`** — a
 small D harness (`.claude/skills/run-cheesecutter/driver.d`) that builds the
 real editor UI, loads a song, injects keypresses, advances playback, and writes
 screenshots. Non-visual checks use the editor's own `--dump-*` flags and
@@ -22,7 +22,8 @@ All paths below are relative to the repo root (the unit). Verified on macOS
 brew install ldc acme sdl2 imagemagick
 ```
 (verified present: ldc 1.41, acme 0.97, sdl2 2.32.10, imagemagick 7.1.1.
-`imagemagick` is only needed to convert the BMP screenshots to PNG.)
+Screenshots are written directly as PNG, so `imagemagick` is optional — handy
+only for inspecting images, e.g. `magick identify`.)
 
 ## Build
 
@@ -49,7 +50,7 @@ drivers:
 
 ```sh
 SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./ccdriver \
-  load:tunes/vent-arkijuusto.ct key:F2 ff:30 shot:/tmp/cc.bmp state
+  load:tunes/vent-arkijuusto.ct key:F2 ff:30 shot:/tmp/cc.png state
 ```
 Run `./ccdriver -h` for the full, authoritative command list. Commands (in
 order, repeatable):
@@ -72,7 +73,7 @@ order, repeatable):
 - `tick:[n]` — drive the 50Hz `timerEvent` n times (default 2), producing
   `timerEvent`-only rendering (e.g. the SID register readout shown while playing)
   for the next `shot`
-- `shot:<file.bmp>` — write a screenshot (BMP)
+- `shot:<file.png>` — write a screenshot (PNG)
 - `state` — print title/author/seqs/playing/octave/speed/mult + the first SID
   registers to stderr
 - Remote-backend (`--vice`/`--ultimate`) testing: `vice:[target]` (empty=launch
@@ -90,15 +91,11 @@ the session. Drive it from a background process / FIFO:
 
 ```sh
 SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./ccdriver load:tunes/abaddon-starfish.ct serve
-# then on stdin: key:DOWN ⏎  shot:/tmp/a.bmp ⏎  state ⏎  quit ⏎
+# then on stdin: key:DOWN ⏎  shot:/tmp/a.png ⏎  state ⏎  quit ⏎
 ```
 
-The screenshot is a BMP; convert and view it:
-
-```sh
-magick /tmp/cc.bmp /tmp/cc.png
-```
-The run above prints e.g. `state: title='arkijuusto (toinen siivu)' ... playing=true ... SID $d400..: 4c 68 00 00 80 13 ...` (non-zero SID = the player advanced), and `/tmp/cc.png` shows the editor with the tune loaded and `Time: 00:04` in the status bar.
+The screenshot is a PNG — view it directly (or inspect with `magick identify
+/tmp/cc.png`). The run above prints e.g. `state: title='arkijuusto (toinen siivu)' ... playing=true ... SID $d400..: 4c 68 00 00 80 13 ...` (non-zero SID = the player advanced), and `/tmp/cc.png` shows the editor with the tune loaded and `Time: 00:04` in the status bar.
 
 ## Non-visual checks (no driver needed)
 
@@ -142,10 +139,12 @@ any automated/headless work.
 
 - **Headless screenshots actually work.** `SDL_VIDEODRIVER=dummy` software-
   renders to a real framebuffer, so `saveScreenshot` (and thus `shot:`) writes
-  a genuine 1280×700 BMP — not a blank. This is the whole reason `ccdriver`
+  a genuine 1280×700 PNG — not a blank. This is the whole reason `ccdriver`
   exists.
-- **Screenshots are BMP, not PNG.** `saveScreenshot` uses `SDL_SaveBMP`. Convert
-  with `magick` (macOS `sips` fails on this 32-bit BMP variant).
+- **Screenshots are PNG.** `saveScreenshot` re-renders the frame into the
+  backbuffer, reads it back with `SDL_RenderReadPixels` *before* the present,
+  and writes a PNG itself (a small pure-D encoder over Phobos' `std.zlib` — no
+  SDL2_image dependency). The `shot:` path honours whatever extension you give.
 - **Playback needs `ff:`, not wall-clock.** With dummy audio the SDL audio
   callback never fires, so the song won't advance on its own. `ff:N` calls the
   player synchronously — that's how you get the player to write SID registers /
