@@ -338,6 +338,10 @@ int main(string[] args) {
 	screen = new Screen(160, 50);
 	video = new VideoStandard(160 * FONT_X, 50 * FONT_Y, screen, 0);
 	seq.sequencer.initialHeight = 40;
+	// `wide` (anywhere in argv) selects the wide UI layout (com.fb.mode>0, the
+	// app's autoscale default) — must be set before the UI/layout is built.
+	foreach(arg; args[1 .. $])
+		if(arg == "wide") com.fb.mode = 1;
 	initSession();
 	mainui = new UI();
 	mainui.update();
@@ -348,6 +352,8 @@ int main(string[] args) {
 	bool serve = false;
 	foreach(arg; args[1 .. $]) {
 		if(arg == "serve" || arg == "-") { serve = true; continue; }
+		if(arg == "wide") continue;   // handled before UI construction
+
 		if(!processCommand(arg)) return 2;   // batch: unknown command fails the run
 	}
 

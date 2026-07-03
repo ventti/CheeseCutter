@@ -116,6 +116,16 @@ final package class Toplevel : WindowSwitcher, Undoable {
 			bottomHotkeys = "wpfmdr";
 		}
 		else {
+			// In wide mode the bottom tables (incl. chord) all sit below the
+			// instrument table, so the top-right is free: give the description
+			// column the full remaining width (capped at the 32-char label)
+			// instead of a fixed 12 chars. In compact mode the chord table is
+			// placed at the top-right, so leave insWidth at its default there.
+			if(com.fb.mode > 0) {
+				int insAvail = screen.width - zone2x - com.fb.border;
+				insWidth = insAvail < preferredInsWidth ? insAvail : preferredInsWidth;
+				if(insWidth < 3 + 8 * 3 + 12) insWidth = 3 + 8 * 3 + 12;
+			}
 			sequencer = new Sequencer(Rectangle(zone1x, zone1y, screen.height - 10,
 												zone2x - zone1x));
 			fplay = new Fplay(Rectangle(zone1x, zone1y, screen.height - 10,
