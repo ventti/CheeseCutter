@@ -496,7 +496,8 @@ final class UI {
 		case ExportFormat.FullPrg:
 		case ExportFormat.OptimizedPrg: ext = ".prg"; break;
 		}
-		exportsavedialog.setDirectory(getcwd());
+		// The export browser keeps its own last directory (separate from the .ct
+		// load/save dialogs); only the proposed filename is refreshed here.
 		exportsavedialog.setFilename(proposeExportName(ext));
 		activateDialog(exportsavedialog);
 	}
@@ -629,7 +630,9 @@ final class UI {
 			statusline.display("Error: " ~ e.msg);
 			return;
 		}
-		finishLoad(pendingModFile, true, "ProTracker module imported.");
+		// Don't sync the .ct dialogs to the .mod's directory — the .mod browser
+		// keeps its own last directory, separate from the .ct load/save dialogs.
+		finishLoad(pendingModFile, true, "ProTracker module imported.", false);
 
 		import std.path : baseName, stripExtension;
 		state.filename = "";
@@ -641,8 +644,11 @@ final class UI {
 	// Shared tail of a load/import: refresh every view and dialog, resync the
 	// audio backend and player variables, reset undo history and force a
 	// filter-track recompute. `doneMsg` (if non-empty) is shown on the status
-	// line; `modified` seeds the song-modified flag.
-	private void finishLoad(string s, bool modified, string doneMsg) {
+	// line; `modified` seeds the song-modified flag. `syncFileDialogs` points the
+	// .ct load/save/export dialogs at the loaded file (name + dir); a .mod import
+	// leaves them alone so the .mod and .ct browsers keep separate directories.
+	private void finishLoad(string s, bool modified, string doneMsg,
+							bool syncFileDialogs = true) {
 		// A new song image means the resident remote-backend copy is stale.
 		if(audio.remote.isActive())
 			audio.remote.markReload();
@@ -657,13 +663,15 @@ final class UI {
 		state.filename = fn;
 		infobar.refresh();
 
-		// sync save filesel to load filesel in case dir was changed
-		// (exportsavedialog too, so the export is offered in the loaded .ct's dir)
-		foreach(d; [loaddialog, savedialog, exportsavedialog]) {
-			d.setFilename(fn);
-			d.setDirectory(getcwd());
+		// Point the shared .ct load/save browsers at the loaded file. Import and
+		// export keep their own last directories, so they are left out here.
+		if(syncFileDialogs) {
+			foreach(d; [loaddialog, savedialog]) {
+				d.setFilename(fn);
+				d.setDirectory(getcwd());
+			}
+			savedialog.fsel.fpos = loaddialog.fsel.fpos;
 		}
-		savedialog.fsel.fpos = loaddialog.fsel.fpos;
 
 		// set variables
 		audio.player.setSidModel(song.sidModel);
