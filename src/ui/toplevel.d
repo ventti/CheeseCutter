@@ -412,10 +412,20 @@ final package class Toplevel : WindowSwitcher, Undoable {
 	// row. Reachable from the instrument table and player tables (the G key) and
 	// the Navigate menu.
 	void gotoInstrumentWave() {
+		gotoInstrumentTable(7);
+	}
+
+	// Bring the sub-table an instrument-pointer column points into to the front
+	// (7 = wave, 5 = pulse, 4 = filter) with the cursor on the pointed row /
+	// program. The tables are already seeked to the active instrument's pointers
+	// by activateInstrument(); this focuses the right one. Used by the wave-jump
+	// command and by double-clicking a pointer byte in the instrument table.
+	void gotoInstrumentTable(int ptrColumn) {
 		activateWindow(2);
 		// Alt modifier so the bottom tab-switcher treats this as a tab hotkey.
-		activeWindow.keypress(Keyinfo(SDLK_w, KMOD_ALT, 0));
-		wavetable.seekCurWave();
+		int tabKey = ptrColumn == 5 ? SDLK_p : (ptrColumn == 4 ? SDLK_f : SDLK_w);
+		activeWindow.keypress(Keyinfo(tabKey, KMOD_ALT, 0));
+		if(ptrColumn == 7) wavetable.seekCurWave();
 	}
 
 	void activateInfobar() {

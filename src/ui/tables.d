@@ -600,10 +600,24 @@ class InsValueTable : HexTable {
 		int rx = x - area.x;
 		int ry = y - area.y;
 		super.clickedAt(x, y, button, clicks);
+		if(ry < 1 || ry > visibleRows) return;
 		// Clicking the instrument-number column ("NN:") selects that instrument
 		// as the active one, mirroring keyboard navigation (stepRow).
-		if(rx >= 0 && rx < 3 && ry >= 1 && ry <= visibleRows)
+		if(rx >= 0 && rx < 3) {
 			UI.activateInstrument(row);
+			return;
+		}
+		// Double-clicking a table-pointer byte (H=wave, F=pulse, E=filter, i.e.
+		// instrument bytes 7/5/4) jumps to that row/program in the corresponding
+		// wave / pulse / filter table.
+		if(clicks >= 2 && rx >= 3) {
+			int col = (rx - 3) / 3;                      // instrument byte 0..7
+			if(col == 7 || col == 5 || col == 4) {
+				UI.activateInstrument(row);              // select + seek the tables
+				if(UI.toplevel !is null)
+					UI.toplevel.gotoInstrumentTable(col);
+			}
+		}
 	}
 
 	override void showByteDescription() {

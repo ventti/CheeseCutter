@@ -556,7 +556,9 @@ Instrument bytes:
 | H | Wave table pointer |
 
 Click an instrument's number (the `NN:` column on the left) to make it the
-active instrument.
+active instrument. **Double-click** a table-pointer byte — **H** (wave), **F**
+(pulse) or **E** (filter) — to jump straight to that row/program in the
+corresponding wave / pulse / filter table.
 
 ### Instrument color tags
 
