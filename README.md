@@ -10,7 +10,7 @@ CheeseCutter 2.9 by Abaddon.
 - reSID / reSID-fp playback, 6581 and 8580 SID models, PAL and NTSC timing.
 - Tracker sequencer with rectangular block selection across voices — copy, cut,
   paste, merge and "paste as new track(s)" in both the note (F6) and track (F5)
-  columns.
+  columns. Start playback with a block selected and it loops that block's rows only.
 - Dropdown menu bar (`Esc`) and a type-to-search command palette; every command
   is reachable from the menus, all driven by a single shortcut registry (which
   also generates `F12` help and `doc/KEYBOARD.md`).

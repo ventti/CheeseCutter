@@ -250,6 +250,12 @@ module with more unique patterns than fit CheeseCutter's 128 sequence slots
 | <kbd>Ctrl</kbd>-<kbd>F8</kbd> | Next filter preset |
 | <kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>F8</kbd> | Previous filter preset |
 
+**Loop over a selection.** If a block is selected in the sequencer when you
+start playback (<kbd>F1</kbd>, <kbd>F2</kbd> or <kbd>F3</kbd>), playback plays and
+loops that block's rows only — it starts at the block's top row and jumps back
+there each time it passes the bottom. Clear the selection (<kbd>Ctrl</kbd>-<kbd>D</kbd>)
+to go back to normal playback.
+
 ## Exporting and rendering a song
 
 There are two dialogs: **Export song** (<kbd>Shift</kbd>-<kbd>F10</kbd>) for the

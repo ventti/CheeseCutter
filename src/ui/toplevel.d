@@ -453,6 +453,33 @@ final package class Toplevel : WindowSwitcher, Undoable {
 		fplay.startFromCursor();
 	}
 
+	// If a block is selected, play just that block and loop over it: start at the
+	// block's top row and jump back there whenever the play head passes the
+	// bottom. Returns true if it engaged (a selection was active); false lets the
+	// caller fall through to normal playback. `follow` mirrors the Shift-modifier
+	// (turn on view tracking).
+	bool playSelectionLoop(bool follow) {
+		if(!sequencer.hasSelection()) {
+			fplay.clearLoop();
+			return false;
+		}
+		Voice[] v = sequencer.getVoices();
+		if(v.length < 3) { fplay.clearLoop(); return false; }
+		int lo, len;
+		sequencer.selectionRegion(lo, len);
+		int[3] trk, seq;
+		foreach(i; 0 .. 3) {
+			RowData rd = v[i].getRowData(0, lo);
+			trk[i] = rd.trkOffset;
+			seq[i] = rd.seqOffset;
+		}
+		audio.player.stop();
+		audio.player.start(trk.dup, seq.dup);
+		if(follow) startFp();
+		fplay.setLoop(trk, seq, lo, len);
+		return true;
+	}
+
 	void reset() {
 		sequencer.reset();
 		sequencer.resetMark();

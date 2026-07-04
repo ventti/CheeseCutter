@@ -174,8 +174,10 @@ final class UI {
 	// running, don't restart it — just turn tracking on from the current
 	// position (continues uninterrupted). A no-op if already tracking.
 	package void playFromCursorFollow() {
-		if(!audio.player.isPlaying)
+		if(!audio.player.isPlaying) {
+			if(toplevel.playSelectionLoop(true)) return;
 			toplevel.playFromCursor();
+		}
 		if(!toplevel.fplayEnabled()) {
 			stop(false);
 			toplevel.startFp();
@@ -307,6 +309,9 @@ final class UI {
 			}
 			// song is playing but plain F1 pressed; restart
 		}
+		// A selected block overrides mark/start: play and loop over it.
+		if(toplevel.playSelectionLoop((key.mods & KMOD_SHIFT) != 0))
+			return;
 		int m1, m2, m3;
 		m1 = seqPos.pos[0].mark;
 		m2 = seqPos.pos[1].mark;

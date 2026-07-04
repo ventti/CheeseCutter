@@ -161,7 +161,7 @@ void registerShortcuts(UI ui) {
 
 	// Playback Controls
 	sm.register("play_from_mark", Ctx.global, "Playback",
-				"Play from playback mark", SDLK_F1, 0, {
+				"Play from playback mark (loops the selected block if one is active)", SDLK_F1, 0, {
 		F1orF2(Keyinfo(0, 0, 0), false);
 	});
 
@@ -171,7 +171,7 @@ void registerShortcuts(UI ui) {
 	});
 
 	sm.register("play_from_beginning", Ctx.global, "Playback",
-				"Play from the start", SDLK_F2, 0, {
+				"Play from the start (loops the selected block if one is active)", SDLK_F2, 0, {
 		F1orF2(Keyinfo(0, 0, 0), true);
 	});
 
@@ -181,8 +181,9 @@ void registerShortcuts(UI ui) {
 	});
 
 	sm.register("play_from_cursor", Ctx.global, "Playback",
-				"Play from cursor position", SDLK_F3, 0, {
-		toplevel.playFromCursor();
+				"Play from cursor position (loops the selected block if one is active)", SDLK_F3, 0, {
+		if(!toplevel.playSelectionLoop(false))
+			toplevel.playFromCursor();
 	});
 
 	sm.register("play_from_cursor_follow", Ctx.global, "Playback",

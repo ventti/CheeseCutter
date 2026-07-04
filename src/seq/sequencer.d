@@ -1180,6 +1180,18 @@ final class Sequencer : Window, Undoable {
 		return activeView.voices;
 	}
 
+	/// True when the active view has a block selection that playback can loop.
+	bool hasSelection() {
+		return activeView.selectionEnabled() && activeView.sel.active;
+	}
+
+	/// Report the selected block as a row range: `lo` = top absolute row,
+	/// `len` = number of rows (>= 1). Only meaningful when hasSelection().
+	void selectionRegion(out int lo, out int len) {
+		lo = activeView.sel.loRow;
+		len = activeView.sel.rows;
+	}
+
 	// Render visualization colors after all other updates
 	void renderVisualization() {
 		if(cast(SequenceTable)activeView) {

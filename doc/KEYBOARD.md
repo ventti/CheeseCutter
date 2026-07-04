@@ -61,9 +61,9 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Shift-F3` | Play / resume from cursor with tracking |
 | `Shift-F1` | Play / resume from mark with tracking |
 | `Shift-F2` | Play / resume from the start with tracking |
-| `F3` | Play from cursor position |
-| `F1` | Play from playback mark |
-| `F2` | Play from the start |
+| `F3` | Play from cursor position (loops the selected block if one is active) |
+| `F1` | Play from playback mark (loops the selected block if one is active) |
+| `F2` | Play from the start (loops the selected block if one is active) |
 | `Ctrl-F5` / `ScrollLock` | Start/stop tracking (works only when playing) |
 | `F4` | Stop playback |
 
