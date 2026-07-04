@@ -10,3 +10,16 @@ src/c64/player.bin
 _backup.ct
 *.app
 *.dmg
+*.wav
+*.flac
+
+# Local scratch / machine-specific, never part of the repo
+.DS_Store
+.cda/
+run_debug.sh
+teppo/
+.claude/agent-memory-local/
+# Screenshots dumped by the editor (Ctrl-F12) / driver
+screenshot_*.png
+screenshot_*.bmp
+tunes/screenshot_*.bmp
