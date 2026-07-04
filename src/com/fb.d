@@ -1,7 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
 
-Text-mode framebuffer — Video/Screen abstraction, character-cell rendering and the Visualizer interface.
+Text-mode framebuffer — Video/Screen abstraction, character-cell rendering and the pixel-sharp oscilloscope trace overlay.
 */
 
 module com.fb;
@@ -80,7 +80,6 @@ abstract class Video {
     SDL_Texture* texture;
 		bool useFullscreen;
 		Screen screen;
-		Visualizer vis;
 		const int requestedWidth, requestedHeight;
 		int height, width; // resolution of window
 		//int displayHeight, displayWidth; // resolution of the monitor
@@ -102,9 +101,15 @@ abstract class Video {
       SDL_DestroyWindow(window);
 	}
 
-	abstract void drawVisualizer(int);
-
-	abstract void clearVisualizer();
+	// Overlay a pixel-resolution waveform trace on top of the composited text
+	// grid (used by the oscilloscope). `ys` holds one screen-pixel y per
+	// horizontal pixel, starting at x `x0`; consecutive points are joined so a
+	// steep slope stays continuous. `col`/`edgeCol` are palette indices — the
+	// first/last `edgeMargin` columns use `edgeCol` (a dim fade at the window
+	// edges). Re-set every frame while the scope is open; clearScopeTrace()
+	// removes it. Base no-ops; only the SDL renderer subclass draws.
+	void setScopeTrace(int x0, int[] ys, int col, int edgeCol, int edgeMargin) {}
+	void clearScopeTrace() {}
 
 	abstract protected void enableFullscreen(bool fs);
 
@@ -179,10 +184,34 @@ class VideoStandard : Video {
 		screen.refresh();
 	}
 
-	override void drawVisualizer(int n) {
+	// --- Pixel-resolution oscilloscope trace overlay ---
+	// Set by the scope window each frame; drawn at the tail of renderGrid() so
+	// both updateFrame() and saveScreenshot() composite it identically, on top
+	// of the text grid. scopeActive also forces updateFrame() to re-render even
+	// when the text grid itself hasn't changed (the trace moves every frame).
+	private bool scopeActive;
+	private int scopeX0, scopeCol, scopeEdgeCol, scopeEdgeMargin;
+	private int[] scopeYs;
+
+	override void setScopeTrace(int x0, int[] ys, int col, int edgeCol, int edgeMargin) {
+		scopeX0 = x0; scopeCol = col; scopeEdgeCol = edgeCol; scopeEdgeMargin = edgeMargin;
+		// Copy into our own buffer: the caller reuses its array next frame.
+		scopeYs.length = ys.length;
+		scopeYs[] = ys[];
+		scopeActive = true;
 	}
 
-	override void clearVisualizer() {
+	override void clearScopeTrace() { scopeActive = false; }
+
+	private void drawScopeTrace() {
+		if(!scopeActive || scopeYs.length < 2) return;
+		immutable int n = cast(int)scopeYs.length;
+		foreach(i; 1 .. n) {
+			int ci = (i < scopeEdgeMargin || i >= n - scopeEdgeMargin)
+				? scopeEdgeCol : scopeCol;
+			SDL_SetRenderDrawColor(renderer, PALETTE[ci].r, PALETTE[ci].g, PALETTE[ci].b, 255);
+			SDL_RenderDrawLine(renderer, scopeX0 + i - 1, scopeYs[i-1], scopeX0 + i, scopeYs[i]);
+		}
 	}
 
 	private SDL_Texture* splashTexture;
@@ -291,7 +320,9 @@ class VideoStandard : Video {
 
 	override void updateFrame() {
 		if(splashActive) { drawSplash(); return; }
-		if (!isDirty) return;
+		// The oscilloscope trace moves every frame, so re-render while it is
+		// active even when the text grid itself is unchanged.
+		if (!isDirty && !scopeActive) return;
 		isDirty = false;
 		renderGrid();
 		SDL_RenderPresent(renderer);
@@ -345,10 +376,6 @@ class VideoStandard : Video {
 					bp = &font[a * 16];
 					ufg = (*bptr >> 8) & 0xff;  // 8 bits for fg
 					ubg = (*bptr >> 16) & 0xff; // 8 bits for bg
-                    /+
-                     auto fgcolor = getColor(surface, ufg),
-                     bgcolor = getColor(surface, ubg);
-                     +/
                     rect.x = x * 8;
                     rect.y = y * FONT_Y;
                     rect.h = FONT_Y;
@@ -410,6 +437,8 @@ class VideoStandard : Video {
 		}
 			//SDL_UnlockSurface(surface);
 			//SDL_Flip(surface);
+		// Composite the pixel-sharp oscilloscope trace over the finished grid.
+		drawScopeTrace();
 	}
 
 	// Capture the current frame to a PNG in the current working directory.
@@ -642,71 +671,6 @@ class Screen {
 }
 }
 
-interface Visualizer {
-	void clear();
-	void draw(int);
-}
-
-private class Oscilloscope : Visualizer {
-	private SDL_Surface* surface;
-	private short* samples;
-	private const short xconst, yconst;
-	enum width = 960/4, height = 3*FONT_Y;
-
-	this(SDL_Surface* surface, short xpos, short ypos) {
-		this.surface = surface;
-		this.xconst = xpos;
-		this.yconst = ypos;
-		import audio.audio;
-		samples = audio.audio.mixbuf;
-		assert(samples !is null);
-	}
-
-	void clear() {
-		SDL_FillRect(surface, new SDL_Rect(xconst, yconst,
-                                           width, height), 0);
-	}
-
-	void draw(int frames) {
-		float smpofs;
-		float n = frames * 50.0f;
-		int count = cast(int)(48000 / n);
-
-		auto colh = getColor(surface, 13),
-			coll = getColor(surface, 5);
-
-		clear();
-
-		smpofs = 0.0f;
-		import audio.audio;
-		int oldposition = height / 2 + samples[cast(int)smpofs]  / 768;
-
-		for(int i = 0; i < width; i++) {
-			int sample = samples[cast(int)smpofs] / 768;
-			int position = height / 2 + sample;
-			position = com.util.umod(position, 0, height-1);
-			int a = oldposition, b = position;
-
-			if(a > b) {
-				int temp = b;
-				b = a;
-				a = temp;
-			}
-			assert(a <= b);
-			Uint32* pos = cast(Uint32 *)surface.pixels + xconst + i + (a + yconst) * surface.w;
-			*pos = (i > 12 && i < width - 12) ? colh : coll;
-			for(int k = a; k < b; k++) {
-				*pos = (i > 12 && i < width - 12) ? colh : coll;
-				pos += surface.w;
-			}
-			smpofs++;
-			if(smpofs >= audio.audio.getbufsize())
-				smpofs -= cast(int)audio.audio.getbufsize();
-			oldposition = position;
-		}
-	}
-}
-
 class DisplayError : Error {
 	this(string msg) {
 		super("SDL Error: " ~ msg);
@@ -739,10 +703,4 @@ Uint16 readkey() {
 		SDL_Delay(50);
 	}
 	return cast(Uint16)evt.key.keysym.unicode;
-}
-
-private int getColor(SDL_Surface* s, int c) {
-	return PALETTE[c].b << s.format.Bshift |
-		(PALETTE[c].g << s.format.Gshift) |
-		(PALETTE[c].r << s.format.Rshift);
 }

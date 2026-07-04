@@ -35,3 +35,4 @@ where things live, the ADRs say why they're shaped that way.
 | [0005](0005-remote-playback-backends.md) | Remote playback via a shared transport core |
 | [0006](0006-instrument-color-tags.md) | Instrument color tags live in the description text |
 | [0007](0007-about-splash-scroller.md) | About-splash scroller renders directly over the SDL renderer |
+| [0008](0008-oscilloscope-overlay-non-modal.md) | Oscilloscope overlay is a non-modal, text-cell window over the combined mix |

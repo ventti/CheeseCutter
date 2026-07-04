@@ -35,6 +35,7 @@ import com.shortcuts;
 import ui.shorthelp;
 import ui.menubar;
 import ui.palette;
+import ui.oscilloscope;
 import seq.sequencer;
 import audio.audio;
 import std.string;
@@ -49,7 +50,7 @@ package enum UPDATE_RATE = 2; // 50 / n times per second
 
 package int tickcounter1;
 
-enum VisMode { None, Regs, Oscilloscope }
+enum VisMode { None, Regs }
 
 final class UI {
 	private {
@@ -85,6 +86,13 @@ final class UI {
 	// trailing instance field so earlier field offsets stay binary-compatible
 	// with objects compiled before this change (no dep tracking in this repo).
 	uint splashDeadlineMs;
+
+	// Non-modal oscilloscope overlay: drawn on top of the editor each frame
+	// while scopeVisible, without stealing keys (so keyjam/playback keep working).
+	// Trailing fields + no new virtual method, matching the vtable/offset caution
+	// noted above (this repo has no build-time dependency tracking).
+	package OscilloscopeWindow scopeWindow;
+	package bool scopeVisible;
 
 	this() {
 		sm = new ShortcutManager();
@@ -124,6 +132,14 @@ final class UI {
 		aboutdialog = new AboutDialog(Rectangle(aboutdlg_x, aboutdlg_y,
 												aboutdlg_height,
 												aboutdlg_width));
+
+		int scope_width = screen.width - 12;
+		if(scope_width > 100) scope_width = 100;
+		int scope_height = 22;
+		int scope_x = screen.width / 2 - scope_width / 2;
+		int scope_y = screen.height / 2 - scope_height / 2;
+		scopeWindow = new OscilloscopeWindow(Rectangle(scope_x, scope_y,
+													   scope_height, scope_width));
 
 		audio.player.setMultiplier(song.multiplier);
 
@@ -276,9 +292,10 @@ final class UI {
 				}
 			}
 		}
-		if(vismode == VisMode.Oscilloscope &&
-		   (audio.player.isPlaying || audio.player.keyjamEnabled))
-			video.drawVisualizer(n);
+
+		// Draw the oscilloscope overlay last, so it sits on top of everything
+		// repainted this tick. Redrawn every frame -> it animates live.
+		drawScope();
 	}
 
 	void update() {
@@ -287,6 +304,25 @@ final class UI {
 		drawMenu();
 		if(dialog)
 			dialog.update();
+		drawScope();
+	}
+
+	// Non-modal oscilloscope overlay. Suppressed while a modal dialog is open
+	// (dialogs stay visually authoritative). Not gated on isPlaying: when idle it
+	// draws a flat line so the overlay clearly reads as "on".
+	private void drawScope() {
+		if(!scopeVisible || dialog !is null || scopeWindow is null) {
+			video.clearScopeTrace();   // drop any pixel trace overlay
+			return;
+		}
+		scopeWindow.update();
+	}
+
+	// Flip the overlay on/off. On hide, repaint the editor to erase it.
+	package void toggleScope() {
+		scopeVisible = !scopeVisible;
+		if(scopeVisible) drawScope();
+		else refresh();
 	}
 
 	// Draws the top-bar menu (row 0) and, when focused, its dropdown. Called

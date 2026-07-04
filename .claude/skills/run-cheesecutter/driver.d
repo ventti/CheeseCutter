@@ -21,6 +21,7 @@ import com.fb, com.session, com.kbd, com.util, ct.base;
 static import com.palette;
 import ui.ui, ui.input, seq.sequencer;
 import audio.player;
+static import audio.audio;
 static import audio.callback;
 static import audio.vice;
 static import audio.remote;
@@ -129,6 +130,8 @@ private void usage(File f) {
 "  play             start playback (player.start)\n" ~
 "  mult:<n>         set the multispeed multiplier (1..16)\n" ~
 "  ff:<n>           advance playback n*16 frames (synchronous; no audio device)\n" ~
+"  scopefill:[n]    fill the reSID mix buffer via the real audio callback (n reps,\n" ~
+"                   default 4) so the oscilloscope overlay shows a waveform headless\n" ~
 "  frames:<n>       render n UI frames\n" ~
 "  tick:[n]         drive the 50Hz timerEvent n times (default 2) for\n" ~
 "                   timerEvent-only rendering (e.g. SID regs while playing)\n" ~
@@ -272,6 +275,20 @@ private bool processCommand(string arg) {
 		}
 		case "ff":
 			audio.player.fastForward(to!int(val));   // val*16 frames
+			break;
+		case "scopefill":
+			// Fill the reSID mix buffer (audio.audio.mixbuf) by driving the REAL
+			// audio callback path — sid_fillbuffer + audio_frame, exactly as the
+			// SDL audio thread does live. Under dummy audio that thread never
+			// fires, so the oscilloscope overlay would otherwise flatline in
+			// headless shots. Requires playback/keyjam active. n reps (default 4).
+			int reps = val.length ? to!int(val) : 4;
+			int lenBytes = audio.audio.getbufsize() * cast(int)short.sizeof;
+			auto stream = new ubyte[lenBytes];
+			foreach(i; 0 .. reps)
+				audio.audio.audio_callback_2(null, stream.ptr, lenBytes);
+			stderr.writefln("scopefill x%d (len=%d, playing=%s)",
+							reps, lenBytes, audio.player.isPlaying());
 			break;
 		case "frames":
 			foreach(i; 0 .. to!int(val)) { mainui.update(); video.updateFrame(); }

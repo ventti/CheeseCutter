@@ -138,6 +138,7 @@ bar it flips the highlighted on/off item), but it works fine inside a query
 | <kbd>F12</kbd> | Context help |
 | <kbd>F12</kbd> again in context help | Global help |
 | <kbd>Ctrl</kbd>-<kbd>F12</kbd> | Screenshot |
+| <kbd>Shift</kbd>-<kbd>F12</kbd> | Toggle the oscilloscope overlay (see [Oscilloscope](#oscilloscope)) |
 | <kbd>Alt</kbd>-<kbd>H</kbd> | Toggle table byte help |
 | <kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>F</kbd> | Toggle the filter track column (see [Filter Track](#filter-track)) |
 | <kbd>Alt</kbd>-<kbd>F4</kbd> | Quit (asks for confirmation) |
@@ -447,7 +448,9 @@ directory as `palette.json` and tweak.
 
 ## Sequencer
 
-Use <kbd>F5</kbd>, <kbd>F6</kbd>, and <kbd>F7</kbd> to switch sequencer views:
+Use <kbd>F5</kbd>, <kbd>F6</kbd>, and <kbd>F7</kbd> to switch sequencer views.
+These also work from any other window — they focus the Sequencer first — and are
+listed in the **Navigate** menu and the command palette:
 
 | Shortcut | Action |
 | --- | --- |
@@ -469,7 +472,7 @@ Use <kbd>F5</kbd>, <kbd>F6</kbd>, and <kbd>F7</kbd> to switch sequencer views:
 | <kbd>Ctrl</kbd>-<kbd>0</kbd> | Reset highlighting to current row |
 | <kbd>Ctrl</kbd>-<kbd>E</kbd> | Toggle row counters |
 | <kbd>Ctrl</kbd>-<kbd>T</kbd> | Toggle relative notes |
-| <kbd>Ctrl</kbd>-<kbd>Space</kbd> | Toggle keyjam |
+| <kbd>Ctrl</kbd>-<kbd>Space</kbd> or <kbd>Ctrl</kbd>-<kbd>K</kbd> | Toggle keyjam (use <kbd>Ctrl</kbd>-<kbd>K</kbd> on macOS, which claims Ctrl-Space) |
 
 ### Block Selection (copy / cut / paste / merge)
 
@@ -666,6 +669,31 @@ Command table byte A selects the command, bytes B/C are parameters:
 Chord values `00-3F` transpose up, `40-7F` transpose down, and `80-FF` wrap.
 The first chord set is used as the swing tempo program when song speed is 0 or
 1.
+
+## Oscilloscope
+
+Press <kbd>Shift</kbd>-<kbd>F12</kbd> (or **View → Oscilloscope**) to toggle a
+framed overlay that draws the **combined** synthesized audio waveform — the mono
+mix of all three SID voices, exactly the signal reSID sends to the sound card. It
+updates live while a song plays and while you keyjam. The trace is drawn
+**pixel-sharp** (a screen-resolution polyline), not quantized to text cells.
+
+Unlike the Load/Save/Export dialogs, the oscilloscope is **non-modal**: it floats
+over the editor without stealing the keyboard, so playback controls and keyjam
+keep working with it open. Press <kbd>Shift</kbd>-<kbd>F12</kbd> again to hide it.
+
+Notes and quirks:
+
+- During song playback it animates live. During **keyjam** it instead
+  *captures and holds* the struck note's waveform: it freezes the trace and keeps
+  it shown until you play another note (which re-captures) or close the scope — so
+  you can study a single note's shape at rest.
+- It shows the waveform whenever audio is playing or keyjamming; when nothing is
+  sounding only the (grey) zero axis is drawn.
+- Under the `--vice` / `--ultimate` remote backends the sound is produced on the
+  (emulated or real) C64, but the local reSID engine is kept running silently, so
+  the scope still shows an approximation of the output.
+- It is a single combined trace — there are no per-voice scopes.
 
 ## Practical Tips
 

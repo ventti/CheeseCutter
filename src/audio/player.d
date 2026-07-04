@@ -21,6 +21,10 @@ import std.stdio;
 
 enum Status { Stop, Play, Keyjam };
 shared private int playstatus;
+// Bumped on every keyjam/preview note-on (playNote). The oscilloscope watches it
+// to know when to re-capture: in keyjam mode it freezes the played note's
+// waveform and holds it until the next note bumps this counter. UI-thread only.
+__gshared int keyjamNoteTrigger;
 shared int[3] muted;
 int usefp = 1, sidtype, interpolate = 1, badline, ntsc;
 __gshared Filterparams curfp;
@@ -76,6 +80,7 @@ void toggleSIDModel() {
 
 void playNote(Element emt) {
 	if(playstatus == Status.Play) return;
+	keyjamNoteTrigger++;   // signal the oscilloscope to re-capture this note
 	int v = seq.sequencer.activeVoiceNum;
 
 	// no audio reset if already inited

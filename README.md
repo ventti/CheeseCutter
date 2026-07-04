@@ -41,6 +41,11 @@ CheeseCutter 2.9 by Abaddon.
   per-channel routing mask) derived by tracing the song, color-coded by whether a
   value is taken straight from the filter table or calculated by a sweep. Toggle
   with `Ctrl-Shift-F`.
+- Toggleable **oscilloscope** overlay (`Shift-F12`) drawing the combined
+  synthesized audio waveform, pixel-sharp (a screen-resolution polyline, not
+  character cells); animates live during playback and, in keyjam, freezes and
+  holds the struck note's waveform until the next note. Non-modal, so it floats
+  over the editor without interrupting either.
 - Hardware and emulator playback (C64 Ultimate, VICE), switchable at runtime from
   **File → Properties** along with the Ultimate IP/port, `x64sc` path and SDL
   audio driver — persisted to a JSON preferences file in the per-OS config dir.

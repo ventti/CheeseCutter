@@ -245,7 +245,6 @@ void registerShortcuts(UI ui) {
 		screen.clrtoeol(55, 1, 0);
 		screen.clrtoeol(55, 2, 0);
 		screen.clrtoeol(55, 3, 0);
-		video.clearVisualizer();
 	});
 
 	sm.register("dump_frame", Ctx.global, "Playback options",
@@ -317,6 +316,27 @@ void registerShortcuts(UI ui) {
 	sm.register("window_sequence", Ctx.global, "Window navigation",
 				"Jump to Sequencer", SDLK_v, KMOD_ALT, {
 		toplevel.activateWindow(0);
+	});
+
+	// The Sequencer's three column/view switches. Registered GLOBALLY (not under
+	// Ctx.sequencer) so they show up in the command palette and the Navigate menu
+	// from any focus, and work from any window: they focus the Sequencer first,
+	// then re-dispatch the F-key so the Sequencer's own handler performs the view
+	// change (its F5 track/note toggle behaviour is unchanged when already there).
+	sm.register("seq_enter_track_col", Ctx.global, "Window navigation",
+				"Enter the sequencer track column (focuses the Sequencer)", SDLK_F5, 0, {
+		toplevel.activateWindow(0);
+		invokeKey(ui, SDLK_F5, 0);
+	});
+	sm.register("seq_enter_note_col", Ctx.global, "Window navigation",
+				"Enter the sequencer note column (focuses the Sequencer)", SDLK_F6, 0, {
+		toplevel.activateWindow(0);
+		invokeKey(ui, SDLK_F6, 0);
+	});
+	sm.register("seq_overview", Ctx.global, "Window navigation",
+				"Toggle the sequencer tracklist overview (focuses the Sequencer)", SDLK_F7, 0, {
+		toplevel.activateWindow(0);
+		invokeKey(ui, SDLK_F7, 0);
 	});
 
 	sm.register("window_instrument", Ctx.global, "Window navigation",
@@ -402,8 +422,11 @@ void registerShortcuts(UI ui) {
 		state.keyjamStatus ^= 1;
 		enableKeyjamMode(state.keyjamStatus);
 		statusline.display("Keyjam " ~ (state.keyjamStatus ? "enabled." : "disabled.")
-						   ~ " Press Ctrl-Space to toggle.");
+						   ~ " Press Ctrl-Space or Ctrl-K to toggle.");
 	});
+	// macOS reserves Ctrl-Space (Input Sources switching), so the OS eats it
+	// before the app sees it — Ctrl-K is a portable alternate for the same toggle.
+	sm.bindAlias("toggle_keyjam", SDLK_k, KMOD_CTRL);
 
 	// Song Management
 	sm.register("clear_sequences", Ctx.global, "Song management",
@@ -433,6 +456,12 @@ void registerShortcuts(UI ui) {
 		UI.statusline.display("Filter track " ~ (showFilterTrack ? "shown." : "hidden."));
 	});
 
+	sm.register("toggle_oscilloscope", Ctx.global, "Display",
+				"Toggle the oscilloscope overlay (combined synthesized audio waveform, live during playback and keyjam)", SDLK_F12, KMOD_SHIFT, {
+		toggleScope();
+		UI.statusline.display("Oscilloscope " ~ (scopeVisible ? "shown." : "hidden."));
+	});
+
 	// Dialogs
 	sm.register("about_dialog", Ctx.global, "Help",
 				"Show the splash / about screen", SDLK_F11, 0, {
@@ -454,6 +483,7 @@ void registerShortcuts(UI ui) {
 	sm.setChecked("toggle_fullscreen", () => video.isFullscreen());
 	sm.setChecked("toggle_follow_mode", () => toplevel.fplayEnabled());
 	sm.setChecked("toggle_filter_track", () => showFilterTrack);
+	sm.setChecked("toggle_oscilloscope", () => scopeVisible);
 
 	// Context-specific command shortcuts (sequencer, tables, ...)
 	registerContextShortcuts(ui);
@@ -542,15 +572,6 @@ void registerContextShortcuts(UI ui) {
 	sm.register("seq_next_subtune", C.sequencer, "Sequence operations",
 				"Activate next subtune", SDLK_RIGHT, KMOD_ALT,
 				{ invokeKey(SDLK_RIGHT, KMOD_ALT); });
-	sm.register("seq_enter_track_col", C.sequencer, "Sequence operations",
-				"Enter the track column / toggle tracklist display", SDLK_F5, 0,
-				{ invokeKey(SDLK_F5, 0); });
-	sm.register("seq_enter_note_col", C.sequencer, "Sequence operations",
-				"Enter the note column", SDLK_F6, 0,
-				{ invokeKey(SDLK_F6, 0); });
-	sm.register("seq_overview", C.sequencer, "Sequence operations",
-				"Toggle tracklist overview mode", SDLK_F7, 0,
-				{ invokeKey(SDLK_F7, 0); });
 
 	// --- Block selection (note + track columns; resolved via the shared
 	// sequencer context). Also drivable by left-drag with the mouse. ---
@@ -757,6 +778,7 @@ void applyMenuLabels(UI ui) {
 		setMenuLabel("toggle_fullscreen", "Fullscreen");
 		setMenuLabel("toggle_help_text", "Help texts");
 		setMenuLabel("toggle_filter_track", "Filter track");
+		setMenuLabel("toggle_oscilloscope", "Oscilloscope");
 		setMenuLabel("screenshot", "Screenshot");
 		setMenuLabel("cycle_visualization", "Visualization");
 		setMenuLabel("dump_frame", "Dump SID frame");
@@ -797,6 +819,9 @@ void applyMenuLabels(UI ui) {
 		setMenuLabel("window_command", "Command table");
 		setMenuLabel("window_chord", "Chord table");
 		setMenuLabel("window_song_info", "Song info");
+		setMenuLabel("seq_enter_track_col", "Track column");
+		setMenuLabel("seq_enter_note_col", "Note column");
+		setMenuLabel("seq_overview", "Overview mode");
 		// Sequencer context
 		setMenuLabel("seq_song_start", "To song start");
 		setMenuLabel("seq_song_end", "To song end");
@@ -813,9 +838,6 @@ void applyMenuLabels(UI ui) {
 		setMenuLabel("seq_append", "Insert sequence...");
 		setMenuLabel("seq_prev_subtune", "Previous subtune");
 		setMenuLabel("seq_next_subtune", "Next subtune");
-		setMenuLabel("seq_enter_track_col", "Track column");
-		setMenuLabel("seq_enter_note_col", "Note column");
-		setMenuLabel("seq_overview", "Overview mode");
 		// Note column
 		setMenuLabel("note_play_row", "Play row");
 		setMenuLabel("note_split", "Split sequence");

@@ -17,6 +17,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Ctrl-F12` | Save screenshot |
 | `Alt-Return` | Toggle fullscreen |
 | `Alt-H` | Toggle help texts |
+| `Shift-F12` | Toggle the oscilloscope overlay (combined synthesized audio waveform, live during playback and keyjam) |
 | `Ctrl-Shift-F` | Toggle the read-only filter track column |
 
 ### Edit
@@ -50,7 +51,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 
 | Shortcut | Action |
 |---|---|
-| `Ctrl-Space` | Toggle keyjam mode |
+| `Ctrl-K` / `Ctrl-Space` | Toggle keyjam mode |
 
 ### Playback
 
@@ -113,6 +114,8 @@ _Generated from the shortcut registry (com.shortcuts)._
 | Shortcut | Action |
 |---|---|
 | `Alt-T` | Edit title / author / release info |
+| `F6` | Enter the sequencer note column (focuses the Sequencer) |
+| `F5` | Enter the sequencer track column (focuses the Sequencer) |
 | `Alt-9` / `Alt-D` | Jump to Chord table |
 | `Alt-8` / `Alt-M` | Jump to Cmd table |
 | `Alt-7` / `Alt-F` | Jump to Filter table |
@@ -128,6 +131,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Ctrl-Shift-Tab` | Move cursor between main windows (reverse) |
 | `Tab` | Move cursor between subwindows |
 | `Shift-Tab` | Move cursor between subwindows (reverse) |
+| `F7` | Toggle the sequencer tracklist overview (focuses the Sequencer) |
 
 ## Sequencer (all columns)
 
@@ -173,9 +177,6 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Alt-Left` | Activate previous subtune |
 | `Alt-C` | Ask for a sequence number and copy contents over current sequence |
 | `Alt-N` | Ask for a sequence number and insert contents to cursor pos |
-| `F6` | Enter the note column |
-| `F5` | Enter the track column / toggle tracklist display |
-| `F7` | Toggle tracklist overview mode |
 
 ## Sequencer: note column (F6)
 
