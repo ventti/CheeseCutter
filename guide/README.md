@@ -472,9 +472,10 @@ and move it around. It works in both the <kbd>F6</kbd> note column (the block is
 note data) and the <kbd>F5</kbd> track column (the block is track-list entries),
 and is designed to extend to the player tables later.
 
-Make a selection by **left-dragging** with the mouse, or with the keyboard
-markers below. A plain left-click clears the selection and just positions the
-cursor. **Paste** and **merge** write into the currently active voice(s) from
+Make a selection by **left-dragging** with the mouse, by **left-clicking one
+corner and then <kbd>Shift</kbd>-left-clicking the opposite corner**, or with the
+keyboard markers below. A plain left-click clears the selection and just
+positions the cursor. **Paste** and **merge** write into the currently active voice(s) from
 the cursor down and are clipped to the current sequence/track end — anything that
 would overflow is dropped. If an area is **highlighted** when you paste, the
 clipboard is instead written into that area and clipped to it (never beyond).
@@ -483,14 +484,15 @@ clipboard is instead written into that area and clipped to it (never beyond).
 sized to hold the block.
 
 While a note-column selection is active, the transpose keys
-(<kbd>Ctrl</kbd>-<kbd>Q</kbd>/<kbd>A</kbd> semitone,
-<kbd>Ctrl</kbd>-<kbd>W</kbd>/<kbd>S</kbd> octave) apply to every selected note
+(<kbd>Alt</kbd>-<kbd>Q</kbd>/<kbd>A</kbd> semitone,
+<kbd>Alt</kbd>-<kbd>W</kbd>/<kbd>S</kbd> octave) apply to every selected note
 instead of the default (which transposes from the cursor to the end of the
 sequence).
 
 | Shortcut | Action |
 | --- | --- |
 | Left-drag | Select a block (single or multiple voice columns) |
+| Left-click + <kbd>Shift</kbd>-left-click | Select the block between the two clicked corners |
 | <kbd>Ctrl</kbd>-<kbd>B</kbd> | Mark selection start at the cursor |
 | <kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>B</kbd> | Mark selection end at the cursor |
 | <kbd>Ctrl</kbd>-<kbd>D</kbd> | Clear the selection |

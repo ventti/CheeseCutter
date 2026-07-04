@@ -216,6 +216,19 @@ private bool processCommand(string arg) {
 			stderr.writefln("click %d,%d b%d x%d", cx, cy, button, clicks);
 			break;
 		}
+		case "shiftclick": {
+			// shiftclick:CX,CY — a left click with Shift held (SDL_GetModState
+			// reports it), for shift-click block selection.
+			auto parts = val.split(",");
+			int cx = to!int(parts[0]), cy = to!int(parts[1]);
+			SDL_SetModState(KMOD_LSHIFT);
+			mainui.clickedAt(cx, cy, 1, 1);
+			mainui.releasedAt(cx, cy);
+			SDL_SetModState(KMOD_NONE);
+			mainui.update();
+			stderr.writefln("shiftclick %d,%d", cx, cy);
+			break;
+		}
 		case "press": {
 			// press:CX,CY[,BUTTON] — button-down only (no release), so the menu
 			// bar's armed/pressed (yellow) state can be screenshotted.

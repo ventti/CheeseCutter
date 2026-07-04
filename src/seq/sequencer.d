@@ -963,8 +963,20 @@ abstract class VoiceTable : Window {
 		if(!dragging) return;
 		dragging = false;
 		// A plain click (no drag motion) clears the selection and just
-		// positions the cursor, preserving the old click behaviour.
+		// positions the cursor, preserving the old click behaviour. (The anchor
+		// is kept — sel.clear() only drops `active` — so a following shift-click
+		// can extend a block from the just-clicked cell.)
 		if(!dragMoved) sel.clear();
+	}
+
+	/// Shift-click: extend the block from the last-clicked cell (the anchor) to
+	/// the cell the shift-click just positioned the cursor on — the keyboardless
+	/// twin of click-drag / the Ctrl-B + Ctrl-Shift-B markers.
+	void selectToCursor() {
+		if(!selectionEnabled) return;
+		sel.setEnd(activeVoiceNum, clampSelRow(activeVoiceNum, activeRowAbs()));
+		sel.active = true;
+		dragging = false;
 	}
 
 	// --- Keyboard entry point (subclasses call this first in keypress) ---
@@ -1308,11 +1320,16 @@ final class Sequencer : Window, Undoable {
 			if(v.area.overlaps(x, y)) {
 				activateVoice(cast(int)idx);
 				activeView.clickedAt(x - area.x, y - area.y, button, clicks);
-				// Left button starts a drag-select anchored at the cursor the
-				// click just positioned (same scroll frame as drag motion).
 				if(button == 1) {
-					pressCx = x; pressCy = y;
-					activeView.beginDragAtCursor();
+					// Shift-click extends a block from the previous click's cell
+					// (the anchor) to this one; a plain click starts a fresh
+					// drag-select anchored at the cursor just positioned.
+					if(SDL_GetModState() & KMOD_SHIFT)
+						activeView.selectToCursor();
+					else {
+						pressCx = x; pressCy = y;
+						activeView.beginDragAtCursor();
+					}
 				}
 			}
 		}
