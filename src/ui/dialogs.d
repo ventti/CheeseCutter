@@ -866,6 +866,22 @@ class LoadFileDialog : FileSelectorDialog {
 	}
 }
 
+// The .mod file picker. Its callback opens the import options dialog, which
+// (via activateDialog) already replaces the active dialog — so returnPressed
+// must report OK, or the dialog dispatcher would close that freshly opened
+// options dialog. Also shows the .mod title/channel preview.
+class ModImportFileDialog : FileSelectorDialog {
+	this(Rectangle a, CB cb) {
+		super(a, "Import ProTracker module", cb);
+		modPreview = true;
+	}
+
+	override protected int returnPressed(CB cb) {
+		super.returnPressed(cb);   // navigate, or fire cb (which opens the options dialog)
+		return OK;                 // never let the dispatcher close the swapped-in dialog
+	}
+}
+
 class SaveFileDialog : FileSelectorDialog {
 	this(Rectangle a, CB cb, string header = "Save Song") {
 		super(a, header, cb);

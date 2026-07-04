@@ -107,9 +107,8 @@ final class UI {
 												  dialog_width), &saveCallback);
 		exportsavedialog = new SaveFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
 												  dialog_width), &saveExportCallback, "Export song");
-		modimportdialog = new FileSelectorDialog(Rectangle(dialog_x, dialog_y, dialog_height,
-												  dialog_width), "Import ProTracker module", &modImportCallback);
-		modimportdialog.modPreview = true;   // preview shows the .mod title + channels
+		modimportdialog = new ModImportFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
+												  dialog_width), &modImportCallback);
 		modImportOptionsDialog = new ModImportOptionsDialog(&modImportConfirm);
 		exportDialog = new ExportOptionsDialog(&exportConfirm, false);
 		renderDialog = new ExportOptionsDialog(&exportConfirm, true);
