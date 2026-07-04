@@ -183,6 +183,12 @@ private bool processCommand(string arg) {
 				stderr.writef("[%x:%02x%02x] ", song.superTable[i] & 15,
 					song.superTable[i + 64], song.superTable[i + 128]);
 			stderr.writefln("\nspeed: %d", song.speed);
+			foreach(nn; 1 .. 5) {
+				int wp = song.instrumentTable[nn + 7 * 48];
+				stderr.writefln("ins%d: AD=%02x SR=%02x wave=%02x wf=%02x", nn,
+					song.instrumentTable[nn], song.instrumentTable[nn + 48],
+					wp, song.tWave.wave2[wp]);
+			}
 			break;
 		case "palette":
 			// palette:<file> — load a JSON palette at runtime, then force a full

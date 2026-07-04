@@ -27,6 +27,7 @@ struct ModImportOptions {
 	bool portamento = true;  // 3xx  -> tied note + tone-portamento command
 	bool vibrato = true;     // 4xy  -> command vibrato
 	bool speed = true;       // Fxx  -> song speed / per-row speed changes
+	bool placeholders = true;// build a placeholder $11 instrument per sample
 	// 1-based channel to leave out (0 = none). The three voices take the first
 	// three channels other than this one; default 4 imports channels 1,2,3.
 	int excludeChannel = 4;
@@ -38,6 +39,9 @@ struct ModImportOptions {
 struct ModModule {
 	string title;
 	string[32] sampleNames;   // indexed by MOD sample number 1..31
+	int[32] sampleLength;     // sample length in words (0 = no sample)
+	ubyte[32] sampleVolume;   // default volume 0..64
+	bool[32] sampleLoop;      // true if the sample loops (repeat length > 1 word)
 	int channels;             // channels in the file
 	int songLength;           // number of played order positions
 	ubyte[128] order;         // order table (pattern number per position)
@@ -130,8 +134,14 @@ ModModule parseModule(const(ubyte)[] data) {
 
 	int ofs = 20;
 	for(int i = 1; i <= 31; i++) {
-		m.sampleNames[i] = cleanName(data[ofs .. ofs + 22]);
-		ofs += 30;   // 22 name + 2 len + 1 finetune + 1 vol + 2 rep + 2 replen
+		// 30-byte sample header: name[22], length[2 BE words], finetune, volume,
+		// repeat start[2 BE words], repeat length[2 BE words].
+		m.sampleNames[i]  = cleanName(data[ofs .. ofs + 22]);
+		m.sampleLength[i] = (data[ofs + 22] << 8) | data[ofs + 23];
+		m.sampleVolume[i] = data[ofs + 25];
+		int repeatLen     = (data[ofs + 28] << 8) | data[ofs + 29];
+		m.sampleLoop[i]   = repeatLen > 1;   // replen of 1 word = non-looping
+		ofs += 30;
 	}
 
 	m.songLength = data[950];

@@ -164,9 +164,10 @@ In the load (<kbd>F9</kbd>), save (<kbd>F10</kbd>) and `.prg` export dialogs:
 `.mod` as a starting point for a SID arrangement. Pick a `.mod` in the file
 browser — which previews each file's **Title** and **channel count** the way the
 Load dialog previews `.ct` songs. After you choose the file, an options dialog
-(all defaults on) lets you set which **channel to exclude** and which effect
-groups to translate — **Arpeggios**, **Pitch slides**, **Tone portamento**,
-**Vibrato** and **Speed &amp; groove**; <kbd>Up</kbd>/<kbd>Down</kbd> moves,
+(all defaults on) lets you set which **channel to exclude**, whether to build
+**Placeholder instruments**, and which effect groups to translate — **Arpeggios**,
+**Pitch slides**, **Tone portamento**, **Vibrato** and **Speed &amp; groove**;
+<kbd>Up</kbd>/<kbd>Down</kbd> moves,
 <kbd>Space</kbd>/<kbd>←</kbd>/<kbd>→</kbd> changes a row, <kbd>Return</kbd>
 imports, <kbd>Esc</kbd> cancels. The import replaces the current song's sequences
 and orderlist. It is meant as a rough transcription — what carries over, and what
@@ -205,11 +206,14 @@ does not:
   Effects fire on the note they accompany. What can't map to the SID is dropped:
   sampled audio, per-channel **volume** / volume slides / tremolo (the SID has
   only one global volume), **panning**, sample offset and the Amiga LED filter.
-- **Samples are not imported.** Sampled audio cannot become a SID voice, so the
-  instrument *definitions* are left as placeholders — you design the
-  wave/pulse/filter programs for each instrument number yourself. Because of this
-  an imported song will not export to `.prg`/`.sid` until you have set up valid
-  instruments.
+- **Samples are not imported, but placeholder instruments can be.** Sampled audio
+  cannot become a SID voice. With **Placeholder instruments** on (the default),
+  each sample gets a plain `$11` (triangle + gate) instrument whose envelope
+  hints at the sample: a non-looping sample decays (`AD = 0N`, `N` from the log
+  of its length) and a looping one sustains (`SR = N0`, `N` from its volume). The
+  imported tune is then immediately audible and exports to `.prg`/`.sid`; you
+  refine the wave/pulse/filter programs from there. Turn the option off to keep
+  the current instruments instead.
 
 Importing does not touch the file on disk and leaves the song unnamed (with a
 `.ct` name suggested), so a later save never overwrites the source `.mod`. A

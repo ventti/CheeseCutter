@@ -1271,8 +1271,8 @@ class ModImportOptionsDialog : Window {
 		static immutable string[] labels = [
 			"Arpeggios (0xy)", "Pitch slides (1xx/2xx)",
 			"Tone portamento (3xx)", "Vibrato (4xy)", "Speed & groove (Fxx)",
-			"Exclude channel" ];
-		enum EXCLUDE_ROW = 5;
+			"Placeholder instruments", "Exclude channel" ];
+		enum EXCLUDE_ROW = 6;
 	}
 
 	this(ConfirmCB cb) {
@@ -1290,6 +1290,7 @@ class ModImportOptionsDialog : Window {
 		case 2: opts.portamento = !opts.portamento; break;
 		case 3: opts.vibrato = !opts.vibrato; break;
 		case 4: opts.speed = !opts.speed; break;
+		case 5: opts.placeholders = !opts.placeholders; break;
 		default: break;
 		}
 	}
@@ -1309,7 +1310,8 @@ class ModImportOptionsDialog : Window {
 		case 1: on = opts.slide; break;
 		case 2: on = opts.portamento; break;
 		case 3: on = opts.vibrato; break;
-		default: on = opts.speed; break;
+		case 4: on = opts.speed; break;
+		default: on = opts.placeholders; break;
 		}
 		return on ? "[x]" : "[ ]";
 	}

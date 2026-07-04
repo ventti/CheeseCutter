@@ -1869,6 +1869,40 @@ class Song {
 		superTable[] = 0;
 		chordTable[] = 0;
 
+		// Optional placeholder instruments: a plain $11 (triangle + gate) tone per
+		// sample so the import is audible (and exportable) rather than relying on
+		// whatever instruments were already loaded. The envelope hints at the
+		// sample's character: a non-looping sample decays (AD = 0N, N from the log
+		// of its length) while a looping one sustains (SR = N0, N from its volume).
+		if(opt.placeholders) {
+			// Rebuild instruments + wavetable, but keep the existing pulse/filter
+			// tables: the placeholders don't use pulse/filter (pointer 0), and
+			// the export validator still requires program 0 in those tables to be
+			// valid — clearing them would break it.
+			instrumentTable[] = 0;
+			waveTable[] = 0;
+			for(int s = 1; s < 32; s++) {
+				if(mod.sampleLength[s] <= 0) continue;
+				ubyte ad, sr;
+				if(mod.sampleLoop[s]) {
+					int n = mod.sampleVolume[s] >> 2;   // volume 0..64 -> 0..16
+					if(n > 15) n = 15;
+					ad = 0x00; sr = cast(ubyte)(n << 4);          // 00N0: sustain = volume
+				}
+				else {
+					int len = mod.sampleLength[s], n = 0;
+					while(len > 1 && n < 15) { len >>= 1; n++; }  // n = floor(log2 length)
+					ad = cast(ubyte)n; sr = 0x00;                 // 0N00: decay = duration
+				}
+				ubyte[8] def;
+				def[0] = ad; def[1] = sr;   // rest 0: no filter/pulse, wave ptr set below
+				insertInstrument(Patch("", def.dup,
+					[cast(ubyte)0x00, cast(ubyte)0x7f],   // wave1: transpose 0, then wrap
+					[cast(ubyte)0x11, cast(ubyte)0x00],   // wave2: $11 waveform, wrap to row 0
+					null, null), s);
+			}
+		}
+
 		// --- speed timeline + funk-groove detection -----------------------
 		// Row-by-row global speed across the played song (MOD speed persists
 		// until the next Fxx; BPM values >=0x20 are ignored).

@@ -28,9 +28,13 @@ CheeseCutter 2.9 by Abaddon.
   import) and which effects to translate: **arpeggios** (`0xy`, into the chord
   table), **pitch slides** (`1xx`/`2xx`), **tone portamento** (`3xx`, via tied
   notes), **vibrato** (`4xy`), and **speed/funk-groove** (`Fxx`, alternating
-  speeds become the break-speed table). Sampled audio, volume, panning and
-  Amiga-filter effects can't map to the SID and are not imported — you design the
-  SID instruments yourself; the pitch effects are approximate.
+  speeds become the break-speed table). It can also build **placeholder
+  instruments** — a plain `$11` (triangle) tone per sample whose envelope hints
+  at the sample (a one-shot decays by length, a looping one sustains by volume)
+  — so the imported tune is immediately audible and exportable; you refine the
+  SID instruments from there. Sampled audio, volume, panning and Amiga-filter
+  effects can't map to the SID and are not imported; the pitch effects are
+  approximate.
 - Instrument color tags (`$X` / `$XY`) in instrument descriptions.
 - Read-only **filter track** column in the pattern view (between voice 3 and the
   instrument table): per-row SID filter registers (cutoff, resonance, mode and a
