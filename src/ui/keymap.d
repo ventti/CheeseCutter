@@ -41,13 +41,12 @@ import audio.audio, audio.timer, audio.callback;
  */
 void registerShortcuts(UI ui) {
 	with(ui) {
-	// Application Control. Quit has no hotkey anymore (Esc opens the menu
-	// bar); it is reached via File > Quit, so it is registered menu-only.
-	// Its own "Application" category places it in a trailing group of the
-	// File menu (separated from the load/save items, Quit last).
-	// Alt-F4 is the conventional close shortcut; the same item is File ▸ Quit.
+	// Application Control. Ctrl-Q is the standard-editor Quit shortcut; the same
+	// item is File ▸ Quit. Its own "Application" category places it in a trailing
+	// group of the File menu (separated from the load/save items, Quit last). A
+	// confirmation dialog guards against an accidental Ctrl-Q.
 	sm.register("exit_app", Ctx.global, "Application",
-				"Quit program", SDLK_F4, KMOD_ALT, {
+				"Quit program", SDLK_q, KMOD_CTRL, {
 		string msg = state.songModified
 			? "You have unsaved changes. Really exit (y/n)? "
 			: "Really exit (y/n)? ";

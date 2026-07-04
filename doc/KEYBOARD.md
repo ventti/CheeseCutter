@@ -8,7 +8,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 
 | Shortcut | Action |
 |---|---|
-| `Alt-F4` | Quit program |
+| `Ctrl-Q` | Quit program |
 
 ### Display
 
