@@ -433,6 +433,20 @@ abstract class VoiceTable : Window {
 			case SDLK_l:
 				centralize();
 				break;
+			case SDLK_F1:
+				setPositionMark();
+				break;
+			case SDLK_BACKSPACE:
+				setWrapMark();
+				break;
+			default:
+				break;
+			}
+		}
+		else if(key.mods & KMOD_ALT) {
+			// Row-highlight + display toggles (moved Ctrl -> Alt).
+			switch(key.raw)
+			{
 			case SDLK_PERIOD:
 				if(song.highlight < 16)
 					song.highlight++;
@@ -450,12 +464,6 @@ abstract class VoiceTable : Window {
 			case SDLK_t:
 				useRelativeNotes ^= 1;
 				UI.statusline.display(format("Relative notes %s.", useRelativeNotes ?  "enabled" : "disabled"));
-				break;
-			case SDLK_F1:
-				setPositionMark();
-				break;
-			case SDLK_BACKSPACE:
-				setWrapMark();
 				break;
 			default:
 				break;
@@ -1196,7 +1204,9 @@ final class Sequencer : Window, Undoable {
 		}
 		if(key.mods & KMOD_ALT) {
 			switch(key.raw) {
-			case SDLK_a:
+			case SDLK_n:
+				// Insert a numbered sequence's contents (moved off Alt-A, which is
+				// now note/track transpose).
 				mainui.activateDialog(queryAppend);
 				break;
 			case SDLK_c:

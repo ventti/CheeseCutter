@@ -151,6 +151,18 @@ string exportMarkdown(ShortcutManager sm) {
 			md.put("\n");
 		}
 	}
+	// Keys that live inside the modal file dialogs, so they can't be command /
+	// menu / palette actions (those aren't reachable while a dialog is open).
+	// Documented by hand so the reference has no hidden shortcuts.
+	md.put("## File dialogs\n\n");
+	md.put("_Active inside the load / save / import / instrument file dialogs._\n\n");
+	md.put("| Shortcut | Action |\n|---|---|\n");
+	md.put("| `Ctrl-D` / right-click | Toggle the highlighted directory as a favorite (favorites are listed at the top) |\n");
+	md.put("| _type a name_ | Type-ahead: jump to the first matching entry |\n");
+	md.put("| `Tab` / `Shift-Tab` | Switch between the file list, directory and filename fields |\n");
+	md.put("| `Return` | Enter the highlighted directory / confirm the selection |\n");
+	md.put("| `Esc` | Cancel the dialog |\n\n");
+
 	md.put("## Platform notes\n\n");
 	foreach(n; platformNotes())
 		md.put(format("- %s\n", n));

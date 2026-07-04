@@ -78,8 +78,9 @@ void registerShortcuts(UI ui) {
 
 	// No key binding of its own: pressing Esc focuses the menu bar, and typing
 	// any printable character there opens the palette seeded with it.
-	sm.registerMenuOnly("open_palette", Ctx.global, "Help",
-				"Open the command palette: search commands and songs by name (Esc, then type)", {
+	sm.register("open_palette", Ctx.global, "Help",
+				"Open the command palette: search commands and songs by name or shortcut (also Esc, then type)",
+				SDLK_p, KMOD_CTRL, {
 		menubar.close();
 		palette.open("");
 	}, "Command palette");
@@ -106,6 +107,7 @@ void registerShortcuts(UI ui) {
 				"Open the Load song dialog", SDLK_F9, 0, {
 		activateDialog(loaddialog);
 	});
+	sm.bindAlias("load_file", SDLK_o, KMOD_CTRL);   // standard Open
 
 	sm.register("save_file", Ctx.global, "File",
 				"Open the Save song dialog", SDLK_F10, 0, {
@@ -116,12 +118,13 @@ void registerShortcuts(UI ui) {
 				"Quick save song (doesn't ask a filename)", SDLK_F10, KMOD_CTRL, {
 		string s = savedialog.filename;
 		if(s == "")
-			statusline.display("Cannot Quicksave; give filename first by doing a regular save.");
+			activateDialog(savedialog);   // no name yet: prompt (standard Save behaviour)
 		else {
 			saveCallback(s);
 			statusline.display(format("Saved \"%s\".",s));
 		}
 	});
+	sm.bindAlias("quick_save", SDLK_s, KMOD_CTRL);   // standard Save
 
 	sm.register("import_mod", Ctx.global, "File",
 				"Import a ProTracker module (.mod): pick the file, then choose channels and which effects to translate", SDLK_F9, KMOD_SHIFT, {
@@ -154,6 +157,8 @@ void registerShortcuts(UI ui) {
 		com.session.executeRedo();
 		refresh();
 	});
+	sm.bindAlias("redo", SDLK_y, KMOD_CTRL);              // standard Redo
+	sm.bindAlias("redo", SDLK_z, KMOD_CTRL | KMOD_SHIFT); // standard Redo (Ctrl-Shift-Z)
 
 	// Playback Controls
 	sm.register("play_from_mark", Ctx.global, "Playback",
@@ -510,27 +515,27 @@ void registerContextShortcuts(UI ui) {
 				{ invokeKey(SDLK_BACKSPACE, KMOD_CTRL); });
 
 	sm.register("seq_highlight_inc", C.sequencer, "Display",
-				"Increase row highlight value", SDLK_PERIOD, KMOD_CTRL,
-				{ invokeKey(SDLK_PERIOD, KMOD_CTRL); });
+				"Increase row highlight value", SDLK_PERIOD, KMOD_ALT,
+				{ invokeKey(SDLK_PERIOD, KMOD_ALT); });
 	sm.register("seq_highlight_dec", C.sequencer, "Display",
-				"Decrease row highlight value", SDLK_COMMA, KMOD_CTRL,
-				{ invokeKey(SDLK_COMMA, KMOD_CTRL); });
+				"Decrease row highlight value", SDLK_COMMA, KMOD_ALT,
+				{ invokeKey(SDLK_COMMA, KMOD_ALT); });
 	sm.register("seq_highlight_reset", C.sequencer, "Display",
-				"Reset highlighting to current row", SDLK_0, KMOD_CTRL,
-				{ invokeKey(SDLK_0, KMOD_CTRL); });
+				"Reset highlighting to current row", SDLK_0, KMOD_ALT,
+				{ invokeKey(SDLK_0, KMOD_ALT); });
 	sm.register("seq_rowcounter", C.sequencer, "Display",
-				"Show/hide row counters for sequences", SDLK_e, KMOD_CTRL,
-				{ invokeKey(SDLK_e, KMOD_CTRL); });
+				"Show/hide row counters for sequences", SDLK_e, KMOD_ALT,
+				{ invokeKey(SDLK_e, KMOD_ALT); });
 	sm.register("seq_relative_notes", C.sequencer, "Display",
-				"Toggle notes relative to current transpose", SDLK_t, KMOD_CTRL,
-				{ invokeKey(SDLK_t, KMOD_CTRL); });
+				"Toggle notes relative to current transpose", SDLK_t, KMOD_ALT,
+				{ invokeKey(SDLK_t, KMOD_ALT); });
 
 	sm.register("seq_copy", C.sequencer, "Sequence operations",
 				"Ask for a sequence number and copy contents over current sequence", SDLK_c, KMOD_ALT,
 				{ invokeKey(SDLK_c, KMOD_ALT); });
 	sm.register("seq_append", C.sequencer, "Sequence operations",
-				"Ask for a sequence number and insert contents to cursor pos", SDLK_a, KMOD_ALT,
-				{ invokeKey(SDLK_a, KMOD_ALT); });
+				"Ask for a sequence number and insert contents to cursor pos", SDLK_n, KMOD_ALT,
+				{ invokeKey(SDLK_n, KMOD_ALT); });
 	sm.register("seq_prev_subtune", C.sequencer, "Sequence operations",
 				"Activate previous subtune", SDLK_LEFT, KMOD_ALT,
 				{ invokeKey(SDLK_LEFT, KMOD_ALT); });
@@ -581,8 +586,8 @@ void registerContextShortcuts(UI ui) {
 	// Keypad-free alias for keyboards without a numpad.
 	sm.bindAlias("note_play_row", SDLK_p, KMOD_CTRL | KMOD_SHIFT);
 	sm.register("note_split", C.noteColumn, "Note column",
-				"Split current sequence into two from cursor pos", SDLK_p, KMOD_CTRL,
-				{ invokeKey(SDLK_p, KMOD_CTRL); });
+				"Split current sequence into two from cursor pos", SDLK_p, KMOD_ALT,
+				{ invokeKey(SDLK_p, KMOD_ALT); });
 	sm.register("note_seq_start", C.noteColumn, "Note column",
 				"Move cursor to sequence start (or screen top)", SDLK_HOME, 0,
 				{ invokeKey(SDLK_HOME, 0); });
@@ -605,17 +610,17 @@ void registerContextShortcuts(UI ui) {
 				"Shrink the sequence", SDLK_DELETE, KMOD_CTRL,
 				{ invokeKey(SDLK_DELETE, KMOD_CTRL); });
 	sm.register("note_trans_semi_up", C.noteColumn, "Note column",
-				"Transpose semitone up", SDLK_q, KMOD_CTRL,
-				{ invokeKey(SDLK_q, KMOD_CTRL); });
+				"Transpose semitone up", SDLK_q, KMOD_ALT,
+				{ invokeKey(SDLK_q, KMOD_ALT); });
 	sm.register("note_trans_semi_down", C.noteColumn, "Note column",
-				"Transpose semitone down", SDLK_a, KMOD_CTRL,
-				{ invokeKey(SDLK_a, KMOD_CTRL); });
+				"Transpose semitone down", SDLK_a, KMOD_ALT,
+				{ invokeKey(SDLK_a, KMOD_ALT); });
 	sm.register("note_trans_oct_up", C.noteColumn, "Note column",
-				"Transpose octave up", SDLK_w, KMOD_CTRL,
-				{ invokeKey(SDLK_w, KMOD_CTRL); });
+				"Transpose octave up", SDLK_w, KMOD_ALT,
+				{ invokeKey(SDLK_w, KMOD_ALT); });
 	sm.register("note_trans_oct_down", C.noteColumn, "Note column",
-				"Transpose octave down", SDLK_s, KMOD_CTRL,
-				{ invokeKey(SDLK_s, KMOD_CTRL); });
+				"Transpose octave down", SDLK_s, KMOD_ALT,
+				{ invokeKey(SDLK_s, KMOD_ALT); });
 	sm.register("note_grab_instr", C.noteColumn, "Note column",
 				"Grab the current row's instrument as the active instrument", SDLK_RETURN, 0,
 				{ invokeKey(SDLK_RETURN, 0); });
@@ -652,11 +657,11 @@ void registerContextShortcuts(UI ui) {
 				"Delete a track for all voices", SDLK_DELETE, KMOD_CTRL | KMOD_SHIFT,
 				{ invokeKey(SDLK_DELETE, KMOD_CTRL | KMOD_SHIFT); });
 	sm.register("trk_trans_up", C.trackColumn, "Track column",
-				"Transpose tracks up from cursor down", SDLK_q, KMOD_CTRL,
-				{ invokeKey(SDLK_q, KMOD_CTRL); });
+				"Transpose tracks up from cursor down", SDLK_q, KMOD_ALT,
+				{ invokeKey(SDLK_q, KMOD_ALT); });
 	sm.register("trk_trans_down", C.trackColumn, "Track column",
-				"Transpose tracks down from cursor down", SDLK_a, KMOD_CTRL,
-				{ invokeKey(SDLK_a, KMOD_CTRL); });
+				"Transpose tracks down from cursor down", SDLK_a, KMOD_ALT,
+				{ invokeKey(SDLK_a, KMOD_ALT); });
 	sm.register("trk_copy", C.trackColumn, "Track column",
 				"Ask for a number and copy tracks into clipboard", SDLK_c, KMOD_CTRL,
 				{ invokeKey(SDLK_c, KMOD_CTRL); });

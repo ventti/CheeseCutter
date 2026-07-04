@@ -23,7 +23,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 
 | Shortcut | Action |
 |---|---|
-| `Ctrl-R` | Redo |
+| `Ctrl-R` / `Ctrl-Shift-Z` / `Ctrl-Y` | Redo |
 | `Ctrl-Z` | Undo |
 
 ### File
@@ -33,9 +33,9 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Ctrl-N` | Clear the song and start a new project |
 | `Shift-F10` | Export song: Full player .prg / Optimized .prg / PSID (options dialog) |
 | `Shift-F9` | Import a ProTracker module (.mod): pick the file, then choose channels and which effects to translate |
-| `F9` | Open the Load song dialog |
+| `Ctrl-O` / `F9` | Open the Load song dialog |
 | `F10` | Open the Save song dialog |
-| `Ctrl-F10` | Quick save song (doesn't ask a filename) |
+| `Ctrl-F10` / `Ctrl-S` | Quick save song (doesn't ask a filename) |
 | `Ctrl-Shift-F10` | Render audio: .wav / .flac (duration, normalize, bit depth, rate) |
 
 ### Help
@@ -43,7 +43,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 | Shortcut | Action |
 |---|---|
 | `F12` | Open context help |
-|  | Open the command palette: search commands and songs by name (Esc, then type) |
+| `Ctrl-P` | Open the command palette: search commands and songs by name or shortcut (also Esc, then type) |
 | `Alt-S` / `F11` | Show the splash / about screen |
 
 ### Keyjam
@@ -135,11 +135,11 @@ _Generated from the shortcut registry (com.shortcuts)._
 
 | Shortcut | Action |
 |---|---|
-| `Ctrl-,` | Decrease row highlight value |
-| `Ctrl-.` | Increase row highlight value |
-| `Ctrl-0` | Reset highlighting to current row |
-| `Ctrl-E` | Show/hide row counters for sequences |
-| `Ctrl-T` | Toggle notes relative to current transpose |
+| `Alt-,` | Decrease row highlight value |
+| `Alt-.` | Increase row highlight value |
+| `Alt-0` | Reset highlighting to current row |
+| `Alt-E` | Show/hide row counters for sequences |
+| `Alt-T` | Toggle notes relative to current transpose |
 
 ### Navigation
 
@@ -172,7 +172,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Alt-Right` | Activate next subtune |
 | `Alt-Left` | Activate previous subtune |
 | `Alt-C` | Ask for a sequence number and copy contents over current sequence |
-| `Alt-A` | Ask for a sequence number and insert contents to cursor pos |
+| `Alt-N` | Ask for a sequence number and insert contents to cursor pos |
 | `F6` | Enter the note column |
 | `F5` | Enter the track column / toggle tracklist display |
 | `F7` | Toggle tracklist overview mode |
@@ -188,10 +188,10 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Return` | Grab the current row's instrument as the active instrument |
 | `>` | Increase base octave |
 | `;` | Toggle automatic instrument value insert |
-| `Ctrl-S` | Transpose octave down |
-| `Ctrl-W` | Transpose octave up |
-| `Ctrl-A` | Transpose semitone down |
-| `Ctrl-Q` | Transpose semitone up |
+| `Alt-S` | Transpose octave down |
+| `Alt-W` | Transpose octave up |
+| `Alt-A` | Transpose semitone down |
+| `Alt-Q` | Transpose semitone up |
 
 ### Sequence
 
@@ -205,7 +205,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Ctrl-Shift-P` / `Keypad 0` | Play notes for all voices in current row |
 | `Shift-Return` | Quick expand sequence (by highlight value * 4) |
 | `Ctrl-Delete` | Shrink the sequence |
-| `Ctrl-P` | Split current sequence into two from cursor pos |
+| `Alt-P` | Split current sequence into two from cursor pos |
 
 ## Sequencer: track column (F5)
 
@@ -229,8 +229,8 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Ctrl-Alt-1` | Swap voice's tracks with voice 1's from cursor down |
 | `Ctrl-Alt-2` | Swap voice's tracks with voice 2's from cursor down |
 | `Ctrl-Alt-3` | Swap voice's tracks with voice 3's from cursor down |
-| `Ctrl-A` | Transpose tracks down from cursor down |
-| `Ctrl-Q` | Transpose tracks up from cursor down |
+| `Alt-A` | Transpose tracks down from cursor down |
+| `Alt-Q` | Transpose tracks up from cursor down |
 
 ## Instrument table
 
@@ -255,6 +255,18 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Insert` | Insert a row |
 | `Shift-Home` | Jump to first row |
 | `Shift-End` | Jump to last used row |
+
+## File dialogs
+
+_Active inside the load / save / import / instrument file dialogs._
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl-D` / right-click | Toggle the highlighted directory as a favorite (favorites are listed at the top) |
+| _type a name_ | Type-ahead: jump to the first matching entry |
+| `Tab` / `Shift-Tab` | Switch between the file list, directory and filename fields |
+| `Return` | Enter the highlighted directory / confirm the selection |
+| `Esc` | Cancel the dialog |
 
 ## Platform notes
 

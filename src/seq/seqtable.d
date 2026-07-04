@@ -76,6 +76,15 @@ class SeqVoice : Voice, Undoable {
 				if(activeRow.seqOffset < activeRow.seq.rows - 1)
 					activeRow.seq.shrink(0, 1, false);
 				break;
+			default:
+				return seqinput.keypress(key);
+			}
+		}
+		else if(key.mods & KMOD_ALT) {
+			// Transpose the current row's sequence (moved Ctrl -> Alt so the
+			// standard Ctrl-Q/A/W/S editor keys stay free).
+			switch(key.raw)
+			{
 			case SDLK_q:
 				saveState();
 				activeRow.seq.transpose(activeRow.seqOffset, 1);
@@ -92,7 +101,6 @@ class SeqVoice : Voice, Undoable {
 				saveState();
 				activeRow.seq.transpose(activeRow.seqOffset, -12);
 				break;
-
 			default:
 				return seqinput.keypress(key);
 			}
@@ -509,7 +517,7 @@ class SequenceTable : VoiceTable, Undoable {
 		if(handleSelectionKey(key)) return OK;
 		// With an active selection, the transpose keys apply to the whole block
 		// rather than the active voice's cursor-to-end default.
-		if(sel.active && (key.mods & KMOD_CTRL)) {
+		if(sel.active && (key.mods & KMOD_ALT)) {
 			int n;
 			switch(key.raw) {
 			case SDLK_q: n = 1; break;
@@ -583,7 +591,7 @@ class SequenceTable : VoiceTable, Undoable {
 			}
 
 		}
-		else if(key.mods & KMOD_CTRL) {
+		else if(key.mods & KMOD_ALT) {
 			switch(key.raw) {
 			case SDLK_p:
 				RowData r = activeVoice.activeRow;

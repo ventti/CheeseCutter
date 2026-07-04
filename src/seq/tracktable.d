@@ -229,14 +229,6 @@ abstract class BaseTrackTable : VoiceTable, Undoable {
 					jump(Jump.toEnd,true);
 				}
 				return OK;
-			case SDLK_q:
-				saveState(true);
-				(cast(TrackVoice)activeVoice).trackTrans(1);
-				break;
-			case SDLK_a:
-				saveState(true);
-				(cast(TrackVoice)activeVoice).trackTrans(-1);
-				break;
 			case SDLK_c:
 				mainui.activateDialog(queryClip);
 				return OK;
@@ -262,6 +254,15 @@ abstract class BaseTrackTable : VoiceTable, Undoable {
 				return OK;
 			case SDLK_b:
 				pasteTracks(clip, true);
+				return OK;
+			// Track transpose (moved Ctrl -> Alt).
+			case SDLK_q:
+				saveState(true);
+				(cast(TrackVoice)activeVoice).trackTrans(1);
+				return OK;
+			case SDLK_a:
+				saveState(true);
+				(cast(TrackVoice)activeVoice).trackTrans(-1);
 				return OK;
 			default:
 				break;

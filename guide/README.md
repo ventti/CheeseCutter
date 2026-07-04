@@ -95,9 +95,9 @@ are defined in exactly one place and can never disagree between them.
 
 ## Command Palette
 
-Press <kbd>Esc</kbd> and just start typing: the first printable character turns
-the menu bar into a *command palette* — a `>` prompt, VS Code style, that
-searches as you type. It is also reachable as **Help → Command palette**.
+Press <kbd>Ctrl</kbd>-<kbd>P</kbd> (or <kbd>Esc</kbd> then just start typing) to
+open the *command palette* — a `>` prompt, VS Code style, that searches as you
+type. It is also reachable as **Help → Command palette**.
 
 The palette matches your query case-insensitively against the name and
 description of every command reachable from where you are (the global commands
