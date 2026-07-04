@@ -3,7 +3,8 @@ CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
 
 Command palette: a VS-Code-style "> " prompt that searches every command
 reachable from the current focus plus the .ct/.ct2 songs in the current
-directory, case-insensitively, by name/description.
+directory, case-insensitively, by name/description or keyboard shortcut (typing
+e.g. "ctrl", "F2", "ctrl-p" or "p" surfaces commands by their shortcut).
 
 Opened by pressing Esc (which focuses the menu bar) and starting to type: the
 first printable character closes the bar and seeds the query (Space excepted —
@@ -46,6 +47,7 @@ final class CommandPalette {
 		string description;  // full help sentence ("" for files)
 		string category;
 		Shortcut primary;
+		string shortcutText; // formatted primary shortcut, e.g. "Ctrl-F2" (for search)
 		int order;           // registration order / directory order
 		int rank;            // match quality, filled by refilter()
 	}
@@ -244,7 +246,7 @@ final class CommandPalette {
 					continue;
 				candidates ~= Entry(false, def.actionId, def.label(),
 									def.description, def.category, def.primary,
-									def.order);
+									formatShortcut(def.primary), def.order);
 			}
 		}
 		// The .ct/.ct2 songs in the current directory (= the load/save
@@ -263,7 +265,7 @@ final class CommandPalette {
 				}
 				catch(FileException) { continue; }   // dangling symlink etc.
 				candidates ~= Entry(true, "", name, "", "", Shortcut(0, 0),
-									forder++);
+									"", forder++);
 			}
 		}
 		catch(FileException) {}
@@ -276,9 +278,9 @@ final class CommandPalette {
 		return idx == 0 || (idx > 0 && !isAlphaNum(s[idx - 1]));
 	}
 
-	// Match quality: 0 = label prefix, 1 = word start in label/description,
-	// 2 = substring anywhere (incl. category), -1 = no match.
-	static int rankEntry(ref Entry e, string q) {
+	// Name/description/category match quality: 0 = label prefix, 1 = word start
+	// in label/description, 2 = substring anywhere (incl. category), -1 = none.
+	static int nameRank(ref Entry e, string q) {
 		ptrdiff_t li = e.label.indexOf(q, CaseSensitive.no);
 		if(li == 0) return 0;
 		if(li > 0 && wordStart(e.label, li)) return 1;
@@ -288,6 +290,22 @@ final class CommandPalette {
 		if(li >= 0 || di >= 0) return 2;
 		if(e.category.indexOf(q, CaseSensitive.no) >= 0) return 2;
 		return -1;
+	}
+
+	// Overall match quality: the best (lowest) of the name match and a match
+	// against the command's shortcut text (so typing "ctrl", "f2", "ctrl-p" or
+	// "p" also surfaces commands by their keyboard shortcut).
+	static int rankEntry(ref Entry e, string q) {
+		int nr = nameRank(e, q);
+		int sr = -1;
+		if(e.shortcutText.length) {
+			ptrdiff_t si = e.shortcutText.indexOf(q, CaseSensitive.no);
+			if(si == 0) sr = (e.shortcutText.length == q.length) ? 0 : 1;
+			else if(si > 0) sr = 2;
+		}
+		if(nr < 0) return sr;
+		if(sr < 0) return nr;
+		return nr < sr ? nr : sr;
 	}
 
 	void refilter() {

@@ -101,10 +101,12 @@ searches as you type. It is also reachable as **Help → Command palette**.
 
 The palette matches your query case-insensitively against the name and
 description of every command reachable from where you are (the global commands
-plus the active context's), and against the `.ct`/`.ct2` song files in the
-current directory. Better matches sort first (name prefix, then word starts,
-then any substring), commands above songs; commands show their keyboard
-shortcut on the right and songs a `load` tag.
+plus the active context's), against each command's **keyboard shortcut**, and
+against the `.ct`/`.ct2` song files in the current directory. Searching by
+shortcut means typing e.g. `ctrl`, `F2`, `ctrl-p` or `p` lists the commands
+bound to matching keys. Better matches sort first (name/shortcut prefix, then
+word starts, then any substring), commands above songs; commands show their
+keyboard shortcut on the right and songs a `load` tag.
 
 | Key | Action |
 | --- | --- |
