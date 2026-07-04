@@ -15,6 +15,7 @@ import ct.build : ExportOptions, ExportFormat, isAudioFormat;
 import ct.modimport : ModImportOptions, ModInfo, readModInfo;
 import audio.render : flacAvailable;
 import com.config : Prefs;
+static import com.config;
 static import audio.audio;
 import audio.resid.filter : FP6581, FP8580;
 import ui.help;
@@ -292,6 +293,7 @@ class FileSelector : Window {
 	struct File {
 		string name;
 		int exists, isdir;
+		bool favorite;   // a bookmarked directory, listed atop the file list
 	}
 	
 	FileSelPos fpos;
@@ -335,7 +337,7 @@ class FileSelector : Window {
 		return SDL_GetTicks() <= typeaheadDeadline ? typeahead : "";
 	}
 
-	override void update() { 
+	override void update() {
 		int y, i;
 		for(y = area.y, i = 0; i < area.height; y++,i++) {
 			int ofs = fpos.offset + i;
@@ -343,20 +345,26 @@ class FileSelector : Window {
 			int col = 15;
 			if(ofs < filelist.length) {
 				File f = filelist[ofs];
-				auto ind = 1+f.name.lastIndexOf(DIR_SEPARATOR);
-				if( ofs < 2 || (f.exists && f.isdir) ) {
-					col = 13;
-				}
-				fs = fstr(format("  %s", f.name[ind..$].leftJustify(area.width-2)));
+				if(f.favorite) col = 7;                       // favorites: yellow, starred
+				else if(f.isdir) col = 13;                    // directories: cyan
+				fs = fstr(format("%s%s", entryPrefix(f), entryLabel(f).leftJustify(area.width-2)));
 			}
 			screen.cprint(area.x+5,y,col,0,fs);
 		}
 	}
 
+	// A favorite is starred; every entry shows its basename (a long favorite path
+	// would otherwise truncate away the meaningful trailing directory name).
+	private string entryPrefix(File f) { return f.favorite ? "* " : "  "; }
+	private string entryLabel(File f) {
+		auto ind = 1 + f.name.lastIndexOf(DIR_SEPARATOR);
+		return f.name[ind .. $];
+	}
+
 	void blink() {
 		int y = area.y + fpos.pos;
-		auto ind = 1 + filelist[num].name.lastIndexOf(DIR_SEPARATOR);
-		screen.fprint(area.x+5,y,fstr("`b1  " ~ filelist[num].name[ind..$].leftJustify(area.width-3)) ~ "  ");
+		File f = filelist[num];
+		screen.fprint(area.x+5,y,fstr("`b1" ~ entryPrefix(f) ~ entryLabel(f).leftJustify(area.width-3)) ~ "  ");
 	}
 	
 	int fileHandler() {
@@ -382,8 +390,29 @@ class FileSelector : Window {
 		return RETURN;
 	}
 
+	// Toggle the highlighted entry's directory as a favorite: "." is the current
+	// directory, a favorite entry removes itself, a plain sub-directory adds
+	// itself (files and ".." are ignored). Persists and rebuilds the list.
+	void toggleFavorite() {
+		if(filelist.length == 0) return;
+		File f = filelist[num];
+		string target;
+		if(f.favorite)         target = f.name;
+		else if(f.name == ".") target = directory;
+		else if(f.isdir && f.name != "..") target = f.name;
+		else return;
+		com.config.toggleFavorite(target);
+		reset();
+		refresh();
+	}
+
 	override int keypress(Keyinfo key) {
-		switch(key.raw) 
+		// Ctrl-D bookmarks/unbookmarks the highlighted directory.
+		if((key.mods & KMOD_CTRL) && key.raw == SDLK_d) {
+			toggleFavorite();
+			return WRAP;
+		}
+		switch(key.raw)
 		{
 		case SDLK_UP:
 			step(-1);
@@ -452,12 +481,18 @@ class FileSelector : Window {
 	}
 
 	int mouseClick(int x, int y, int button) {
-		if(button != SDL_BUTTON_LEFT) return OK;
 		if(y < area.y || y >= area.y + area.height) return OK;
-
 		int row = y - area.y;
 		int clickedNum = fpos.offset + row;
 		if(clickedNum < 0 || clickedNum >= filelist.length) return OK;
+
+		// Right-click bookmarks/unbookmarks the clicked directory.
+		if(button == SDL_BUTTON_RIGHT) {
+			fpos.pos = row;
+			toggleFavorite();
+			return WRAP;
+		}
+		if(button != SDL_BUTTON_LEFT) return OK;
 
 		uint now = SDL_GetTicks();
 		bool doubleClick = clickedNum == lastClickNum &&
@@ -524,13 +559,18 @@ class FileSelector : Window {
 		files.sort;
 
 		string[] all = cast(string[])(dirs ~ files);
-		
-		filelist.length = all.length + 2;
-		filelist[0] = File(".", true, true);
-                filelist[1] = File("..",true, true);
-		for(int i = 0; i < all.length; i++) {
-			filelist[i+2] = File(all[i], all[i].exists(), all[i].isDir());
-		}
+
+		// Favorite directories are listed first (topmost), then ".", ".." and the
+		// current directory's entries.
+		auto favs = com.config.prefs.favorites;
+		filelist.length = favs.length + all.length + 2;
+		int fi;
+		foreach(fav; favs)
+			filelist[fi++] = File(fav, fav.exists(), true, true);
+		filelist[fi++] = File(".", true, true);
+		filelist[fi++] = File("..", true, true);
+		for(int i = 0; i < all.length; i++)
+			filelist[fi++] = File(all[i], all[i].exists(), all[i].isDir());
 	}
 
 	// move the cursor to last entry & set scroll window pos
@@ -759,10 +799,17 @@ class FileSelectorDialog : WindowSwitcher {
 	}
 
 	override void clickedAt(int x, int y, int button, int clicks = 1) {
+		bool inFileList = y >= fsel.area.y && y < fsel.area.y + fsel.area.height &&
+			x >= fsel.area.x && x < fsel.area.x + fsel.area.width + 5;
+
+		// Right-click a directory in the list bookmarks/unbookmarks it.
+		if(button == SDL_BUTTON_RIGHT) {
+			if(inFileList) { activateWindow(0); fsel.mouseClick(x, y, button); }
+			return;
+		}
 		if(button != SDL_BUTTON_LEFT) return;
 
-		if(y >= fsel.area.y && y < fsel.area.y + fsel.area.height &&
-		   x >= fsel.area.x && x < fsel.area.x + fsel.area.width + 5) {
+		if(inFileList) {
 			activateWindow(0);
 			int r = fsel.mouseClick(x, y, button);
 			if(r == WRAPR)

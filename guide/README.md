@@ -157,6 +157,13 @@ In the load (<kbd>F9</kbd>), save (<kbd>F10</kbd>) and `.prg` export dialogs:
 - **Song preview**: when the focused file is a CheeseCutter song, its
   **Title / Author / Release** are shown above the Directory row, so you can
   identify a tune without loading it.
+- **Favorite directories**: bookmark a directory with <kbd>Ctrl</kbd>-<kbd>D</kbd>
+  (or right-click it) — favorites are listed at the top of every file dialog
+  (starred, in yellow) and selecting one jumps straight to it. Repeat to remove.
+  Up to 10 are kept and they persist across sessions.
+- **Separate directories**: the load/save (`.ct`) browsers share one remembered
+  directory; the `.mod` import, the song export, and the instrument load/save
+  browsers each remember their own.
 
 ## Importing ProTracker modules (.mod)
 

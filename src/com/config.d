@@ -33,9 +33,32 @@ struct Prefs {
 	int    sidModel = 0;             // 0 = 6581, 1 = 8580
 	int    filter6581 = 0;           // filter-preset index for the 6581 model
 	int    filter8580 = 0;           // filter-preset index for the 8580 model
+	string[] favorites;              // favorite directories shown atop file dialogs
 }
 
+enum MAX_FAVORITES = 10;
+
 __gshared Prefs prefs;
+
+// Favorite-directory helpers. Toggling persists immediately so the list survives
+// a crash/quit; capped at MAX_FAVORITES (adding when full is a no-op).
+bool isFavorite(string dir) {
+	import std.algorithm.searching : canFind;
+	return prefs.favorites.canFind(dir);
+}
+
+void toggleFavorite(string dir) {
+	import std.algorithm : countUntil, remove;
+	if(dir.length == 0) return;
+	auto i = prefs.favorites.countUntil(dir);
+	if(i >= 0)
+		prefs.favorites = prefs.favorites.remove(i);
+	else if(prefs.favorites.length < MAX_FAVORITES)
+		prefs.favorites ~= dir;
+	else
+		return;   // full
+	save();
+}
 
 // OS-specific per-user config directory (created on demand), following platform
 // convention: %APPDATA% on Windows, ~/Library/Application Support on macOS,
@@ -85,6 +108,14 @@ void load() {
 		integer("sidModel", prefs.sidModel);
 		integer("filter6581", prefs.filter6581);
 		integer("filter8580", prefs.filter8580);
+		if(auto p = "favorites" in root.object)
+			if(p.type == JSONType.array) {
+				prefs.favorites = [];
+				foreach(v; p.array)
+					if(v.type == JSONType.string
+					   && prefs.favorites.length < MAX_FAVORITES)
+						prefs.favorites ~= v.str;
+			}
 	}
 	catch(Exception e) {
 		stderr.writeln("config: could not read ", path, " (", e.msg,
@@ -106,6 +137,7 @@ void save() {
 			"sidModel":     JSONValue(prefs.sidModel),
 			"filter6581":   JSONValue(prefs.filter6581),
 			"filter8580":   JSONValue(prefs.filter8580),
+			"favorites":    JSONValue(prefs.favorites),
 		];
 		write(configPath(), root.toPrettyString());
 	}
