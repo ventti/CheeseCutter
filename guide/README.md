@@ -466,12 +466,12 @@ listed in the **Navigate** menu and the command palette:
 | <kbd>Insert</kbd> / <kbd>Delete</kbd> | Insert/delete |
 | <kbd>Shift</kbd>-<kbd>Insert</kbd> / <kbd>Shift</kbd>-<kbd>Delete</kbd> | Insert/delete row |
 | <kbd>Enter</kbd> | Pick the current row's instrument as active (any column; empty row does nothing) |
-| <kbd>Ctrl</kbd>-<kbd>Q</kbd>/<kbd>A</kbd> | Transpose semitone up/down |
-| <kbd>Ctrl</kbd>-<kbd>W</kbd>/<kbd>S</kbd> | Transpose octave up/down |
-| <kbd>Ctrl</kbd>-<kbd>.</kbd>/<kbd>,</kbd> | Increase/decrease row highlight |
-| <kbd>Ctrl</kbd>-<kbd>0</kbd> | Reset highlighting to current row |
-| <kbd>Ctrl</kbd>-<kbd>E</kbd> | Toggle row counters |
-| <kbd>Ctrl</kbd>-<kbd>T</kbd> | Toggle relative notes |
+| <kbd>Alt</kbd>-<kbd>Q</kbd>/<kbd>A</kbd> | Transpose semitone up/down |
+| <kbd>Alt</kbd>-<kbd>W</kbd>/<kbd>S</kbd> | Transpose octave up/down |
+| <kbd>Alt</kbd>-<kbd>.</kbd>/<kbd>,</kbd> | Increase/decrease row highlight |
+| <kbd>Alt</kbd>-<kbd>0</kbd> | Reset highlighting to current row |
+| <kbd>Alt</kbd>-<kbd>E</kbd> | Toggle row counters |
+| <kbd>Alt</kbd>-<kbd>T</kbd> | Toggle relative notes |
 | <kbd>Ctrl</kbd>-<kbd>Space</kbd> or <kbd>Ctrl</kbd>-<kbd>K</kbd> | Toggle keyjam (use <kbd>Ctrl</kbd>-<kbd>K</kbd> on macOS, which claims Ctrl-Space) |
 
 ### Block Selection (copy / cut / paste / merge)
@@ -525,7 +525,7 @@ These shortcuts apply in the <kbd>F5</kbd> track column.
 | Hex digits | Edit the transpose/sequence track value |
 | <kbd>Ctrl</kbd>-<kbd>F</kbd> | Find next unused sequence number |
 | <kbd>&lt;</kbd>/<kbd>&gt;</kbd> | Decrease/increase sequence number |
-| <kbd>Ctrl</kbd>-<kbd>Q</kbd>/<kbd>A</kbd> | Transpose active voice tracks from cursor to end up/down |
+| <kbd>Alt</kbd>-<kbd>Q</kbd>/<kbd>A</kbd> | Transpose active voice tracks from cursor to end up/down |
 | <kbd>Insert</kbd> or <kbd>Return</kbd> | Insert a track at the cursor |
 | <kbd>Delete</kbd> or <kbd>Backspace</kbd> | Delete the track at the cursor |
 | <kbd>Ctrl</kbd>-<kbd>Return</kbd> | Insert a track at the end of the active voice and jump there |
