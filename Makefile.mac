@@ -126,6 +126,13 @@ src/c64/player.bin: src/c64/player_v4.acme mkplayer$(EXE)
 	./mkplayer$(EXE) $< $@
 
 src/ct/base.o: src/c64/player.bin
+# player.bin is string-imported by src/ct/base.d, so every module that imports
+# base.d needs it on disk at compile time — not just base.o. Make it an
+# order-only prerequisite of all D objects so parallel (-j) builds assemble it
+# before compiling any of them. C_OBJS are excluded (player.bin -> mkplayer ->
+# C_OBJS would otherwise be a cycle); src/ct2util.o is the only D object not in
+# OBJS.
+$(OBJS) src/ct2util.o: | src/c64/player.bin
 src/ct/build.o: src/c64/player_v4.acme src/c64/ultimate_host.acme
 $(VERSION_USERS): Version
 src/ui/ui.o: src/ui/help.o
