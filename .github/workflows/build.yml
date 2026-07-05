@@ -45,9 +45,6 @@ jobs:
           clang --version | head -1
           make --version | head -1
 
-      - name: Use committed C64 player.bin (no acme on Windows)
-        run: touch src/c64/player.bin
-
       - name: Build
         run: |
           make -f Makefile.win release \
@@ -80,7 +77,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ldc acme libsdl2-dev libcurl4-openssl-dev g++ make
+          sudo apt-get install -y ldc libsdl2-dev libcurl4-openssl-dev g++ make
 
       - name: Build
         run: make -j release
@@ -106,7 +103,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: brew install ldc acme sdl2
+        run: brew install ldc sdl2
 
       - name: Build
         run: make -j -f Makefile.mac release LIBSPATH="$(brew --prefix)/lib"

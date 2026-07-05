@@ -21,8 +21,9 @@
 # at runtime (LoadLibraryA), so the Ultimate-hardware feature only needs a
 # libcurl DLL present at run time -- the editor builds and runs without it.
 #
-# The C64 player.bin is checked in, so CI uses the committed copy and needs no
-# acme on Windows (the workflow touches it to mark it up to date).
+# The C64 player.bin is assembled at build time by `mkplayer` (built from the
+# bundled acme sources in src/asm — the same assembler used for runtime .prg
+# export), so no separately-installed acme is needed on Windows.
 #
 # Override SDL2_INC / SDL2_LIBDIR if your SDL2 dev package lives elsewhere.
 #
@@ -101,7 +102,7 @@ check-map:
 	git diff --exit-code -- doc/ARCHITECTURE.md
 
 clean:
-	rm -f *.o *~ resid/*.o resid-fp/*.o ccutter$(EXE) ct2util$(EXE) \
+	rm -f *.o *~ resid/*.o resid-fp/*.o ccutter$(EXE) ct2util$(EXE) mkplayer$(EXE) \
 		$(C64OBJS) $(OBJS) $(CTOBJS) $(CXX_OBJS) $(UTILOBJS) $(C_OBJS)
 
 dclean: clean
@@ -109,8 +110,14 @@ dclean: clean
 
 # --------------------------------------------------------------------------------
 
-src/c64/player.bin: src/c64/player_v4.acme
-	acme -f cbm --outfile $@ $<
+# Assemble the C64 player with the bundled acme (src/asm) — the same assembler
+# CheeseCutter links in for runtime .prg export — so no separately-installed
+# `acme` is needed on Windows. mkplayer is a tiny host tool over the acme objects.
+mkplayer$(EXE): tools/mkplayer.c $(C_OBJS)
+	$(CC) $(CFLAGS) -o $@ tools/mkplayer.c $(C_OBJS)
+
+src/c64/player.bin: src/c64/player_v4.acme mkplayer$(EXE)
+	./mkplayer$(EXE) $< $@
 
 src/ct/base.o: src/c64/player.bin
 src/ct/build.o: src/c64/player_v4.acme src/c64/ultimate_host.acme

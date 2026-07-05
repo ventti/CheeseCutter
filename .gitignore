@@ -3,6 +3,7 @@
 ccutter
 ct2util
 ccdriver
+mkplayer
 src/c64/player.bin
 *.prg
 *.ct

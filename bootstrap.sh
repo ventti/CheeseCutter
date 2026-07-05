@@ -21,18 +21,6 @@ log_success() { echo -e "${GREEN}✓${NC} $1"; }
 log_warning() { echo -e "${YELLOW}⚠${NC} $1"; }
 log_error()   { echo -e "${RED}✗${NC} $1"; }
 
-# Build acme from source when the platform has no package for it.
-build_acme_from_source() {
-    local prefix="${1:-/usr/local/bin}"
-    log_info "Building acme from source (github.com/meonwax/acme)..."
-    local tmp
-    tmp=$(mktemp -d)
-    git clone --depth 1 https://github.com/meonwax/acme "$tmp/acme"
-    make -C "$tmp/acme/src"
-    sudo cp "$tmp/acme/src/acme" "$prefix/"
-    log_success "acme installed to $prefix"
-}
-
 # --------------------------------------------------------------------------------
 # macOS setup
 # --------------------------------------------------------------------------------
@@ -61,8 +49,8 @@ setup_macos() {
     fi
     log_success "Xcode Command Line Tools found"
 
-    log_info "Installing system dependencies (ldc, acme, sdl2)..."
-    brew install ldc acme sdl2 2>/dev/null || \
+    log_info "Installing system dependencies (ldc, sdl2)..."
+    brew install ldc sdl2 2>/dev/null || \
         log_warning "Some packages may already be installed, continuing..."
     log_success "System dependencies installed"
 
@@ -83,19 +71,13 @@ setup_linux() {
     log_info "Installing system dependencies..."
     if command -v apt-get &> /dev/null; then
         sudo apt-get update
-        sudo apt-get install -y ldc acme libsdl2-dev libcurl4-openssl-dev g++ make git
+        sudo apt-get install -y ldc libsdl2-dev libcurl4-openssl-dev g++ make git
     elif command -v dnf &> /dev/null; then
         sudo dnf install -y ldc SDL2-devel libcurl-devel gcc-c++ make git
-        command -v acme &> /dev/null || build_acme_from_source /usr/local/bin
     elif command -v pacman &> /dev/null; then
         sudo pacman -S --needed --noconfirm ldc sdl2 curl gcc make git
-        command -v acme &> /dev/null || {
-            log_warning "acme not found -- install from the AUR (e.g. 'yay -S acme') or build from source."
-            build_acme_from_source /usr/local/bin
-        }
     else
-        log_error "Unsupported distro. Install manually: ldc acme libsdl2-dev libcurl-dev g++ make git"
-        log_info "acme source: https://github.com/meonwax/acme (make -C src)"
+        log_error "Unsupported distro. Install manually: ldc libsdl2-dev libcurl-dev g++ make git"
         exit 1
     fi
     log_success "System dependencies installed"
@@ -145,13 +127,12 @@ command -v mise &> /dev/null && mise trust 2>/dev/null || true
 echo ""
 log_info "Verifying installations..."
 command -v ldc2 &> /dev/null && log_success "ldc: $(ldc2 --version | head -n1)" || { log_error "ldc2 not found"; exit 1; }
-command -v acme &> /dev/null && log_success "acme: $(command -v acme)"          || { log_error "acme not found"; exit 1; }
 
 # Test build
 echo ""
-log_info "Building C64 player binary..."
+log_info "Building C64 player binary (assembled by mkplayer from the bundled acme)..."
 make "${MAKE_ARGS[@]}" src/c64/player.bin && log_success "player.bin built" \
-    || log_warning "Failed to build player.bin (try again after fixing acme)"
+    || log_warning "Failed to build player.bin"
 
 echo ""
 log_info "Attempting test build..."

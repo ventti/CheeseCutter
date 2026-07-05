@@ -79,7 +79,7 @@ dist:	release
 	tar --transform 's,^\.,cheesecutter-$(VERSION),' -cvf cheesecutter-$(VERSION)-linux-x86.tar.gz $(DIST_FILES)
 
 clean: 
-	rm -f *.o *~ resid/*.o resid-fp/*.o ccutter ct2util \
+	rm -f *.o *~ resid/*.o resid-fp/*.o ccutter ct2util mkplayer$(EXE) \
 		$(C64OBJS) $(OBJS) $(CTOBJS) $(CXX_OBJS) $(UTILOBJS) $(C_OBJS)
 
 dclean: clean
@@ -90,8 +90,14 @@ tar:
 	git archive master --prefix=cheesecutter-$(VERSION)/ | bzip2 > cheesecutter-$(VERSION)-src.tar.bz2
 # --------------------------------------------------------------------------------
 
-src/c64/player.bin: src/c64/player_v4.acme
-	acme -f cbm --outfile $@ $<
+# Assemble the C64 player with the bundled acme (src/asm) — the same assembler
+# CheeseCutter links in for runtime .prg export — so no separately-installed
+# `acme` is needed. mkplayer is a tiny host tool over the acme objects (C_OBJS).
+mkplayer$(EXE): tools/mkplayer.c $(C_OBJS)
+	$(CC) $(CFLAGS) -o $@ tools/mkplayer.c $(C_OBJS)
+
+src/c64/player.bin: src/c64/player_v4.acme mkplayer$(EXE)
+	./mkplayer$(EXE) $< $@
 
 src/ct/base.o: src/c64/player.bin
 src/ct/build.o: src/c64/player_v4.acme src/c64/ultimate_host.acme

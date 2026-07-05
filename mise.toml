@@ -7,7 +7,7 @@
 #   mise run run       # build and run
 # See doc/BUILD.md for the full cross-platform guide.
 #
-# mise here is a TASK RUNNER, not a version manager: ldc/SDL2/acme/curl have no
+# mise here is a TASK RUNNER, not a version manager: ldc/SDL2/curl have no
 # clean mise backend, so they come from the system package manager (Homebrew on
 # macOS, apt/dnf/pacman on Linux, MSYS2 pacman on Windows). There is therefore no
 # [tools] section and `mise install` is intentionally a no-op -- use `mise run
@@ -15,8 +15,6 @@
 #
 # Toolchain per platform (installed by `mise run setup`):
 # - ldc       D compiler (LLVM-based)
-# - acme      6502 assembler, for src/c64/player.bin  (build from source if the
-#             distro has no package -- see setup-linux / bootstrap-windows.sh)
 # - SDL2      macOS: sdl2 | Linux: libsdl2-dev | Windows: mingw-w64-x86_64-SDL2
 # - libcurl   macOS: bundled | Linux: libcurl*-dev | Windows: mingw-w64-x86_64-curl
 # - make/gcc/g++  macOS: xcode-select --install
@@ -126,7 +124,7 @@ fi
 """
 
 [tasks.setup-macos]
-description = "Install macOS system dependencies via Homebrew (ldc, acme, sdl2)"
+description = "Install macOS system dependencies via Homebrew (ldc, sdl2)"
 run = """
 #!/usr/bin/env bash
 set -e
@@ -134,8 +132,8 @@ if ! command -v brew &> /dev/null; then
   echo "Homebrew not found. Please install it from https://brew.sh"
   exit 1
 fi
-echo "Installing system dependencies (ldc, acme, sdl2)..."
-brew install ldc acme sdl2
+echo "Installing system dependencies (ldc, sdl2)..."
+brew install ldc sdl2
 echo "Done! Now run 'mise run build' to build CheeseCutter."
 """
 
@@ -146,27 +144,13 @@ run = """
 set -e
 if command -v apt-get &> /dev/null; then
   sudo apt-get update
-  sudo apt-get install -y ldc acme libsdl2-dev libcurl4-openssl-dev g++ make git
+  sudo apt-get install -y ldc libsdl2-dev libcurl4-openssl-dev g++ make git
 elif command -v dnf &> /dev/null; then
-  # Fedora has no acme package -- it is built from source below.
   sudo dnf install -y ldc SDL2-devel libcurl-devel gcc-c++ make git
-  if ! command -v acme &> /dev/null; then
-    echo "acme not packaged -- building from source..."
-    tmp=$(mktemp -d)
-    git clone --depth 1 https://github.com/meonwax/acme "$tmp/acme"
-    make -C "$tmp/acme/src"
-    sudo cp "$tmp/acme/src/acme" /usr/local/bin/
-  fi
 elif command -v pacman &> /dev/null; then
-  # acme lives in the AUR; install it with your AUR helper if pacman misses it.
   sudo pacman -S --needed --noconfirm ldc sdl2 curl gcc make git || true
-  if ! command -v acme &> /dev/null; then
-    echo "acme not found -- install it from the AUR (e.g. 'yay -S acme') or build"
-    echo "it from https://github.com/meonwax/acme (make -C src)."
-  fi
 else
-  echo "Unknown distro. Install manually: ldc acme libsdl2-dev libcurl-dev g++ make git"
-  echo "(acme source: https://github.com/meonwax/acme -- make -C src)"
+  echo "Unknown distro. Install manually: ldc libsdl2-dev libcurl-dev g++ make git"
   exit 1
 fi
 echo "Done! Now run 'mise run build' to build CheeseCutter."
@@ -184,14 +168,6 @@ fi
 pacman -S --needed --noconfirm make git \\
   mingw-w64-x86_64-ldc mingw-w64-x86_64-gcc \\
   mingw-w64-x86_64-SDL2 mingw-w64-x86_64-curl
-# acme is not a mingw package -- build it from source.
-if ! command -v acme &> /dev/null; then
-  tmp=$(mktemp -d)
-  git clone --depth 1 https://github.com/meonwax/acme "$tmp/acme"
-  make -C "$tmp/acme/src"
-  cp "$tmp/acme/src/acme.exe" /mingw64/bin/ 2>/dev/null || cp "$tmp/acme/src/acme" /mingw64/bin/acme.exe
-fi
-acme --version
 echo "Done! Now run 'mise run build-win' to build CheeseCutter."
 """
 

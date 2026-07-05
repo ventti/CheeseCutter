@@ -13,7 +13,7 @@ Every platform needs the same four things:
 | Component | macOS (Homebrew) | Linux (apt/dnf/pacman) | Windows (LLVM/MSVC) |
 |-----------|------------------|------------------------|---------------------|
 | D compiler | `ldc` | `ldc` | `ldc` (official build, MSVC-target) |
-| 6502 assembler | `acme` | `acme` * | not needed † |
+| 6502 assembler | bundled † | bundled † | bundled † |
 | SDL2 | `sdl2` | `libsdl2-dev` / `SDL2-devel` / `sdl2` | `sdl2:x64-windows` (vcpkg) |
 | libcurl | (bundled) | `libcurl4-openssl-dev` / `libcurl-devel` / `curl` | runtime only ‡ |
 
@@ -21,24 +21,16 @@ Plus a C/C++ toolchain (`gcc`/`g++`/`clang`) and `make`. On Windows the C/C++
 (reSID) sources are built with **clang**, which defaults to the
 `x86_64-pc-windows-msvc` target and so links cleanly with the MSVC-target `ldc2`.
 
-† The committed `src/c64/player.bin` is used as-is on Windows, so no acme is
-needed there. ‡ libcurl is not linked — Phobos `std.net.curl` loads it at
-runtime via `LoadLibraryA`, so it is only needed (as a DLL on `PATH`) if you use
-the Ultimate-hardware playback feature.
+† The 6502 assembler (**acme**, by Marco Baye) is bundled as source in `src/asm/`
+— the same assembler CheeseCutter links in for runtime `.prg` export. The build
+compiles a tiny `mkplayer` host tool from it and assembles `src/c64/player.bin`
+with that, so **no separately-installed acme is needed on any platform**.
+‡ libcurl is not linked — Phobos `std.net.curl` loads it at runtime via
+`LoadLibraryA`, so it is only needed (as a DLL on `PATH`) if you use the
+Ultimate-hardware playback feature.
 
-\* **acme** is packaged on Debian/Ubuntu and Homebrew, but **not** on Fedora or
-Arch (AUR only). Where it is missing, build it from source — the setup scripts
-do this automatically (it is not needed on Windows, which uses the committed
-`player.bin`):
-
-```sh
-git clone --depth 1 https://github.com/meonwax/acme /tmp/acme
-make -C /tmp/acme/src
-# then copy /tmp/acme/src/acme (or acme.exe) onto your PATH
-```
-
-`acme` assembles `src/c64/player.bin`; the D/C/C++ sources are then compiled and
-linked into `ccutter` (the editor) and `ct2util` (the CLI converter).
+`mkplayer` assembles `src/c64/player.bin`; the D/C/C++ sources are then compiled
+and linked into `ccutter` (the editor) and `ct2util` (the CLI converter).
 
 ---
 
@@ -47,9 +39,9 @@ linked into `ccutter` (the editor) and `ct2util` (the CLI converter).
 **Quick start:**
 
 ```sh
-./bootstrap.sh        # installs Homebrew, ldc/acme/sdl2, mise; does a test build
+./bootstrap.sh        # installs Homebrew, ldc/sdl2, mise; does a test build
 # or, if you already have Homebrew + mise:
-mise run setup        # brew install ldc acme sdl2
+mise run setup        # brew install ldc sdl2
 mise run build        # build (also refreshes doc/ARCHITECTURE.md)
 mise run run          # build and run
 ```
@@ -57,7 +49,7 @@ mise run run          # build and run
 **Manual:**
 
 ```sh
-brew install ldc acme sdl2
+brew install ldc sdl2
 make -f Makefile.mac LIBSPATH=/opt/homebrew/lib   # Apple Silicon
 make -f Makefile.mac LIBSPATH=/usr/local/lib      # Intel
 ```
@@ -83,12 +75,12 @@ mise run run
 
 ```sh
 # Debian / Ubuntu
-sudo apt-get install -y ldc acme libsdl2-dev libcurl4-openssl-dev g++ make git
+sudo apt-get install -y ldc libsdl2-dev libcurl4-openssl-dev g++ make git
 
-# Fedora  (acme is built from source — see the acme note above)
+# Fedora
 sudo dnf install -y ldc SDL2-devel libcurl-devel gcc-c++ make git
 
-# Arch  (acme is in the AUR: e.g. `yay -S acme`)
+# Arch
 sudo pacman -S --needed ldc sdl2 curl gcc make git
 ```
 
@@ -170,9 +162,10 @@ the Releases UI); the version comes from the repo-root `Version` file.
 - **Link error: undefined `curl_*`** (macOS/Linux only) → install the libcurl
   dev package (`libcurl4-openssl-dev` / `libcurl-devel`). On Windows curl is not
   linked (Phobos loads it at runtime).
-- **`acme: command not found`** (macOS/Linux) → install acme or build it from
-  source (see the acme note at the top). Not needed on Windows — the committed
-  `player.bin` is used.
+- **Player build fails / `mkplayer` errors** → `src/c64/player.bin` is assembled
+  at build time by `mkplayer`, compiled from the bundled acme sources in
+  `src/asm`. It just needs the C toolchain (`gcc`/`clang`); no external acme is
+  required on any platform.
 - **Windows: `clang` not found** → install LLVM (`choco install llvm`) or use the
   clang that ships with Visual Studio; `Makefile.win` builds the reSID C/C++
   sources with clang so they match the MSVC-target `ldc2`.
