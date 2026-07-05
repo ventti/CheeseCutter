@@ -112,7 +112,12 @@ abstract class Video {
 	// first/last `edgeMargin` columns use `edgeCol` (a dim fade at the window
 	// edges). Re-set every frame while the scope is open; clearScopeTrace()
 	// removes it. Base no-ops; only the SDL renderer subclass draws.
-	void setScopeTrace(int x0, int[] ys, int col, int edgeCol, int edgeMargin) {}
+	void setScopeTrace(int x0, int midY, int[] ys, int col, int edgeCol, int edgeMargin) {}
+	// Overlay a recorded-waveform envelope (keyjam view): per column a min/max
+	// vertical bar (`lo`/`hi` screen-pixel y), a pixel center line at `midY`, and
+	// a thin gate on/off bar at `gateY` (`gate[i]` != 0 = gate on). Base no-op.
+	void setScopeEnvelope(int x0, int midY, int gateY, int[] lo, int[] hi,
+						   ubyte[] gate, int col, int axisCol, int gateCol) {}
 	void clearScopeTrace() {}
 
 	abstract protected void enableFullscreen(bool fs);
@@ -193,28 +198,72 @@ class VideoStandard : Video {
 	// both updateFrame() and saveScreenshot() composite it identically, on top
 	// of the text grid. scopeActive also forces updateFrame() to re-render even
 	// when the text grid itself hasn't changed (the trace moves every frame).
-	private bool scopeActive;
+	private bool scopeActive, scopeIsEnvelope;
 	private int scopeX0, scopeCol, scopeEdgeCol, scopeEdgeMargin;
+	private int scopeMidY, scopeGateY, scopeGateCol;
 	private int[] scopeYs;
+	private int[] scopeLo, scopeHi;
+	private ubyte[] scopeGate;
 
-	override void setScopeTrace(int x0, int[] ys, int col, int edgeCol, int edgeMargin) {
-		scopeX0 = x0; scopeCol = col; scopeEdgeCol = edgeCol; scopeEdgeMargin = edgeMargin;
+	override void setScopeTrace(int x0, int midY, int[] ys, int col, int edgeCol, int edgeMargin) {
+		scopeX0 = x0; scopeMidY = midY; scopeCol = col; scopeEdgeCol = edgeCol; scopeEdgeMargin = edgeMargin;
 		// Copy into our own buffer: the caller reuses its array next frame.
 		scopeYs.length = ys.length;
 		scopeYs[] = ys[];
+		scopeIsEnvelope = false;
+		scopeActive = true;
+	}
+
+	override void setScopeEnvelope(int x0, int midY, int gateY, int[] lo, int[] hi,
+								   ubyte[] gate, int col, int axisCol, int gateCol) {
+		scopeX0 = x0; scopeMidY = midY; scopeGateY = gateY;
+		scopeCol = col; scopeEdgeCol = axisCol; scopeGateCol = gateCol;
+		scopeLo.length = lo.length; scopeLo[] = lo[];
+		scopeHi.length = hi.length; scopeHi[] = hi[];
+		scopeGate.length = gate.length; scopeGate[] = gate[];
+		scopeIsEnvelope = true;
 		scopeActive = true;
 	}
 
 	override void clearScopeTrace() { scopeActive = false; }
 
 	private void drawScopeTrace() {
-		if(!scopeActive || scopeYs.length < 2) return;
+		if(!scopeActive) return;
+		if(scopeIsEnvelope) { drawScopeEnvelope(); return; }
+		if(scopeYs.length < 2) return;
 		immutable int n = cast(int)scopeYs.length;
+		// Pixel center line (zero axis) under the trace.
+		SDL_SetRenderDrawColor(renderer, PALETTE[scopeEdgeCol].r, PALETTE[scopeEdgeCol].g, PALETTE[scopeEdgeCol].b, 255);
+		SDL_RenderDrawLine(renderer, scopeX0, scopeMidY, scopeX0 + n - 1, scopeMidY);
 		foreach(i; 1 .. n) {
 			int ci = (i < scopeEdgeMargin || i >= n - scopeEdgeMargin)
 				? scopeEdgeCol : scopeCol;
 			SDL_SetRenderDrawColor(renderer, PALETTE[ci].r, PALETTE[ci].g, PALETTE[ci].b, 255);
 			SDL_RenderDrawLine(renderer, scopeX0 + i - 1, scopeYs[i-1], scopeX0 + i, scopeYs[i]);
+		}
+	}
+
+	// Recorded-waveform (keyjam) draw: center line, per-column min/max bars, and
+	// a gate on/off bar along the top.
+	private void drawScopeEnvelope() {
+		immutable int n = cast(int)scopeLo.length;
+		if(n < 1) return;
+		void setcol(int c) {
+			SDL_SetRenderDrawColor(renderer, PALETTE[c].r, PALETTE[c].g, PALETTE[c].b, 255);
+		}
+		// Pixel center line (zero axis).
+		setcol(scopeEdgeCol);
+		SDL_RenderDrawLine(renderer, scopeX0, scopeMidY, scopeX0 + n - 1, scopeMidY);
+		// Min/max envelope bars.
+		setcol(scopeCol);
+		foreach(i; 0 .. n)
+			SDL_RenderDrawLine(renderer, scopeX0 + i, scopeLo[i], scopeX0 + i, scopeHi[i]);
+		// Gate on/off indicator: a thin bar at the top, drawn only where gate on.
+		setcol(scopeGateCol);
+		immutable int gn = cast(int)scopeGate.length;
+		foreach(i; 0 .. n) {
+			if(i < gn && scopeGate[i])
+				SDL_RenderDrawLine(renderer, scopeX0 + i, scopeGateY, scopeX0 + i, scopeGateY + 2);
 		}
 	}
 

@@ -26,6 +26,37 @@ __gshared private int bufferUsed; // in samples
 __gshared private int callbackInterval;
 __gshared short* mixbuf = null;
 
+// --- Keyjam note capture (for the oscilloscope's recorded-waveform view) ---
+// A few seconds of the reSID mix output, recorded from a keyjam note-on, plus a
+// per-frame gate-bit timeline of the played voice. Written by the audio callback
+// (audio_callback_2), read by the UI scope draw. No lock — like sidreg, minor
+// tearing between the two threads is visually harmless.
+enum CAPTURE_SECONDS = 3;
+__gshared short[] captureBuf;      // recorded samples
+__gshared ubyte[] captureGate;     // gate bit (0/1), one per captureFrameSamples block
+__gshared int captureCap;          // buffer capacity in samples
+__gshared int captureLen;          // samples recorded so far
+__gshared int captureGateLen;      // gate entries recorded so far
+__gshared bool capturing;
+__gshared int captureVoice;        // SID voice (0..2) whose gate we track
+__gshared int captureFrameSamples; // samples per gate entry (= callbackInterval)
+
+// Begin recording the given voice's keyjam note from scratch.
+void captureStart(int voice) {
+	int cap = freq * CAPTURE_SECONDS;
+	if(cast(int)captureBuf.length != cap) {
+		captureBuf.length = cap;
+		captureGate.length = cap / (freq / 50) + 4;   // one per frame block
+	}
+	captureCap = cap;
+	captureLen = 0;
+	captureGateLen = 0;
+	captureVoice = (voice < 0 || voice > 2) ? 0 : voice;
+	captureFrameSamples = callbackInterval > 0 ? callbackInterval : (freq / framerate);
+	capturing = true;
+}
+void captureStop() nothrow { capturing = false; }
+
 
 extern(C) {
 	extern __gshared char[0x19] sidreg;
@@ -148,7 +179,18 @@ extern(C) {
             return;
         }
 		while((bufferUsed + callbackInterval) <= bufferSize * MIXBUF_MUL) {
+			int prevUsed = bufferUsed;
 			t = sid_fillbuffer(mixbuf+bufferUsed, callbackInterval, cyclesPerFrame);
+			// Record the fresh block into the keyjam capture (samples + gate bit).
+			if(capturing && captureLen < captureCap) {
+				int n = t;
+				if(captureLen + n > captureCap) n = captureCap - captureLen;
+				memcpy(captureBuf.ptr + captureLen, mixbuf + prevUsed, n * short.sizeof);
+				captureLen += n;
+				if(captureGateLen < cast(int)captureGate.length)
+					captureGate[captureGateLen++] = cast(ubyte)(sidreg[4 + captureVoice*7] & 1);
+				if(captureLen >= captureCap) capturing = false;
+			}
 			bufferUsed += t;
 			(*callback)();
 		}

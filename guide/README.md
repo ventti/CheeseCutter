@@ -673,31 +673,32 @@ The first chord set is used as the swing tempo program when song speed is 0 or
 ## Oscilloscope
 
 Press <kbd>Shift</kbd>-<kbd>F12</kbd> (or **View → Oscilloscope**) to toggle a
-framed overlay that draws the **combined** synthesized audio waveform — the mono
-mix of all three SID voices, exactly the signal reSID sends to the sound card. It
-updates live while a song plays and while you keyjam. The trace is drawn
-**pixel-sharp** (a screen-resolution polyline), not quantized to text cells.
+framed overlay. It has two modes, drawn pixel-sharp (a real polyline / envelope
+and a drawn zero line, not text-cell graphics):
+
+- **Song playback** — a live **combined** trace: the mono mix of all three SID
+  voices, exactly the signal reSID sends to the sound card, scrolling in real time.
+- **Keyjam** — a **recorded-note waveform** (like an audio editor): each struck
+  note is recorded and drawn as a min/max amplitude **envelope** over its whole
+  duration, so you can see attack/decay/sustain/release, modulation and how one
+  instrument compares to another. A thin **gate on/off bar** along the top shows
+  where the note's gate is held versus released. Playing another note records
+  afresh.
 
 Unlike the Load/Save/Export dialogs, the oscilloscope is **non-modal**: it floats
 over the editor without stealing the keyboard, so playback controls and keyjam
 keep working with it open. Press <kbd>Shift</kbd>-<kbd>F12</kbd> again to hide it.
 
-While a keyjam note is held, adjust its timebase with <kbd>Alt</kbd>-<kbd>↑</kbd>
-(zoom in — shorter timespan, more detail) and <kbd>Alt</kbd>-<kbd>↓</kbd> (zoom
-out — longer timespan, more of the waveform); the status line reports the span in
-samples. Zoom applies only to the held keyjam note — the live playback trace has a
-fixed timespan.
+The keyjam waveform auto-fits the **whole note** by default; zoom its timebase
+with <kbd>Alt</kbd>-<kbd>↑</kbd> (in — shorter window, more detail) and
+<kbd>Alt</kbd>-<kbd>↓</kbd> (out — back toward the whole note). The zoom is
+remembered for the session; the status line reports the current factor. Zoom
+applies only to the keyjam waveform — the live playback trace has a fixed timespan.
 
 Notes and quirks:
 
-- During song playback it animates live. During **keyjam** it instead
-  *captures and holds* the struck note's waveform: it freezes the trace and keeps
-  it shown until you play another note (which re-captures) or close the scope — so
-  you can study a single note's shape at rest. Keyjam defaults to a wider timespan
-  than playback (more cycles of the held note), adjustable with
-  <kbd>Alt</kbd>-<kbd>↑</kbd>/<kbd>↓</kbd>.
-- It shows the waveform whenever audio is playing or keyjamming; when nothing is
-  sounding only the (grey) zero axis is drawn.
+- The keyjam recording captures the first few seconds of the note; a decaying note
+  shows its tail fading to the zero line, a sustained one stays full.
 - Under the `--vice` / `--ultimate` remote backends the sound is produced on the
   (emulated or real) C64, but the local reSID engine is kept running silently, so
   the scope still shows an approximation of the output.

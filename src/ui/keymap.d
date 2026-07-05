@@ -464,15 +464,17 @@ void registerShortcuts(UI ui) {
 			return;
 		}
 		scopeWindow.zoom(dir);
-		UI.statusline.display(format("Oscilloscope keyjam span: %d samples.", scopeWindow.nominalSpan()));
+		int f = scopeWindow.zoomFactor();
+		UI.statusline.display(f <= 1 ? "Keyjam waveform: whole note."
+									 : format("Keyjam waveform zoom: %dx.", f));
 	}
 	sm.register("scope_zoom_in", Ctx.global, "Display",
-				"Oscilloscope: zoom in on the held keyjam note (shorter timespan)", SDLK_UP, KMOD_ALT, {
-		scopeZoom(-1);
+				"Oscilloscope: zoom in on the recorded keyjam note (shorter window)", SDLK_UP, KMOD_ALT, {
+		scopeZoom(+1);
 	});
 	sm.register("scope_zoom_out", Ctx.global, "Display",
-				"Oscilloscope: zoom out on the held keyjam note (longer timespan)", SDLK_DOWN, KMOD_ALT, {
-		scopeZoom(+1);
+				"Oscilloscope: zoom out toward the whole recorded keyjam note", SDLK_DOWN, KMOD_ALT, {
+		scopeZoom(-1);
 	});
 
 	// Dialogs

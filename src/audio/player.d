@@ -82,6 +82,7 @@ void playNote(Element emt) {
 	if(playstatus == Status.Play) return;
 	keyjamNoteTrigger++;   // signal the oscilloscope to re-capture this note
 	int v = seq.sequencer.activeVoiceNum;
+	audio.audio.captureStart(v);   // record this note for the oscilloscope view
 
 	// no audio reset if already inited
 	if(playstatus != Status.Keyjam) {
@@ -178,6 +179,7 @@ void start() {
 void stop() nothrow {
 	playstatus = Status.Stop;
 	muteSID(1,1,1);
+	audio.audio.captureStop();   // end any keyjam note recording
 	if(audio.remote.isActive()) audio.remote.cmdStop();
 }
 

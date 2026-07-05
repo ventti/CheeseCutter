@@ -14,8 +14,8 @@ _Generated from the shortcut registry (com.shortcuts)._
 
 | Shortcut | Action |
 |---|---|
-| `Alt-Up` | Oscilloscope: zoom in on the held keyjam note (shorter timespan) |
-| `Alt-Down` | Oscilloscope: zoom out on the held keyjam note (longer timespan) |
+| `Alt-Up` | Oscilloscope: zoom in on the recorded keyjam note (shorter window) |
+| `Alt-Down` | Oscilloscope: zoom out toward the whole recorded keyjam note |
 | `Ctrl-F12` | Save screenshot |
 | `Alt-Return` | Toggle fullscreen |
 | `Alt-H` | Toggle help texts |
