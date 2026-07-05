@@ -93,8 +93,10 @@ tar:
 # Assemble the C64 player with the bundled acme (src/asm) — the same assembler
 # CheeseCutter links in for runtime .prg export — so no separately-installed
 # `acme` is needed. mkplayer is a tiny host tool over the acme objects (C_OBJS).
+# -lm: acme's alu.c references libm (sin/cos/pow/…); on Linux these live in
+# libm and must be linked explicitly (macOS/Windows fold them into the CRT).
 mkplayer$(EXE): tools/mkplayer.c $(C_OBJS)
-	$(CC) $(CFLAGS) -o $@ tools/mkplayer.c $(C_OBJS)
+	$(CC) $(CFLAGS) -o $@ tools/mkplayer.c $(C_OBJS) -lm
 
 src/c64/player.bin: src/c64/player_v4.acme mkplayer$(EXE)
 	./mkplayer$(EXE) $< $@
