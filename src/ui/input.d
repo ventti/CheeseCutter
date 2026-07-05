@@ -761,19 +761,36 @@ class InputCmd : ExtendedInput {
 class InputNote : ExtendedInput {
 	InputKeyjam keyjam;
 	private bool noteStarted = false;
+	// Physical note keys currently held down (raw keycodes). Lets us ignore
+	// auto-repeat (a held key resends SDL_KEYDOWN) so it doesn't retrigger, and
+	// gate off only when the *last* key is released.
+	private int[] heldKeys;
 
 	this(ValueChangedCallback cb) {
 		super(1, cb);
 		keyjam = new InputKeyjam();
 	}
 
-	override int keyrelease(Keyinfo key) {
+	private void gateOff() {
 		import audio.player;
-		if(!noteStarted || audio.player.getPlaystatus() == Status.Play)
-			return OK;
-		noteStarted = false;
 		Element emt = Element([0x00,cast(ubyte)(0xc0+state.activeInstrument),1]);
 		audio.player.playNote(emt);
+	}
+
+	override int keyrelease(Keyinfo key) {
+		import audio.player;
+		// Drop the released key from the held set (ignore keys we weren't tracking).
+		ptrdiff_t idx = -1;
+		foreach(i, k; heldKeys) if(k == key.raw) { idx = cast(ptrdiff_t)i; break; }
+		if(idx < 0) return OK;
+		heldKeys = heldKeys[0 .. idx] ~ heldKeys[idx + 1 .. $];
+		if(!noteStarted || audio.player.getPlaystatus() == Status.Play)
+			return OK;
+		// Release (gate off) only once the last held note key is up.
+		if(heldKeys.length == 0) {
+			noteStarted = false;
+			gateOff();
+		}
 		return OK;
 	}
 
@@ -818,8 +835,14 @@ class InputNote : ExtendedInput {
 		// r will be > 0 (in 'wrap') if valid data was entered
 		if(r) {
 			keyjam.element.transpose = element.transpose;
-			keyjam.keypress(key);
-
+			// Ignore auto-repeat: a key held down resends SDL_KEYDOWN, which must
+			// not retrigger the note. Only an unheld key plays.
+			bool repeat = false;
+			foreach(k; heldKeys) if(k == key.raw) { repeat = true; break; }
+			if(!repeat) {
+				heldKeys ~= key.raw;
+				keyjam.keypress(key);
+			}
 			noteStarted = true;
 		}
 		// no cache for notecolumn

@@ -697,8 +697,10 @@ applies only to the keyjam waveform — the live playback trace has a fixed time
 
 Notes and quirks:
 
-- The keyjam recording captures the first few seconds of the note; a decaying note
-  shows its tail fading to the zero line, a sustained one stays full.
+- The keyjam recording captures the note from the key press until it decays to
+  silence (or a few seconds' cap). A held key **sustains** without retriggering;
+  **releasing** the key gates the note off, so its release tail is recorded and the
+  waveform ends there.
 - Under the `--vice` / `--ultimate` remote backends the sound is produced on the
   (emulated or real) C64, but the local reSID engine is kept running silently, so
   the scope still shows an approximation of the output.

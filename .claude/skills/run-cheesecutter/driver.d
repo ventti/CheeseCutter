@@ -90,6 +90,23 @@ private void press(string spec) {
 	mainui.update();
 }
 
+// Mirror an SDL_KEYUP (key release) — for testing keyjam gate-off / held-key logic.
+private void release(string spec) {
+	int mods = 0;
+	for(;;) {
+		if(spec.startsWith("Ctrl-"))  { mods |= KMOD_LCTRL;  spec = spec[5..$]; }
+		else if(spec.startsWith("Alt-"))   { mods |= KMOD_LALT;   spec = spec[4..$]; }
+		else if(spec.startsWith("Shift-")) { mods |= KMOD_LSHIFT; spec = spec[6..$]; }
+		else break;
+	}
+	int sym = keyName(spec);
+	int uni = (sym >= 0 && sym <= 127) ? sym : 0;
+	auto k = Keyinfo(sym, mods, uni);
+	com.kbd.translate(k);
+	mainui.keyrelease(k);
+	mainui.update();
+}
+
 private void dumpState() {
 	stderr.writefln("state: title='%s' author='%s' seqs=%d playing=%s exitRequested=%s octave=%d speed=%d mult=%d",
 		(cast(string)song.title).strip, (cast(string)song.author).strip,
@@ -203,6 +220,10 @@ private bool processCommand(string arg) {
 		case "key":
 			press(val);
 			stderr.writefln("key %s", val);
+			break;
+		case "keyup":
+			release(val);
+			stderr.writefln("keyup %s", val);
 			break;
 		case "click": {
 			// click:CX,CY[,BUTTON[,CLICKS]] — coords in character cells, like

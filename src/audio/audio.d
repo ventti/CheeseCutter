@@ -40,6 +40,7 @@ __gshared int captureGateLen;      // gate entries recorded so far
 __gshared bool capturing;
 __gshared int captureVoice;        // SID voice (0..2) whose gate we track
 __gshared int captureFrameSamples; // samples per gate entry (= callbackInterval)
+__gshared int captureSilenceRun;   // consecutive near-silent samples recorded
 
 // Begin recording the given voice's keyjam note from scratch.
 void captureStart(int voice) {
@@ -51,6 +52,7 @@ void captureStart(int voice) {
 	captureCap = cap;
 	captureLen = 0;
 	captureGateLen = 0;
+	captureSilenceRun = 0;
 	captureVoice = (voice < 0 || voice > 2) ? 0 : voice;
 	captureFrameSamples = callbackInterval > 0 ? callbackInterval : (freq / framerate);
 	capturing = true;
@@ -189,7 +191,18 @@ extern(C) {
 				captureLen += n;
 				if(captureGateLen < cast(int)captureGate.length)
 					captureGate[captureGateLen++] = cast(ubyte)(sidreg[4 + captureVoice*7] & 1);
-				if(captureLen >= captureCap) capturing = false;
+				// Stop once the note has decayed to silence (after a minimum
+				// record length): the recording ends at the release tail instead
+				// of padding to the full CAPTURE_SECONDS.
+				int peak = 0;
+				for(int k = 0; k < n; k++) {
+					int a = mixbuf[prevUsed + k]; if(a < 0) a = -a;
+					if(a > peak) peak = a;
+				}
+				enum int SILENCE = 200;
+				if(peak < SILENCE) captureSilenceRun += n; else captureSilenceRun = 0;
+				if((captureLen > freq / 4 && captureSilenceRun > freq / 6)
+				   || captureLen >= captureCap) capturing = false;
 			}
 			bufferUsed += t;
 			(*callback)();
