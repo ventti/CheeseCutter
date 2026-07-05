@@ -171,6 +171,20 @@ final class UI {
 		update();
 	}
 	
+	// The exit confirmation shared by Ctrl-Q (exit_app) and the SDL_QUIT path
+	// (window close / macOS Cmd-Q), so Cmd-Q prompts like Ctrl-Q instead of
+	// force-quitting. Public so main.d's event loop can call it.
+	void requestExit() {
+		string msg = state.songModified
+			? "You have unsaved changes. Really exit (y/n)? "
+			: "Really exit (y/n)? ";
+		activateDialog(new ConfirmationDialog(msg, (int param) {
+			if(param != 0) return;
+			audio.player.stop();
+			exitRequested = true;
+		}));
+	}
+
 	package void toggleFollowMode() {
 		if(!audio.player.isPlaying) return;
 		if(toplevel.fplayEnabled()) {
@@ -282,9 +296,13 @@ final class UI {
 				update();  // TESTME: just do video.updateFrame()
 
 				// Apply playback row tinting only when no dialog is covering
-				// the tables. Dialogs must remain visually authoritative.
+				// the tables. Dialogs must remain visually authoritative. In
+				// keyjam mode the ADSR/row tint is suppressed (the keyjam view is
+				// the oscilloscope, and the background carries the mode colour).
 				if(dialog is null) {
-					if(toplevel.followplay && toplevel.fplay) {
+					if(state.keyjamStatus) {
+						// no track tint in keyjam
+					} else if(toplevel.followplay && toplevel.fplay) {
 						toplevel.fplay.renderVisualization();
 					} else if(toplevel.sequencer) {
 						toplevel.sequencer.renderVisualization();
@@ -777,6 +795,8 @@ final class UI {
 /+		doEnable ? com.fb.disableKeyRepeat() :
 			com.fb.enableKeyRepeat();+/
 		state.keyjamStatus = doEnable;
+		com.fb.keyjamBackground = doEnable;   // whole-screen dark-blue keyjam tint
+		refresh();                            // repaint so the tint applies at once
 	}
 
 	void activateInstrumentTable(int ins) {

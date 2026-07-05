@@ -38,9 +38,17 @@ class OscilloscopeWindow : Window {
 	// keeps typical output filling the window while loud signals clip
 	// (real-scope behaviour). Tuned by eye.
 	private enum int FULLSCALE = 12000;
-	// Samples of audio spanned across the window width (~1.3 PAL frames), so the
-	// trace shows enough time to reveal the waveform shape rather than a sliver.
-	private enum int SPAN_SAMPLES = 1280;
+	// Base timespan (samples of audio spanned across the window width) before the
+	// zoom offset is applied. Song playback shows ~1.3 PAL frames; a held keyjam
+	// note gets a wider window by default so more of its cycles are visible.
+	private enum int PLAY_SPAN = 1280;
+	private enum int KEYJAM_SPAN = 4096;
+	private enum int MIN_SPAN = 128;
+	// Zoom offset shared by both modes: >0 widens the timespan (zoom out, span
+	// doubled per step), <0 narrows it (zoom in). Clamped to this range; the
+	// effective span is further clamped to the available buffer.
+	private enum int ZOOM_MAX = 3, ZOOM_MIN = -3;
+	private int zoomShift;
 
 	// Reused per-frame trace buffer (one screen-pixel y per horizontal pixel), so
 	// a live redraw doesn't allocate every frame.
@@ -58,6 +66,21 @@ class OscilloscopeWindow : Window {
 
 	this(Rectangle a) {
 		super(a);
+	}
+
+	// Adjust the keyjam timebase: `dir` > 0 widens the window (zoom out, longer
+	// timespan), `dir` < 0 narrows it (zoom in). Only affects the held keyjam
+	// waveform; playback uses a fixed span.
+	void zoom(int dir) {
+		zoomShift += dir;
+		if(zoomShift > ZOOM_MAX) zoomShift = ZOOM_MAX;
+		if(zoomShift < ZOOM_MIN) zoomShift = ZOOM_MIN;
+	}
+
+	// Nominal keyjam timespan (samples) at the current zoom, for the status line.
+	int nominalSpan() {
+		int s = zoomShift >= 0 ? (KEYJAM_SPAN << zoomShift) : (KEYJAM_SPAN >> (-zoomShift));
+		return s < MIN_SPAN ? MIN_SPAN : s;
 	}
 
 	override void update() {
@@ -122,7 +145,16 @@ class OscilloscopeWindow : Window {
 			lastNoteTrigger = audio.player.keyjamNoteTrigger; // re-arm for later keyjam
 		}
 
-		immutable int span = min(SPAN_SAMPLES, srcsize);
+		// Timespan across the width. Playback uses a fixed span (zooming the live
+		// combined mix isn't meaningful); keyjam holds one note, so it scales its
+		// wider base by the zoom offset. Clamped to the available buffer.
+		int span;
+		if(audio.player.keyjamEnabled())
+			span = zoomShift >= 0 ? (KEYJAM_SPAN << zoomShift) : (KEYJAM_SPAN >> (-zoomShift));
+		else
+			span = PLAY_SPAN;
+		if(span < MIN_SPAN) span = MIN_SPAN;
+		if(span > srcsize) span = srcsize;
 		immutable float stride = wpx > 1 ? cast(float)(span - 1) / (wpx - 1) : 0.0f;
 
 		ys.length = wpx;

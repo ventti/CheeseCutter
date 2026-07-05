@@ -23,6 +23,7 @@ import std.algorithm : max, sort;
 import com.session;      // screen, mainui, state
 import com.shortcuts;
 import com.util;         // APP_VERSION, versionInfo
+import com.palette : Role, idx;
 import ui.input : Keyinfo;
 import ui.ui : UI;
 
@@ -132,6 +133,12 @@ final class MenuBar {
 			int tbg = selected ? 15 : bg;
 			screen.cprint(x, 0, fg, tbg, m.title);
 			x += cast(int)m.title.length + 2;
+		}
+		// Keyjam-mode badge: distinctive yellow text (keyjamTag role) on the
+		// common bar background, right after the menu titles.
+		if(state.keyjamStatus) {
+			screen.cprint(x + 1, 0, idx(Role.keyjamTag), bg, "KEYJAM");
+			x += 8;
 		}
 		// Right-aligned program/version tag: use the fullest name that still
 		// clears the menu titles, shrinking the prefix as space runs out.

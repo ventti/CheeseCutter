@@ -50,6 +50,10 @@ immutable string scrollText =
 int mode; // 0 = compact (default), >0 = wide
 immutable int border = 1;
 private bool isDirty = false;
+// When set, renderGrid draws the black (index 0) cell background as dark blue
+// (index 6) instead — a whole-screen "keyjam active" tint. Set by the UI when
+// keyjam mode toggles (com.fb has no com.session dependency, so it's a flag).
+__gshared bool keyjamBackground = false;
 
 immutable CHECKX = "assert(x >= 0 && x < width);";
 immutable CHECKY = "assert(y >= 0 && y < height);";
@@ -376,6 +380,8 @@ class VideoStandard : Video {
 					bp = &font[a * 16];
 					ufg = (*bptr >> 8) & 0xff;  // 8 bits for fg
 					ubg = (*bptr >> 16) & 0xff; // 8 bits for bg
+                    // Keyjam tint: paint the black background with the keyjam role.
+                    if(keyjamBackground && ubg == 0) ubg = cast(ubyte)idx(Role.keyjamBg);
                     rect.x = x * 8;
                     rect.y = y * FONT_Y;
                     rect.h = FONT_Y;

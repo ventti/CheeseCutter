@@ -60,6 +60,8 @@ enum Role : int {
 	filterCalc,        // filter cutoff being swept/calculated
 	filterEmpty,       // in-song filter row with no active value
 	filterHeader,      // filter table header
+	keyjamBg,          // whole-screen background tint while keyjam mode is active
+	keyjamTag,         // "KEYJAM" mode badge text in the top bar
 }
 
 // JSON key <-> Role. Same rationale as baseColorByName.
@@ -80,6 +82,8 @@ private immutable int[Role.max + 1] defaultRoleBase = [
 	Role.filterCalc:       BaseColor.gray,
 	Role.filterEmpty:      BaseColor.darkgray,
 	Role.filterHeader:     BaseColor.darkgray,
+	Role.keyjamBg:         BaseColor.blue,
+	Role.keyjamTag:        BaseColor.yellow,
 ];
 
 // Built-in RGB values: 0..15 classic C64, 16..31 the mid-blue->black gradient
@@ -135,6 +139,7 @@ shared static this() {
 		"selectionBar": Role.selectionBar, "activeInstrument": Role.activeInstrument,
 		"filterStatic": Role.filterStatic, "filterCalc": Role.filterCalc,
 		"filterEmpty": Role.filterEmpty, "filterHeader": Role.filterHeader,
+		"keyjamBg": Role.keyjamBg, "keyjamTag": Role.keyjamTag,
 	];
 	resetToDefaults();
 }

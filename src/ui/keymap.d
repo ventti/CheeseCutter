@@ -47,14 +47,7 @@ void registerShortcuts(UI ui) {
 	// confirmation dialog guards against an accidental Ctrl-Q.
 	sm.register("exit_app", Ctx.global, "Application",
 				"Quit program", SDLK_q, KMOD_CTRL, {
-		string msg = state.songModified
-			? "You have unsaved changes. Really exit (y/n)? "
-			: "Really exit (y/n)? ";
-		activateDialog(new ConfirmationDialog(msg, (int param) {
-			if(param != 0) return;
-			audio.player.stop();
-			exitRequested = true;
-		}));
+		requestExit();
 	}, "Quit");
 
 	sm.register("toggle_fullscreen", Ctx.global, "Display",
@@ -461,6 +454,26 @@ void registerShortcuts(UI ui) {
 		toggleScope();
 		UI.statusline.display("Oscilloscope " ~ (scopeVisible ? "shown." : "hidden."));
 	});
+	// Oscilloscope keyjam timebase zoom (only meaningful for a held keyjam note;
+	// the live playback mix isn't zoomable). Alt-Up/Down are layout-stable, unlike
+	// bracket keys. Alt-Up zooms in (shorter timespan), Alt-Down zooms out (longer).
+	void scopeZoom(int dir) {
+		if(!scopeVisible) return;
+		if(!audio.player.keyjamEnabled()) {
+			UI.statusline.display("Oscilloscope zoom applies to a held keyjam note.");
+			return;
+		}
+		scopeWindow.zoom(dir);
+		UI.statusline.display(format("Oscilloscope keyjam span: %d samples.", scopeWindow.nominalSpan()));
+	}
+	sm.register("scope_zoom_in", Ctx.global, "Display",
+				"Oscilloscope: zoom in on the held keyjam note (shorter timespan)", SDLK_UP, KMOD_ALT, {
+		scopeZoom(-1);
+	});
+	sm.register("scope_zoom_out", Ctx.global, "Display",
+				"Oscilloscope: zoom out on the held keyjam note (longer timespan)", SDLK_DOWN, KMOD_ALT, {
+		scopeZoom(+1);
+	});
 
 	// Dialogs
 	sm.register("about_dialog", Ctx.global, "Help",
@@ -779,6 +792,8 @@ void applyMenuLabels(UI ui) {
 		setMenuLabel("toggle_help_text", "Help texts");
 		setMenuLabel("toggle_filter_track", "Filter track");
 		setMenuLabel("toggle_oscilloscope", "Oscilloscope");
+		setMenuLabel("scope_zoom_in", "Oscilloscope zoom in");
+		setMenuLabel("scope_zoom_out", "Oscilloscope zoom out");
 		setMenuLabel("screenshot", "Screenshot");
 		setMenuLabel("cycle_visualization", "Visualization");
 		setMenuLabel("dump_frame", "Dump SID frame");

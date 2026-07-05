@@ -682,12 +682,20 @@ Unlike the Load/Save/Export dialogs, the oscilloscope is **non-modal**: it float
 over the editor without stealing the keyboard, so playback controls and keyjam
 keep working with it open. Press <kbd>Shift</kbd>-<kbd>F12</kbd> again to hide it.
 
+While a keyjam note is held, adjust its timebase with <kbd>Alt</kbd>-<kbd>↑</kbd>
+(zoom in — shorter timespan, more detail) and <kbd>Alt</kbd>-<kbd>↓</kbd> (zoom
+out — longer timespan, more of the waveform); the status line reports the span in
+samples. Zoom applies only to the held keyjam note — the live playback trace has a
+fixed timespan.
+
 Notes and quirks:
 
 - During song playback it animates live. During **keyjam** it instead
   *captures and holds* the struck note's waveform: it freezes the trace and keeps
   it shown until you play another note (which re-captures) or close the scope — so
-  you can study a single note's shape at rest.
+  you can study a single note's shape at rest. Keyjam defaults to a wider timespan
+  than playback (more cycles of the held note), adjustable with
+  <kbd>Alt</kbd>-<kbd>↑</kbd>/<kbd>↓</kbd>.
 - It shows the waveform whenever audio is playing or keyjamming; when nothing is
   sounding only the (grey) zero axis is drawn.
 - Under the `--vice` / `--ultimate` remote backends the sound is produced on the

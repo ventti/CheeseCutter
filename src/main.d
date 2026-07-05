@@ -116,7 +116,10 @@ void mainloop(bool verbose) {
 		while(SDL_PollEvent(&evt)) {
 			switch(evt.type) {
 			case SDL_QUIT:
-				quit = true;
+				// Window close / macOS Cmd-Q: don't force-quit — show the same
+				// confirmation Ctrl-Q does. The dialog's "y" sets exitRequested,
+				// which ends the loop (checked after keydown, below).
+				mainui.requestExit();
 				break;
 			case SDL_KEYDOWN:
 				// Erase the focused field's cursor highlight before handling the
