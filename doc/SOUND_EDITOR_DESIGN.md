@@ -438,3 +438,97 @@ draw a continuous per-pixel trace/bar — one column per pixel, not per frame. T
 is exactly the classic oscilloscope's per-pixel min/max approach and remains
 frame-aligned (pixel↔frame is the same mapping the other bands use). Prefer the
 live output for a moving trace when playing; keep capture for a held keyjam note.
+
+---
+
+## 10. Filter semantics colours, resonance-over-time, frequency band, F12 help (2026-07-07 v5)
+
+Still **read-only**. Four user requests.
+
+### 10.1 Filter graph coloured by filter TYPE (mode)
+Colour the filter cutoff graph per frame by the active filter mode (LP/BP/HP
+bits), using the default C64 palette (indices are the standard order in
+`doc/palette.json` `colors`: 0 black,1 white,2 red,3 cyan,4 purple,5 green,6 blue,
+7 yellow,8 orange,9 brown,10 lightred,11 darkgray,12 gray,13 lightgreen,14
+lightblue,15 lightgray). Mapping requested by the user → nearest palette entry:
+
+| Mode        | Requested colour | Palette entry (index) |
+|-------------|------------------|-----------------------|
+| LP          | Red              | red (2)               |
+| HP          | Light Blue       | lightblue (14)        |
+| BP          | Dark Green       | green (5)             |
+| LP+BP       | Light Brown      | orange (8) ≈ #8d5029  |
+| BP+HP       | Cyan             | cyan (3)              |
+| LP+HP       | Magenta          | purple (4) = magenta  |
+| LP+HP+BP    | Mid-gray         | gray (12)             |
+
+(green(5) is the darkest available green; orange(8) is the light-brown-ish tone —
+the two non-exact matches. No mode = filter off → keep the empty/flat band.)
+The mode must be read **per frame** from the filter program (see §10.2 decode),
+so the cutoff fill/line colour can change over time as the mode changes.
+
+### 10.2 Filter resonance as a function of time
+In the filter band, also plot **resonance (0..15) over time** — e.g. a secondary
+line/step (distinct from the cutoff fill, a thin bright overlay) on the same frame
+axis, or a slim sub-lane. Derive resonance per frame from the filter program.
+(Decode of cutoff+mode+resonance+routing per frame comes from the filter-table
+byte semantics — filled in from the mechanism survey; extend the existing
+`simFilter` to return mode + resonance per frame alongside cutoff.)
+
+### 10.3 Frequency/pitch band below ADSR
+Add a new band **directly below ADSR** (band order: Output, ADSR, **Frequency**,
+Pulse, Filter, Wave) on the same shared frame axis. Show the instrument's pitch
+program over time: the per-frame semitone offset from the wave-table transpose/arp
+column (wave1) — absolute notes ($80+) vs relative offsets — as a step graph
+(reuse the per-frame wave sim). During playback the live SID voice frequency
+($D400/1 per voice) may be shown as the playhead reference. Read-only.
+
+### 10.4 Context-specific F12 help for the Sound Editor
+Stop cramming every key into the on-screen title line — shorten that to a minimal
+hint and instead provide a **context help page shown by F12 while the Sound
+Editor is active** (its `Ctx.soundEditor`). Content: jam keys (piano row),
+octave (KP / *), +/- switch instrument, Up/Down move the parameter cursor,
+Ctrl-E exit, F1..F3 play the song (Shift = follow). Wire it through the existing
+help system so F12 in the Sound Editor opens THIS page (mechanism from the
+survey: register a ContextHelp for the context and/or register the actions as
+shortcuts under Ctx.soundEditor so the F12 page + KEYBOARD.md are generated).
+Regenerate `make docs` (KEYBOARD.md + man pages) since shortcut/help data changes.
+
+### 10.5 Verify (v5)
+Clean build. (1) Filter band fill/line colour matches the mode per the table (LP
+red, HP light-blue, etc.), changing over time if the mode changes; (2) resonance
+drawn as a function of time in the filter band; (3) a Frequency band sits below
+ADSR on the shared axis, showing the pitch/arp program, playhead aligned; (4) F12
+while in the Sound Editor shows the sound-editor help page (not the tracker's),
+and the on-screen title line is minimal; (5) instrument switch updates all; (6)
+still read-only. Also `--dump-keys`/man pages regenerated if shortcuts changed.
+
+### 10.6 Implementation notes (from mechanism survey)
+**Filter per-frame decode (extend `simFilter` to return cutoff+res+mode+routing):**
+Row = `filterTable[row*4 .. +4]` = b0..b3.
+- CONFIG row when `b0 & 0x80`: `mode = b0 & 0x70` (0x10=LP, 0x20=BP, 0x40=HP);
+  `resonance = b1 >> 4`; `routing = b1 & 0x0F` (bit0=v1,1=v2,2=v3); if
+  `b2 != 0xFF` `cutoff = b2 << 3`. Emit 1 frame.
+- SWEEP row otherwise: `n = b0 & 0x7F`; `delta = 2 * signed8(b1)` on the 0..2047
+  scale; if `b2 != 0xFF` `cutoff = b2 << 3`; emit frame0 then f in 1..n with
+  `cutoff = clamp(cutoff+delta,0,2047)`. mode/res/routing **persist** (carry the
+  last CONFIG values forward).
+- Advance: `b3==0`→`(row+1)&0x3f`; `b3==0x7F`→stop; `b3<=0x3f`→`b3`; else stop;
+  loop when a row is revisited. (Player: player_v4.acme:1754-1845; existing sim
+  soundedit.d:757-800.)
+Mode(after `&0x70`)→palette colour: 0x10 LP→red(2), 0x20 BP→green(5), 0x40
+HP→lightblue(14), 0x30 LP+BP→orange(8), 0x60 BP+HP→cyan(3), 0x50 LP+HP→purple(4),
+0x70 LP+HP+BP→gray(12), 0x00 none→filter off (empty band).
+
+**F12 help wiring (hand-authored page + window override — cleanest):** the F12
+`help_dialog` action opens `HelpDialog(area, activeWindow.contextHelp)`
+(keymap.d:58-69) — the page comes from the active window's `contextHelp` property
+(window.d:42-81), NOT a contextId table. The Sound Editor's keys aren't registry
+shortcuts, so auto-gen would be empty. Mirror the Sequencer: add
+`ContextHelp HELPSOUNDEDITOR` in `src/ui/help.d` (keep a title != `HELPMAIN.title`
+and the "Press F12 again to see the global help." lead line so dialogs.d:182's
+F12-again→global works), and add `override ContextHelp contextHelp() { return
+ui.help.HELPSOUNDEDITOR; }` to `SoundEditor` (pattern: sequencer.d:1062). Shorten
+the on-screen title line to a minimal hint. (No new registry shortcuts needed, so
+man-page/KEYBOARD regen is optional — but run `make docs`+`make map` anyway to
+stay in sync.)

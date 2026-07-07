@@ -33,7 +33,7 @@ Editing byte-parity is P4+ (out of scope this run) — DO NOT implement editing.
 ## Agent strategy
 - Dedicated agents scaffolded in `.claude/agents/`.
 
-## Status: P1–P3 COMPLETE + independently verified. v2 LAYOUT (§7) committed (4f588d6). v3 (§8) committed (be8e371). v4 (§9) graph-sync + bit-lane wave + restart pre-roll + pixel-perfect output implemented (read-only) — awaiting verify. P4–P6 (editing/write-back, mouse, docs polish) NOT started.
+## Status: P1–P3 COMPLETE + independently verified. v2 LAYOUT (§7) committed (4f588d6). v3 (§8) committed (be8e371). v4 (§9) committed (f0aae3f). v5 (§10) filter-type colours + resonance-over-time overlay + frequency/arp band below ADSR + context F12 help implemented (read-only) — awaiting verify. P4–P6 (editing/write-back, mouse, docs polish) NOT started.
 Commits on feat/sound-editor: 85ccd8e (P1), e8a0f39 (P2), bee75eb (P3), 41a8e65 (checkpoint). v2 relayout uncommitted (loop orchestrator commits).
 
 Tech-debt to address in P6 polish (non-blocking, from verifiers):
@@ -358,4 +358,70 @@ Tech-debt to address in P6 polish (non-blocking, from verifiers):
     NO writes to song.instrumentTable/waveTable/pulseTable/filterTable.
   - Regenerated `make map` (module synopsis updated to v4); `make check-map` clean. No
     shortcut/CLI/flag added, so no KEYBOARD.md / man-page regen.
+    NOT done: data editing / write-back / undo (P4+, still read-only).
+- (v5 FILTER-TYPE COLOURS + RESONANCE-OVER-TIME + FREQUENCY BAND + CONTEXT F12 HELP,
+  §10 2026-07-07) Still READ-ONLY. Files: `src/ui/soundedit.d` (all four features),
+  `src/ui/help.d` (new HELPSOUNDEDITOR page). Regenerated doc/ARCHITECTURE.md.
+  - **§10.1 filter coloured by TYPE per frame.** Extended `simFilter` (per §10.6) to
+    carry per-frame mode/res/routing in `SweepSim.modeOf/resOf/routeOf`: a CONFIG row
+    (b0&0x80) sets `mode=b0&0x70`, `res=b1>>4`, `routing=b1&0x0F`, cutoff=b2<<3 (if
+    b2!=0xFF); a SWEEP row sweeps cutoff (n=b0&0x7F, delta=2*signed8(b1)) with mode/res/
+    routing PERSISTING from the last config row. New `drawFilterBand` colours the cutoff
+    fill+top-line PER FRAME via `filterModeColor(mode&0x70)`: 0x10 LP→red(2), 0x20 BP→
+    green(5), 0x40 HP→lblu(14), 0x30 LP+BP→orange(8), 0x60 BP+HP→cyan(3), 0x50 LP+HP→
+    purple(4), 0x70 all→gray(12), 0x00 none→empty column. Loop marker kept.
+  - **§10.2 resonance over time.** In the filter band, res(0..15) is plotted as a thin
+    bright YELLOW(7) step line (level segment per frame + risers on change), clearly
+    above the cutoff fill; labelled "res" in the band gutter.
+  - **§10.3 frequency/pitch band below ADSR.** New band order Output/ADSR/**Freq**/Pulse/
+    Filter/Wave (Geo now `int[7] bandTopPx`, weights `[1,1,0.9,0.9,0.9,1.8]` re-apportioned
+    for 6 bands at 1280x700; band indices bumped: pulse 2→3, filter 3→4, wave 4→5). The
+    per-frame wave sim `simWaveFrames` now also records `transOf`/`absOf` from wave1: $80..
+    $DF = absolute tuning (note=w1&0x7F, drawn cyan(3)), $00..$5F = relative transpose up
+    (drawn lightgreen(13)). New `drawFreqBand` draws it as a step graph (auto-scaled,
+    floor 12 semis) on the shared axis; playhead aligned.
+  - **§10.4 context F12 help.** Added `ContextHelp HELPSOUNDEDITOR` in help.d mirroring
+    HELPSEQUENCER (title "Sound Editor help" != HELPMAIN.title, lead line "Press F12
+    again to see the global help." so dialogs.d:182 F12-again→global works); content =
+    jam keys / KP octave / +/- instrument / Up-Down cursor / Ctrl-E exit / F1-F4 (Shift
+    tracking). Added `override ContextHelp contextHelp() { return ui.help.HELPSOUNDEDITOR;
+    }` to `SoundEditor` (+`import ui.help;`). Shortened the on-screen title line to
+    " Sound Editor   (F12 help) ".
+  - Build: `make -f Makefile.mac clean && make -f Makefile.mac -j4 ccutter ccdriver` →
+    exit 0, both binaries (ccutter 7453400, ccdriver 7448152).
+  - Smoke (headless dummy SDL). ENTER seq: `load:tunes/<tune>.ct key:ESC key:Ctrl-e`
+    (first ESC dismisses the splash), `key:+`×N to step instruments.
+    * /tmp/se-v5-ins0A.png — vent-arkijuusto ins0A "Basari+Bass": all SIX bands incl. the
+      new Freq band below ADSR; filter row $01=D0 F1 60 7F → LP+HP purple(4) fill + res
+      overlay (verified: purple px at x380-385, trigger divider red at x379).
+    * /tmp/se-v5-filter-modechange.png — abaddon-trouble ins04 "bsslap2" (Flt $01: 01:E0
+      F1 50 00 / 02:00 00 FF 00 / 03:B0 F1 04 00 / 04:7F 06 FF 04): filter mode CHANGES
+      over time — BP+HP cyan(3) for x380-392 then LP+BP orange(8) rising sweep x393-1243;
+      yellow resonance line flat at y=337 (res=15). Column-scan CONFIRMED the two mode
+      colours and their x-segments match the decode.
+    * /tmp/se-v5-freq-arp.png — vent-arkijuusto ins03 "Snare" (Wave $07: C0/81 A5/81 DF/81
+      C0/81 DF/81, all $80+ absolute): Freq band shows a multi-step ABSOLUTE-note staircase
+      (cyan). ins0B "Lead2" (00→0C) shows a relative step (lightgreen). ~5 step transitions
+      detected in the band.
+    * /tmp/se-v5-f12-soundeditor.png — `key:F12` in the editor → "Sound Editor help 1/1"
+      page (title, jam keys, octave, navigation, playback) — NOT the tracker global help.
+    * /tmp/se-v5-f12-again-global.png — `key:F12` again → "Main help 1/4" (global). Flow OK.
+    * /tmp/se-v5-switch-ins00.png → -ins03.png — `key:+`×3 switches instrument; all six
+      bands + param column + raw strip update together.
+    * /tmp/se-v5-play-playhead.png — vent-arkijuusto viewing ins04 "Flute", `play ff:4
+      tick:2` then step to a sounding voice: one full-height WHITE playhead (400px run @
+      x488) crosses all six bands aligned with the red trigger divider; live Output trace
+      from the mix; "Live filter: Res F Route 1 Mode LPHP" annotates the shared SID filter.
+    * /tmp/se-v5-exit.png — `key:Ctrl-e` exits: "Sound Editor closed.", classic tracker
+      fully restored (Instruments/Wave/Pulse/Filter tables), no lingering graph pixels.
+  - Read-only CONFIRMED: grep finds NO writes to song.instrumentTable/waveTable/pulseTable/
+    filterTable/superTable in soundedit.d; git status shows only soundedit.d + help.d (code)
+    and the regenerated ARCHITECTURE.md + the pre-existing §10 spec changed.
+  - Regenerated `make docs` (man pages + KEYBOARD.md — unchanged, since no com.shortcuts
+    registry entries were added; F12 help is wired via the window `contextHelp` override,
+    not new registry shortcuts) and `make map` (soundedit synopsis + new ui.help dep edge).
+    `make check-map` "fails" only because the regenerated map is uncommitted vs HEAD (the
+    orchestrator commits) — the map is in sync with source (genmap is stable across reruns).
+  - NOTE (headless, same as prior iterations): the Output band needs song playback (mix
+    buffer) to show a trace; keyjam capture stays flat with the dummy audio driver.
     NOT done: data editing / write-back / undo (P4+, still read-only).

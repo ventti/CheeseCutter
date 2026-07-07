@@ -166,6 +166,44 @@ Ctrl-Alt-3..............Swap voice's track with voice 3's tracks from crsr down
 "]);
 
 
+ContextHelp HELPSOUNDEDITOR = ContextHelp("Sound Editor help",
+["`+1Press F12 again to see the global help.
+
+`+dSound Editor (Ctrl-E toggles it from the classic editor)
+
+A live, read-only view of the selected instrument: stacked time-aligned
+graph bands (output waveform, ADSR envelope, frequency/arp, pulse, filter
+coloured by filter type with a resonance overlay, and the wave control bits)
+sharing one frames-from-note-on axis, plus a parameter column and raw table
+strip. Play a note (jam or song playback) to see the playhead sweep across.
+
+`+dJamming notes
+
+ 2 3   5 6 7   9 0
+Q W E R T Y U I O P.....Play notes (base octave + 1)
+ S D   G H J
+Z X C V B N M...........Play notes (base octave)
+1 ! A Z S X ............(the piano-key row plays notes as you type)
+
+Keypad /................Lower the base octave
+Keypad *................Raise the base octave
+
+`+dNavigation
+
+Keypad - / +............Previous / next instrument (updates every band)
+- / +...................Previous / next instrument
+Up / Down...............Move the parameter cursor (display-only)
+Ctrl-E..................Exit back to the classic editor
+
+`+dPlayback
+
+F1......................Play from the playback mark
+F2......................Play from the start
+F3......................Play from the cursor position
+Shift-F1/F2/F3..........Play with tracking (follow)
+F4......................Stop playback
+"]);
+
 ContextHelp genPlayerContextHelp(string title, char*[] descriptions) {
 	string text;
 	text = "`+1Press F12 again to see the global help.\n\n`+d" ~ title ~ "\n";

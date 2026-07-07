@@ -1,7 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
 
-Visual Sound Editor screen: a live, keyjam-driven view of the selected instrument laid out as a left parameter column, a stack of time-aligned graph bands sharing one frames-from-note-on X axis (pixel-perfect output waveform, ADSR envelope, pulse, filter, and a stacked SID control-bit-lane wave view) with a restart pre-roll, a note-trigger divider and a single vertical playhead, and a raw-hex table strip along the bottom.
+Visual Sound Editor screen: a live, keyjam-driven view of the selected instrument laid out as a left parameter column, a stack of time-aligned graph bands sharing one frames-from-note-on X axis (pixel-perfect output waveform, ADSR envelope, a frequency/arp pitch band, pulse, a filter band coloured per frame by filter type with a resonance-over-time overlay, and a stacked SID control-bit-lane wave view) with a restart pre-roll, a note-trigger divider and a single vertical playhead, a raw-hex table strip along the bottom, and a context F12 help page.
 
 This is the full-screen alternative sound-editing mode toggled from the classic
 editor (Ctrl-E). It runs keyjam (notes play) but uses the *normal* background,
@@ -38,6 +38,7 @@ import ui.input;
 import ui.ui : UI;
 import ui.menubar : MenuBar;
 import ui.palette : CommandPalette;
+import ui.help;
 static import audio.player;
 static import audio.audio;
 static import audio.visualizer;
@@ -84,6 +85,12 @@ private float clamp01(float v) {
 private struct SweepSim {
 	int[] val;          // per-frame value
 	int[] rowOf;        // table row each frame came from
+	// §10.1/§10.2 filter-only per-frame state (empty for pulse sims): the filter
+	// mode bits (b0 & 0x70), resonance (0..15) and routing (b1 & 0x0F) that were in
+	// effect each frame, carried forward from the last CONFIG row across sweeps.
+	int[] modeOf;
+	int[] resOf;
+	int[] routeOf;
 	int loopFrame = -1; // frame index the program loops back to (-1 = none)
 	bool stops;         // program halts ($7F) rather than loops
 }
@@ -106,6 +113,11 @@ private struct WaveSim {
 // across delay/unchanged rows), plus the frame the program loops back to.
 private struct WaveFrameSim {
 	int[] ctrlOf;       // effective control byte at each frame
+	// §10.3 pitch program per frame from the wave-table transpose/arp column (wave1):
+	// transOf = the semitone value (relative offset, or the absolute note number when
+	// absOf is true); absOf = true when wave1 was an absolute tuning byte ($80+).
+	int[] transOf;
+	bool[] absOf;
 	int loopFrame = -1; // frame index the program loops back to (-1 = none)
 }
 
@@ -131,6 +143,31 @@ class SoundEditor : Window {
 	private enum int COL_TRIGGER = 2;   // note-trigger divider (red)
 	private enum int COL_RSTFILL = 9;   // restart pre-roll shading (brown, dim)
 	private enum int COL_RSTCURVE = 10; // restart envelope ramp (light-red)
+	private enum int COL_RES = 7;       // §10.2 resonance-over-time overlay (yellow)
+	private enum int COL_FREQ_REL = 13; // §10.3 relative transpose step (light-green)
+	private enum int COL_FREQ_ABS = 3;  // §10.3 absolute-tuning step (cyan)
+
+	// §10.1 filter cutoff fill/line colour per active mode (b0 & 0x70), C64 palette
+	// indices in the standard order. -1 = no mode (filter off -> empty band).
+	private static int filterModeColor(int mode) {
+		switch(mode & 0x70) {
+			case 0x10: return 2;   // LP        -> red
+			case 0x20: return 5;   // BP        -> green
+			case 0x40: return 14;  // HP        -> light-blue
+			case 0x30: return 8;   // LP+BP     -> orange
+			case 0x60: return 3;   // BP+HP     -> cyan
+			case 0x50: return 4;   // LP+HP     -> purple
+			case 0x70: return 12;  // LP+HP+BP  -> gray
+			default:   return -1;  // none      -> filter off
+		}
+	}
+	private static string filterModeName(int mode) {
+		string s;
+		if(mode & 0x10) s ~= "LP";
+		if(mode & 0x20) s ~= "BP";
+		if(mode & 0x40) s ~= "HP";
+		return s.length ? s : "off";
+	}
 
 	// §9.3 Wave band = 8 stacked SID control-bit lanes. Indexed by BIT NUMBER 0..7
 	// (b0 Gate .. b7 Noise); the lanes are stacked b7 at the TOP down to b0 at the
@@ -160,6 +197,12 @@ class SoundEditor : Window {
 
 	override @property string contextId() { return Ctx.soundEditor; }
 
+	// §10.4: F12 while the Sound Editor is active shows ITS own help page (not the
+	// tracker's global help). The F12 help_dialog action opens
+	// HelpDialog(area, activeWindow.contextHelp); pressing F12 again in that dialog
+	// falls through to the global HELPMAIN because our title differs (dialogs.d:182).
+	override ContextHelp contextHelp() { return ui.help.HELPSOUNDEDITOR; }
+
 	// ---- shared geometry (recomputed each frame from `area`) ----
 	private struct Geo {
 		int paramX, paramW;     // left parameter column (cells)
@@ -167,7 +210,7 @@ class SoundEditor : Window {
 		int labelX;             // band label gutter start (cells)
 		int plotX0px, plotWpx;  // shared pixel X origin + width for every band
 		int stackTopPx, stackBotPx;
-		int[6] bandTopPx;       // 5 bands + trailing bottom bound
+		int[7] bandTopPx;       // 6 bands + trailing bottom bound
 		int rawTopRow;          // top border row of the raw-data strip (cells)
 	}
 
@@ -192,14 +235,15 @@ class SoundEditor : Window {
 		g.stackTopPx = stackTopRow * FONT_Y;
 		g.stackBotPx = stackBotRow * FONT_Y;
 
-		// Five bands: output, adsr, pulse, filter, wave. The wave band now stacks 8
-		// SID control-bit lanes (§9.3) so it gets the most height.
-		immutable float[5] wgt = [1.0f, 1.0f, 0.9f, 0.9f, 2.0f];
+		// Six bands (§10.3): output, adsr, frequency, pulse, filter, wave. The wave
+		// band still stacks 8 SID control-bit lanes so it keeps the most height; the
+		// weights are re-apportioned to fit six bands at 1280x700.
+		immutable float[6] wgt = [1.0f, 1.0f, 0.9f, 0.9f, 0.9f, 1.8f];
 		float tot = 0; foreach(w; wgt) tot += w;
 		float acc = 0;
 		int span = g.stackBotPx - g.stackTopPx;
 		g.bandTopPx[0] = g.stackTopPx;
-		foreach(i; 0 .. 5) {
+		foreach(i; 0 .. 6) {
 			acc += wgt[i];
 			g.bandTopPx[i + 1] = g.stackTopPx + cast(int)lround(acc / tot * span);
 		}
@@ -245,8 +289,10 @@ class SoundEditor : Window {
 		if(ins > 47) ins = 47;
 		string name = stripRight(to!string(song.insLabels[ins][]));
 
+		// §10.4: keys now live on the context F12 help page, so the title line is a
+		// minimal hint instead of a cramped key list.
 		screen.cprint(area.x + 2, area.y, COL_TITLE, 0,
-					  " Sound Editor - Ctrl-E exit - jam keys - +/- instrument - Up/Down param ");
+					  " Sound Editor   (F12 help) ");
 		screen.cprint(area.x + 2, area.y + 1, COL_LABEL, 0, "Instrument");
 		screen.cprint(area.x + 13, area.y + 1, COL_VALUE, 0,
 					  format("%02X %s", ins, name));
@@ -277,11 +323,13 @@ class SoundEditor : Window {
 		drawOutputBand(g);
 		drawBandLabel(g, 1, "ADSR");
 		drawAdsrBand(ins, g);
-		drawBandLabel(g, 2, "Pulse");
+		drawBandLabel(g, 2, "Freq");
+		drawFreqBand(ins, g);
+		drawBandLabel(g, 3, "Pulse");
 		drawPulseBand(ins, g);
-		drawBandLabel(g, 3, "Filter");
+		drawBandLabel(g, 4, "Filter");
 		drawFilterBand(ins, g);
-		drawBandLabel(g, 4, "");   // wave band is self-labelled by its 8 bit lanes
+		drawBandLabel(g, 5, "");   // wave band is self-labelled by its 8 bit lanes
 		drawWaveBand(ins, g);
 
 		// §9.2 note-trigger divider at frame 0 across ALL bands: everything left of it
@@ -575,19 +623,98 @@ class SoundEditor : Window {
 	}
 
 	private void drawPulseBand(int ins, ref Geo g) {
-		int topPx, botPx; bandBox(g, 2, topPx, botPx);
+		int topPx, botPx; bandBox(g, 3, topPx, botPx);
 		int ptr = song.instrumentTable[ins + 5 * 48];
 		if(ptr >= 0x80) return;               // direct fixed pulse: no program
 		SweepSim s = simPulse(ptr);
 		drawSweepBand(s, 4095, COL_PULSE_FILL, COL_PULSE_LINE, topPx, botPx, g);
 	}
 
+	// §10.1/§10.2 Filter band: cutoff fill/line coloured PER FRAME by the active
+	// filter mode (LP/BP/HP), plus a distinct thin bright resonance-over-time overlay
+	// on the same frame axis. Mode/resonance come per-frame from simFilter.
 	private void drawFilterBand(int ins, ref Geo g) {
-		int topPx, botPx; bandBox(g, 3, topPx, botPx);
+		int topPx, botPx; bandBox(g, 4, topPx, botPx);
 		int ptr = song.instrumentTable[ins + 4 * 48];
 		if(ptr <= 0) return;
 		SweepSim s = simFilter(ptr);
-		drawSweepBand(s, 2047, COL_FILT_FILL, COL_FILT_LINE, topPx, botPx, g);
+		int len = cast(int)s.val.length;
+		int h = botPx - topPx;
+		if(len <= 0 || h < 2) return;
+		int n = min(len, VISIBLE_FRAMES);
+		enum int maxVal = 2047;
+
+		// Cutoff fill + top line, coloured by the mode active on each frame. A "filter
+		// off" frame (mode 0x00 -> col < 0) leaves that column empty.
+		foreach(f; 0 .. n) {
+			int mode = f < s.modeOf.length ? s.modeOf[f] : 0;
+			int col = filterModeColor(mode);
+			if(col < 0) continue;             // filter off -> empty band this frame
+			int v = s.val[f];
+			if(v < 0) v = 0; if(v > maxVal) v = maxVal;
+			int y = botPx - v * h / maxVal;
+			int xa = xForFrame(g, f);
+			int xb = xForFrame(g, f + 1);
+			if(xb <= xa) xb = xa + 1;
+			for(int x = xa; x < xb; x++) {
+				video.olVLine(x, botPx, y, col);   // fill in the mode colour
+				video.olPoint(x, y, col);          // top edge (line) in the mode colour
+			}
+		}
+		if(s.loopFrame >= 0 && s.loopFrame < VISIBLE_FRAMES)
+			video.olVLine(xForFrame(g, s.loopFrame), topPx, botPx, COL_LOOP);
+
+		// §10.2 resonance (0..15) as a function of time: a thin bright yellow step line,
+		// clearly separate from the cutoff fill, on the same frame axis.
+		int prevY = -1;
+		foreach(f; 0 .. n) {
+			int res = f < s.resOf.length ? s.resOf[f] : 0;
+			if(res < 0) res = 0; if(res > 15) res = 15;
+			int ry = botPx - res * h / 15;
+			int xa = xForFrame(g, f);
+			int xb = xForFrame(g, f + 1);
+			if(xb <= xa) xb = xa + 1;
+			video.olHLine(xa, xb - 1, ry, COL_RES);              // level segment
+			if(prevY >= 0 && prevY != ry)
+				video.olVLine(xa, min(prevY, ry), max(prevY, ry), COL_RES); // riser
+			prevY = ry;
+		}
+		// Label the resonance overlay in the band's left gutter (row below "Filter").
+		int lrow = g.bandTopPx[4] / FONT_Y + 1;
+		if(lrow < g.bandTopPx[5] / FONT_Y)
+			screen.cprint(g.labelX, lrow, COL_RES, 0, "res");
+	}
+
+	// §10.3 Frequency/pitch band: the instrument's per-frame semitone program taken
+	// from the wave-table transpose/arp column (wave1), drawn as a step graph. Relative
+	// transpose ($00..$5F) and absolute tuning ($80..$DF) are coloured distinctly.
+	private void drawFreqBand(int ins, ref Geo g) {
+		int topPx, botPx; bandBox(g, 2, topPx, botPx);
+		int h = botPx - topPx;
+		if(h < 2) return;
+		int ptr = song.instrumentTable[ins + 7 * 48];
+		WaveFrameSim s = simWaveFrames(ptr);
+		int n = min(cast(int)s.transOf.length, VISIBLE_FRAMES);
+		if(n <= 0) return;
+		// Scale so small arpeggios stay visible but tall absolute-note programs fit;
+		// floor at 12 semitones (one octave).
+		int scale = 12;
+		foreach(f; 0 .. n) if(s.transOf[f] > scale) scale = s.transOf[f];
+		int prevY = -1;
+		foreach(f; 0 .. n) {
+			int pv = s.transOf[f];
+			int col = s.absOf[f] ? COL_FREQ_ABS : COL_FREQ_REL;
+			int y = botPx - pv * h / scale;
+			int xa = xForFrame(g, f);
+			int xb = xForFrame(g, f + 1);
+			if(xb <= xa) xb = xa + 1;
+			video.olHLine(xa, xb - 1, y, col);                   // level segment
+			if(prevY >= 0 && prevY != y)
+				video.olVLine(xa, min(prevY, y), max(prevY, y), col); // step riser
+			prevY = y;
+		}
+		if(s.loopFrame >= 0 && s.loopFrame < VISIBLE_FRAMES)
+			video.olVLine(xForFrame(g, s.loopFrame), topPx, botPx, COL_LOOP);
 	}
 
 	// ---- wave band = §9.3 stacked SID control-bit lanes ----
@@ -596,7 +723,7 @@ class SoundEditor : Window {
 	// filled coloured block wherever the bit is ON. A combined-waveform frame lights
 	// more than one waveform lane -- honest to the hardware. Loop back-edge marked.
 	private void drawWaveBand(int ins, ref Geo g) {
-		int topPx, botPx; bandBox(g, 4, topPx, botPx);
+		int topPx, botPx; bandBox(g, 5, topPx, botPx);
 		int h = botPx - topPx;
 		if(h < 8) return;
 		int ptr = song.instrumentTable[ins + 7 * 48];
@@ -753,16 +880,26 @@ class SoundEditor : Window {
 		return s;
 	}
 
-	// Simulate the filter cutoff program starting at row `startRow`.
+	// Simulate the filter program starting at row `startRow`, returning per-frame
+	// cutoff (0..2047) AND per-frame mode/resonance/routing (§10.1/§10.2 decode from
+	// §10.6): a CONFIG row (b0 & 0x80) sets mode=b0&0x70, res=b1>>4, routing=b1&0x0F
+	// and (if b2!=0xFF) cutoff=b2<<3; a SWEEP row sweeps the cutoff while mode/res/
+	// routing PERSIST from the last CONFIG row.
 	private SweepSim simFilter(int startRow) {
 		SweepSim s;
 		enum int MAXF = VISIBLE_FRAMES;
 		if(startRow <= 0 || startRow >= 0x40) return s;
 		int cutoff = 0;
+		int mode = 0, res = 0, routing = 0;   // persist across rows
 		int row = startRow;
 		bool[0x40] visited;
 		int[0x40] firstFrame; firstFrame[] = -1;
 		visited[row] = true;
+		// Emit one frame at the current cutoff carrying the persisting mode/res/routing.
+		void emit() {
+			s.val ~= cutoff; s.rowOf ~= row;
+			s.modeOf ~= mode; s.resOf ~= res; s.routeOf ~= routing;
+		}
 		while(s.val.length < MAXF) {
 			int base = row * 4;
 			ubyte b0 = song.filterTable[base + 0];
@@ -771,19 +908,22 @@ class SoundEditor : Window {
 			ubyte b3 = song.filterTable[base + 3];
 			if(firstFrame[row] < 0) firstFrame[row] = cast(int)s.val.length;
 			if(b0 & 0x80) {
+				mode = b0 & 0x70;
+				res = b1 >> 4;
+				routing = b1 & 0x0f;
 				if(b2 != 0xff) cutoff = (b2 << 3);
-				s.val ~= cutoff; s.rowOf ~= row;
+				emit();
 			}
 			else {
 				if(b2 != 0xff) cutoff = (b2 << 3);
 				int n = b0 & 0x7f;
 				int delta = 2 * (b1 < 0x80 ? b1 : b1 - 0x100);
-				s.val ~= cutoff; s.rowOf ~= row;
+				emit();
 				foreach(f; 0 .. n) {
 					cutoff += delta;
 					if(cutoff < 0) cutoff = 0;
 					if(cutoff > 2047) cutoff = 2047;
-					s.val ~= cutoff; s.rowOf ~= row;
+					emit();
 					if(s.val.length >= MAXF) break;
 				}
 			}
@@ -846,6 +986,10 @@ class SoundEditor : Window {
 			if(firstFrame[row] < 0) firstFrame[row] = cast(int)s.ctrlOf.length;
 			if(w2 >= 0x10) cur = w2;    // real SID control byte (else 0/delay = keep)
 			s.ctrlOf ~= cur;
+			// §10.3 wave1 pitch: $80..$DF = absolute tuning (note = w1 & 0x7F),
+			// $00..$5F = relative transpose up (semitone offset). Recorded per frame.
+			if(w1 >= 0x80) { s.transOf ~= w1 & 0x7f; s.absOf ~= true; }
+			else           { s.transOf ~= w1;        s.absOf ~= false; }
 			if(visited[row]) break;
 			visited[row] = true;
 			row = (row + 1) & 0xff;
