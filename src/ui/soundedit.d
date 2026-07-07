@@ -66,9 +66,6 @@ private enum int RESTART_FRAMES = 10;
 // Nominal note gate length (frames the gate is held before release) used to slope
 // the drawn ADSR sustain->release knee on the shared frame axis.
 private enum int NOMINAL_GATE_FRAMES = 46;
-// Vertical gain for the output-waveform band (sample units per half-band height);
-// mirrors ui.oscilloscope's FULLSCALE so typical output fills the band.
-private enum int FULLSCALE = 12000;
 
 // SID ADSR timing (ms) per 4-bit nibble value 0..15 -- the real, non-linear MOS
 // tables (mirrors audio.visualizer / doc/ADSR_VISUALIZATION_SPEC.md, duplicated
@@ -666,6 +663,22 @@ class SoundEditor : Window {
 			return;
 		}
 
+		// AUTO-GAIN: scale to the window's PEAK |sample| (a self-adjusting scope)
+		// instead of a fixed sample ceiling, so a quiet-but-audible single voice —
+		// e.g. a slow-attack triangle whose envelope only reaches a fraction of full —
+		// fills the band instead of rendering as a near-flat line with tiny wiggles.
+		// Peak==0 means nothing audible was captured, so keep a flat baseline (and it
+		// avoids a divide-by-zero). Computed over the same [0,span) the columns read.
+		int peak = 0;
+		foreach(s; 0 .. span) {
+			int a = buf[s]; if(a < 0) a = -a;
+			if(a > peak) peak = a;
+		}
+		if(peak < 1) {
+			video.olHLine(noteX0px, plotEndPx - 1, mid, COL_AXIS);
+			return;
+		}
+
 		// Per-pixel min/max: column px covers samples [s0,s1). This is exactly the
 		// classic oscilloscope's per-pixel approach, but mapped onto the note region.
 		foreach(i; 0 .. noteWpx) {
@@ -680,15 +693,17 @@ class SoundEditor : Window {
 				if(v > mx) mx = v;
 			}
 			int x = noteX0px + i;
-			int yhi = mid - clampOff(mx, half);   // max -> up
-			int ylo = mid - clampOff(mn, half);   // min -> down
+			int yhi = mid - normOff(mx, half, peak);   // max -> up
+			int ylo = mid - normOff(mn, half, peak);   // min -> down
 			if(ylo < yhi) { int t = ylo; ylo = yhi; yhi = t; }
 			video.olVLine(x, ylo, yhi, COL_TRACE);
 		}
 	}
 
-	private int clampOff(int v, int half) {
-		int off = cast(int)lround(cast(real)v * half / FULLSCALE);
+	// Sample value -> vertical pixel offset from the band centre, normalised so the
+	// window's peak |sample| maps to the half-band height (clamped).
+	private int normOff(int v, int half, int peak) {
+		int off = cast(int)lround(cast(real)v * half / peak);
 		return max(-half, min(half, off));
 	}
 
@@ -706,9 +721,19 @@ class SoundEditor : Window {
 		if(useRec) {
 			auto amp = audio.visualizer.getRecordedAmp(viewVoice);
 			int n = min(cast(int)amp.length, visFrames);
+			// AUTO-GAIN to the window's PEAK amplitude: a note that only reaches a
+			// fraction of full envelope (e.g. a briefly-held 8s-attack triangle whose
+			// recorded amp peaks well below 1.0) otherwise draws as a shallow line
+			// hugging the baseline that reads as empty/flat — inconsistent with the
+			// (also peak-normalised) Output band, which visibly grows. Normalising the
+			// peak to full band height makes the RISING shape clear and keeps the two
+			// amplitude bands consistent. Below AMP_EPS the note is silent -> no gain.
+			float peak = 0;
+			foreach(f; 0 .. n) if(amp[f] > peak) peak = amp[f];
+			float gain = peak > AMP_EPS ? 1.0f / peak : 1.0f;
 			int prevY = -1;
 			foreach(f; 0 .. n) {
-				int y = botPx - cast(int)lround(clamp01(amp[f]) * h);
+				int y = botPx - cast(int)lround(clamp01(amp[f] * gain) * h);
 				int xa = xForFrame(g, f);
 				int xb = xForFrame(g, f + 1);
 				if(xb <= xa) xb = xa + 1;
