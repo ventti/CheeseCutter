@@ -364,3 +364,77 @@ Editor → the dropdown draws ABOVE the graphs (no pixels over it); close → gr
 return. (3) Trigger a pop-up/dialog → it renders above, unobstructed. (4) Exit
 (Ctrl-E) → tracker fully restored, zero lingering graph pixels or text. (5) Enter
 again → no leftover tracker cells showing through. (6) Still read-only.
+
+---
+
+## 9. Graph synchronisation, bit-lane wave view, restart pre-roll (2026-07-07 v4)
+
+Still **read-only**. User feedback: the stacked bands are not actually
+time-synchronised, the wave lane isn't intuitive, and the restart phase isn't
+shown.
+
+### 9.1 One true shared X-axis = frames since note trigger
+All bands MUST map frame→pixel through the *same* `xForFrame(g, f)` over the same
+`VISIBLE_FRAMES`, `plotX0px`, `plotWpx`, so a single vertical line hits the same
+instant in Output, ADSR, Pulse, Filter and Wave simultaneously.
+- **Bug today**: the ADSR curve is drawn with its own ms-proportional X (fixed
+  A/D/R widths + a fixed sustain-hold), NOT the frame axis — so its knees do not
+  line up in time with the frame-indexed Pulse/Filter/Wave or the sample-indexed
+  Output. FIX: sample the envelope **per frame** — convert attack/decay/release
+  ms→frames (real SID tables), compute amplitude at each frame `f` from the note
+  trigger (attack ramp over `attackFrames`; decay to `sustain/15` over
+  `decayFrames`; sustain hold; release over `releaseFrames` after a nominal gate
+  length), and plot each frame with `xForFrame(g, f)`. Same axis as everyone.
+- **Output** already maps `captureFrameSamples` samples per frame → keep that;
+  confirm its frame↔pixel is identical to `xForFrame`. The Output waveform is the
+  visual reference the others sync to.
+
+### 9.2 Restart pre-roll before the ADSR (§8.2 data, now visualised)
+Hard/soft restart happens in the frames *before* the note triggers. Reserve a
+small **pre-roll region** of `restartFrames` at the LEFT of the shared axis
+(frames `-restartFrames..0`), and draw a vertical **note-trigger divider** at
+frame 0 across ALL bands. In the ADSR band's pre-roll, draw the restart phase:
+- col2 `$80` hard restart → the envelope forced down using the HR SR (col6) with
+  the HR waveform (col3); `$40` soft; `$00` 3-frame restart. Use a nominal
+  restart length (e.g. the classic ~2–3 frames) and shade the pre-roll distinctly
+  (dim/!= the note colour) with a small "restart" label.
+- The other bands (Pulse/Filter/Wave/Output) begin at frame 0 (after the
+  divider); their pre-roll area stays empty. Everything still shares the axis:
+  X past the divider = the same frame index in every band.
+
+### 9.3 Wave band → stacked control-bit lanes (more intuitive)
+Replace the single wave mnemonic with a **bit-lane grid**: simulate the wave
+program per frame (follow `$7E` loop-prev / `$7F` jump like the pulse/filter sim)
+to get the control byte per frame, then draw one thin horizontal **lane per SID
+control bit**, a filled coloured block where the bit is ON at that frame, stacked
+on top of each other. Bits + suggested distinct colours (top→bottom or by
+salience):
+- b7 **Noise**, b6 **Pulse**, b5 **Saw**, b4 **Triangle** (the 4 waveforms),
+- b3 **Test**, b2 **Ring**, b1 **Sync**, b0 **Gate**.
+Each lane labelled (short: Noi/Pul/Saw/Tri/Tst/Rng/Snc/Gat). A frame with a
+combined waveform lights multiple waveform lanes (honest to the HW). Optionally
+keep a thin note-offset (wave1 transpose/arp) strip below the bit lanes, or fold
+into the raw-data strip. Loop marker ($7E/$7F back-edge) drawn on the frame axis.
+
+### 9.4 Verify (v4)
+Clean build. Enter → (1) a single vertical probe/playhead at any X lines up the
+ADSR amplitude, pulse, filter, wave-bits and output at the SAME instant (sync
+visually confirmable: e.g. attack peak frame aligns across bands). (2) Wave band
+shows stacked coloured bit-lanes; a combined-waveform frame lights >1 waveform
+lane; gate/ring/sync/test lanes reflect the control bits. (3) ADSR band shows a
+distinct restart pre-roll left of a note-trigger divider; hard vs soft vs 3-frame
+differs per instrument (cross-check col2/3/6). (4) Switch instrument → all update
+together. (5) Still read-only (`git diff` shows no song-byte writes).
+
+### 9.5 Output waveform must be pixel-perfect again (regression)
+v2 changed the Output band to per-**frame** min/max blocks (`f = px*VISIBLE_FRAMES
+/plotWpx`), which reads as blocky/staircased. The original P1 scope was
+pixel-perfect (per-horizontal-pixel resolution, continuous). RESTORE pixel-perfect
+WITHOUT breaking the shared frame axis (§9.1): for each horizontal pixel column
+`px` (0..plotWpx), map to its sample window `[s0,s1)` in `captureBuf`
+(pixel→frame→sample: `frame = px*VISIBLE_FRAMES/plotWpx`, then sample offset
+within the visible sample span), take min/max of the samples in that column, and
+draw a continuous per-pixel trace/bar — one column per pixel, not per frame. This
+is exactly the classic oscilloscope's per-pixel min/max approach and remains
+frame-aligned (pixel↔frame is the same mapping the other bands use). Prefer the
+live output for a moving trace when playing; keep capture for a held keyjam note.

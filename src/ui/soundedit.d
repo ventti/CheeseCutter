@@ -1,19 +1,23 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
 
-Visual Sound Editor screen: a live, keyjam-driven view of the selected instrument laid out as a left parameter column, a stack of time-aligned graph bands sharing one frames-from-note-on X axis (output waveform, ADSR, pulse, filter, wave/arp) with a single vertical playhead, and a raw-hex table strip along the bottom.
+Visual Sound Editor screen: a live, keyjam-driven view of the selected instrument laid out as a left parameter column, a stack of time-aligned graph bands sharing one frames-from-note-on X axis (pixel-perfect output waveform, ADSR envelope, pulse, filter, and a stacked SID control-bit-lane wave view) with a restart pre-roll, a note-trigger divider and a single vertical playhead, and a raw-hex table strip along the bottom.
 
 This is the full-screen alternative sound-editing mode toggled from the classic
 editor (Ctrl-E). It runs keyjam (notes play) but uses the *normal* background,
-not the dark-blue keyjam tint. The v2 layout (design doc §7) stacks every
+not the dark-blue keyjam tint. The layout (design doc §7, §9 v4) stacks every
 time-varying graph on ONE shared horizontal axis = frames since note-on
-(~19.95 ms PAL ticks): the output/keyjam waveform (min/max per frame from
-audio.audio.captureBuf), the ADSR envelope (SID ms tables converted to frames),
-and the pulse / filter / wave-arp table programs (simulated read-only from the
-ct.base byte tables the C64 player interprets each frame). All bands share the
-same left edge and pixel width so a single full-height vertical playhead, placed
-at the current frame-since-trigger of the sounding voice, crosses them all in
-lockstep. Left of the graphs a parameter column lists the instrument's editable
+(~19.95 ms PAL ticks) mapped through the single xForFrame(): a pixel-perfect
+output waveform (per-horizontal-pixel min/max of the live mix while playing, or
+the per-note capture for a held keyjam note), the ADSR envelope (SID ms tables
+converted to frames, sampled per frame with a nominal gate so A/D/S/R all show),
+the pulse / filter table programs (simulated read-only from the ct.base byte
+tables the C64 player interprets each frame), and a wave band drawn as 8 stacked
+SID control-bit lanes (Noise/Pulse/Saw/Triangle/Test/Ring/Sync/Gate). The axis
+reserves a small pre-roll at the left for the hard/soft/3-frame restart phase,
+with a note-trigger divider at frame 0. All bands share the same left edge and
+pixel width so a single full-height vertical playhead, placed at the current
+frame-since-trigger of the sounding voice, crosses them all in lockstep. Left of the graphs a parameter column lists the instrument's editable
 fields with a movable cursor (display-only this pass); the bottom strip shows the
 raw hex of the instrument's 8 bytes plus the wave/pulse/filter rows it points
 into. Everything is READ-ONLY -- data editing / write-back / undo arrive in P4+.
@@ -40,8 +44,17 @@ static import audio.visualizer;
 
 // PAL player tick period (ms) -- the frame quantum every over-time graph shares.
 private enum float FRAME_MS = 19.95f;
-// Visible frames across the shared X axis (~2.5 s at PAL).
+// Visible frames across the shared X axis (~2.5 s at PAL) AFTER the note trigger.
 private enum int VISIBLE_FRAMES = 128;
+// §9.2: pre-roll region reserved at the LEFT of the shared axis for the hard/soft
+// restart phase that runs in the frames BEFORE the note triggers (frames
+// -RESTART_FRAMES .. 0). Frame 0 = the note-trigger divider. Every band maps
+// frame->pixel through xForFrame(), which folds this offset in, so a single
+// vertical probe hits the same frame index in every band.
+private enum int RESTART_FRAMES = 10;
+// Nominal note gate length (frames the gate is held before release) used to slope
+// the drawn ADSR sustain->release knee on the shared frame axis.
+private enum int NOMINAL_GATE_FRAMES = 46;
 // Vertical gain for the output-waveform band (sample units per half-band height);
 // mirrors ui.oscilloscope's FULLSCALE so typical output fills the band.
 private enum int FULLSCALE = 12000;
@@ -88,6 +101,14 @@ private struct WaveSim {
 	int loopTargetRow = -1; // $7F jump target row; -2 = $7E loop-to-previous
 }
 
+// §9.3 wave program flattened to ONE effective SID control byte per FRAME (the
+// waveform/gate/ring/sync/test bits actually applied that frame, carrying forward
+// across delay/unchanged rows), plus the frame the program loops back to.
+private struct WaveFrameSim {
+	int[] ctrlOf;       // effective control byte at each frame
+	int loopFrame = -1; // frame index the program loops back to (-1 = none)
+}
+
 /// Full-screen visual Sound Editor (see module doc). v2 layout: left parameter
 /// column + stacked frame-aligned graph bands with one shared playhead + raw
 /// table-data strip. All read-only.
@@ -107,6 +128,15 @@ class SoundEditor : Window {
 	private enum int COL_PULSE_LINE = 14; // light-blue top edge
 	private enum int COL_FILT_FILL  = 4;  // purple area
 	private enum int COL_FILT_LINE  = 10; // light-red top edge
+	private enum int COL_TRIGGER = 2;   // note-trigger divider (red)
+	private enum int COL_RSTFILL = 9;   // restart pre-roll shading (brown, dim)
+	private enum int COL_RSTCURVE = 10; // restart envelope ramp (light-red)
+
+	// §9.3 Wave band = 8 stacked SID control-bit lanes. Indexed by BIT NUMBER 0..7
+	// (b0 Gate .. b7 Noise); the lanes are stacked b7 at the TOP down to b0 at the
+	// bottom. Distinct palette colour + 3-char label per bit.
+	private static immutable int[8]    BITLANE_COL = [13, 14, 8, 4, 3, 5, 7, 15];
+	private static immutable string[8] BITLANE_LBL = ["Gat","Snc","Rng","Tst","Tri","Saw","Pul","Noi"];
 
 	// Left parameter column: fixed set of rows, cursor moved with Up/Down.
 	// Display-only this pass (no byte writes).
@@ -162,8 +192,9 @@ class SoundEditor : Window {
 		g.stackTopPx = stackTopRow * FONT_Y;
 		g.stackBotPx = stackBotRow * FONT_Y;
 
-		// Five bands: output, adsr, pulse, filter, wave (thin). Weights sum ~4.6.
-		immutable float[5] wgt = [1.0f, 1.0f, 1.0f, 1.0f, 0.55f];
+		// Five bands: output, adsr, pulse, filter, wave. The wave band now stacks 8
+		// SID control-bit lanes (§9.3) so it gets the most height.
+		immutable float[5] wgt = [1.0f, 1.0f, 0.9f, 0.9f, 2.0f];
 		float tot = 0; foreach(w; wgt) tot += w;
 		float acc = 0;
 		int span = g.stackBotPx - g.stackTopPx;
@@ -175,10 +206,17 @@ class SoundEditor : Window {
 		return g;
 	}
 
+	// Total frames across the shared axis: RESTART_FRAMES of pre-roll + VISIBLE_FRAMES
+	// of note. Kept as one place so xForFrame and the per-pixel bands agree exactly.
+	private enum int TOTAL_FRAMES = RESTART_FRAMES + VISIBLE_FRAMES;
+
+	// §9.1 THE one true frame->pixel map every band shares. Frame f may be negative
+	// (pre-roll / restart); f=0 is the note-trigger divider.
 	private int xForFrame(ref Geo g, int f) {
-		if(f < 0) f = 0;
-		if(f > VISIBLE_FRAMES) f = VISIBLE_FRAMES;
-		return g.plotX0px + f * g.plotWpx / VISIBLE_FRAMES;
+		int rel = f + RESTART_FRAMES;
+		if(rel < 0) rel = 0;
+		if(rel > TOTAL_FRAMES) rel = TOTAL_FRAMES;
+		return g.plotX0px + rel * g.plotWpx / TOTAL_FRAMES;
 	}
 
 	override void update() {
@@ -243,8 +281,13 @@ class SoundEditor : Window {
 		drawPulseBand(ins, g);
 		drawBandLabel(g, 3, "Filter");
 		drawFilterBand(ins, g);
-		drawBandLabel(g, 4, "Wave");
+		drawBandLabel(g, 4, "");   // wave band is self-labelled by its 8 bit lanes
 		drawWaveBand(ins, g);
+
+		// §9.2 note-trigger divider at frame 0 across ALL bands: everything left of it
+		// is the restart pre-roll, everything right of it is the same frame index in
+		// every band.
+		video.olVLine(xForFrame(g, 0), g.stackTopPx, g.stackBotPx, COL_TRIGGER);
 
 		// One full-height playhead across every band, at the sounding voice's
 		// current frame-since-trigger.
@@ -372,38 +415,63 @@ class SoundEditor : Window {
 		if(botPx <= topPx) botPx = topPx + 1;
 	}
 
-	// ---- output/keyjam waveform band (min/max per frame from captureBuf) ----
-
+	// ---- output/keyjam waveform band (§9.5 pixel-perfect min/max) ----
+	// One column per horizontal PIXEL (not per frame) so the trace is continuous,
+	// yet still frame-aligned: it fills only the note region (frames 0..VISIBLE_FRAMES,
+	// i.e. from the trigger divider rightwards), the same span the other bands use.
+	// Live mix (audio.audio.mixbuf) gives a moving trace while the song plays; the
+	// per-note capture (captureBuf) holds a keyjam note.
 	private void drawOutputBand(ref Geo g) {
 		int topPx, botPx; bandBox(g, 0, topPx, botPx);
 		int mid = (topPx + botPx) / 2;
 		int half = (botPx - topPx) / 2;
 		if(half < 1) return;
 
-		int total = audio.audio.captureLen;
-		int fs = audio.audio.captureFrameSamples;
-		short* buf = audio.audio.captureBuf.ptr;
-		bool haveCapture = (total >= 2 && fs > 0 && buf !is null);
+		// Note region in absolute pixels: [noteX0px, plotEndPx).
+		int noteX0px = xForFrame(g, 0);
+		int plotEndPx = g.plotX0px + g.plotWpx;
+		int noteWpx = plotEndPx - noteX0px;
+		if(noteWpx < 1) return;
 
-		foreach(px; 0 .. g.plotWpx) {
-			int f = px * VISIBLE_FRAMES / g.plotWpx;
-			if(!haveCapture) {
-				video.olPoint(g.plotX0px + px, mid, COL_TRACE);
-				continue;
-			}
-			int s0 = f * fs;
-			int s1 = s0 + fs;
-			if(s0 >= total) { video.olPoint(g.plotX0px + px, mid, COL_TRACE); continue; }
-			if(s1 > total) s1 = total;
+		// Pick the sample source: live mix while playing, else the held-note capture.
+		short* buf;
+		int span;          // number of samples to spread across noteWpx
+		bool playing = audio.player.isPlaying();
+		if(playing) {
+			buf = audio.audio.mixbuf;
+			span = audio.audio.getbufsize();
+		} else {
+			buf = audio.audio.captureBuf.ptr;
+			int total = audio.audio.captureLen;
+			int fs = audio.audio.captureFrameSamples;
+			// Show the visible note span (VISIBLE_FRAMES frames), clamped to recorded.
+			span = fs > 0 ? VISIBLE_FRAMES * fs : total;
+			if(span > total) span = total;
+		}
+		if(buf is null || span < 2) {
+			// Flat baseline when there's nothing to draw.
+			video.olHLine(noteX0px, plotEndPx - 1, mid, COL_AXIS);
+			return;
+		}
+
+		// Per-pixel min/max: column px covers samples [s0,s1). This is exactly the
+		// classic oscilloscope's per-pixel approach, but mapped onto the note region.
+		foreach(i; 0 .. noteWpx) {
+			int s0 = cast(int)(cast(long)i * span / noteWpx);
+			int s1 = cast(int)(cast(long)(i + 1) * span / noteWpx);
+			if(s1 <= s0) s1 = s0 + 1;
+			if(s1 > span) s1 = span;
 			int mn = short.max, mx = short.min;
 			for(int s = s0; s < s1; s++) {
 				int v = buf[s];
 				if(v < mn) mn = v;
 				if(v > mx) mx = v;
 			}
+			int x = noteX0px + i;
 			int yhi = mid - clampOff(mx, half);   // max -> up
 			int ylo = mid - clampOff(mn, half);   // min -> down
-			video.olVLine(g.plotX0px + px, ylo, yhi, COL_TRACE);
+			if(ylo < yhi) { int t = ylo; ylo = yhi; yhi = t; }
+			video.olVLine(x, ylo, yhi, COL_TRACE);
 		}
 	}
 
@@ -412,37 +480,71 @@ class SoundEditor : Window {
 		return max(-half, min(half, off));
 	}
 
-	// ---- ADSR band (SID ms tables -> frame axis, nominal gate hold) ----
+	// ---- ADSR band (§9.1 per-frame envelope on the shared axis + §9.2 restart) ----
 
 	private void drawAdsrBand(int ins, ref Geo g) {
 		int topPx, botPx; bandBox(g, 1, topPx, botPx);
+		int h = botPx - topPx;
+		if(h < 1) return;
 		ubyte ad = song.instrumentTable[ins + 0 * 48];
 		ubyte sr = song.instrumentTable[ins + 1 * 48];
 		int attack  = (ad >> 4) & 0x0f, decay = ad & 0x0f;
 		int sustain = (sr >> 4) & 0x0f, release = sr & 0x0f;
 		float sLvl = sustain / 15.0f;
+		// SID ms tables -> frames (real, non-linear MOS timing). The knee frames are
+		// absolute frame indices, so they line up in time with pulse/filter/wave.
 		float aF = ATTACK_TIME_MS[attack]         / FRAME_MS;
 		float dF = DECAY_RELEASE_TIME_MS[decay]   / FRAME_MS;
 		float rF = DECAY_RELEASE_TIME_MS[release] / FRAME_MS;
-		if(rF < 1) rF = 1;
-		float relStart = VISIBLE_FRAMES - rF;
-		if(relStart < aF + dF) relStart = aF + dF;
+		if(rF < 0.5f) rF = 0.5f;
+		// Nominal gate: release begins NOMINAL_GATE_FRAMES after the trigger (but never
+		// before attack+decay have completed), so all four A/D/S/R phases are visible.
+		float gateEnd = aF + dF + NOMINAL_GATE_FRAMES;
 
+		// Amplitude 0..1 at absolute frame f (f>=0, i.e. after the trigger).
 		float amp(float f) {
-			if(f < aF) return aF > 0 ? f / aF : 1.0f;
-			f -= aF;
-			if(f < dF) return dF > 0 ? 1.0f - (1.0f - sLvl) * (f / dF) : sLvl;
-			float fromStart = aF + dF + f;
-			if(fromStart < relStart) return sLvl;
-			float rt = (fromStart - relStart) / rF;
+			if(f < aF) return aF > 0 ? f / aF : 1.0f;             // attack ramp -> 1.0
+			if(f < aF + dF) return dF > 0 ? 1.0f - (1.0f - sLvl) * ((f - aF) / dF) : sLvl;
+			if(f < gateEnd) return sLvl;                          // sustain hold
+			float rt = (f - gateEnd) / rF;                        // release
 			return clamp01(sLvl * (1.0f - rt));
 		}
 
+		// §9.2 restart pre-roll (frames -RESTART_FRAMES..0), shaded distinctly, showing
+		// the hard/soft/3-frame restart forced by col2 using HR SR (col6) + HR wave
+		// (col3) before the note. It's a display of "the envelope was being killed",
+		// not a cycle-exact sim.
+		ubyte rst = song.instrumentTable[ins + 2 * 48];
+		int preX0 = xForFrame(g, -RESTART_FRAMES);
+		int preX1 = xForFrame(g, 0);
+		if(preX1 > preX0) {
+			video.olFillRect(preX0, topPx, preX1 - preX0, h, 16); // dim gradient wash
+			bool hard = (rst & 0xc0) == 0x80;
+			bool soft = (rst & 0xc0) == 0x40;
+			// Start level of the restart ramp: hard drops from full, soft from mid,
+			// 3-frame from a low level; all decay to 0 by the trigger.
+			float startLvl = hard ? 1.0f : (soft ? 0.5f : 0.25f);
+			int rprevY = -1;
+			foreach(x; preX0 .. preX1) {
+				float t = preX1 > preX0 ? cast(float)(x - preX0) / (preX1 - preX0) : 1.0f;
+				int y = botPx - cast(int)lround(clamp01(startLvl * (1.0f - t)) * h);
+				video.olVLine(x, botPx, y, COL_RSTFILL);
+				if(rprevY >= 0) video.olLine(x - 1, rprevY, x, y, COL_RSTCURVE);
+				rprevY = y;
+			}
+			string rlabel = hard ? "rst:hard" : (soft ? "rst:soft" : "rst:3fr");
+			screen.cprint(preX0 / FONT_X, topPx / FONT_Y, COL_RSTCURVE, 0, rlabel);
+		}
+
+		// Note envelope: one point per horizontal pixel across the note region, mapped
+		// pixel->frame through the SAME axis so its knees align with the other bands.
+		int noteX0px = xForFrame(g, 0);
+		int plotEndPx = g.plotX0px + g.plotWpx;
 		int prevY = -1;
-		foreach(px; 0 .. g.plotWpx) {
-			float f = cast(float)px * VISIBLE_FRAMES / g.plotWpx;
-			int y = botPx - cast(int)lround(clamp01(amp(f)) * (botPx - topPx));
-			int x = g.plotX0px + px;
+		for(int x = noteX0px; x < plotEndPx; x++) {
+			float f = cast(float)(x - g.plotX0px) * TOTAL_FRAMES / g.plotWpx - RESTART_FRAMES;
+			if(f < 0) f = 0;
+			int y = botPx - cast(int)lround(clamp01(amp(f)) * h);
 			if(prevY >= 0) video.olLine(x - 1, prevY, x, y, COL_CURVE);
 			else video.olPoint(x, y, COL_CURVE);
 			prevY = y;
@@ -488,45 +590,44 @@ class SoundEditor : Window {
 		drawSweepBand(s, 2047, COL_FILT_FILL, COL_FILT_LINE, topPx, botPx, g);
 	}
 
-	// ---- wave/arp thin band (one colored step per frame) ----
-
+	// ---- wave band = §9.3 stacked SID control-bit lanes ----
+	// Simulate the wave program per frame to get the effective SID control byte, then
+	// draw one thin lane per control bit (b7 Noise at top .. b0 Gate at bottom) with a
+	// filled coloured block wherever the bit is ON. A combined-waveform frame lights
+	// more than one waveform lane -- honest to the hardware. Loop back-edge marked.
 	private void drawWaveBand(int ins, ref Geo g) {
 		int topPx, botPx; bandBox(g, 4, topPx, botPx);
+		int h = botPx - topPx;
+		if(h < 8) return;
 		int ptr = song.instrumentTable[ins + 7 * 48];
-		WaveSim w = simWave(ptr);
-		int N = cast(int)w.cells.length;
-		if(N <= 0) return;
-		int vph = findVoiceFor(ins);
-		int actRow = vph >= 0 ? audio.visualizer.getActiveWaveRow(vph) : -1;
-		int steps = min(N, VISIBLE_FRAMES);
-		foreach(i; 0 .. steps) {
-			WaveCell c = w.cells[i];
-			int xa = xForFrame(g, i);
-			int xb = xForFrame(g, i + 1);
-			if(xb <= xa + 1) xb = xa + 1;
-			int col = waveformColor(c.ctrl);
-			video.olFillRect(xa, topPx, max(1, xb - xa - 1), botPx - topPx, col);
-			// gate/sync/ring ticks along the very top of the lane.
-			if(c.ctrl & 0x01) video.olHLine(xa, xb - 1, topPx,     13);
-			if(c.ctrl & 0x02) video.olHLine(xa, xb - 1, topPx + 1, 14);
-			if(c.ctrl & 0x04) video.olHLine(xa, xb - 1, topPx + 2, 10);
-			if(actRow >= 0 && c.row == actRow)
-				video.olRect(xa, topPx, max(1, xb - xa), botPx - topPx, COL_HEAD);
-		}
-		if(w.loopIndex >= 0 && w.loopIndex < VISIBLE_FRAMES)
-			video.olVLine(xForFrame(g, w.loopIndex), topPx, botPx, COL_LOOP);
-	}
+		WaveFrameSim s = simWaveFrames(ptr);
+		int n = min(cast(int)s.ctrlOf.length, VISIBLE_FRAMES);
+		int laneH = h / 8;
+		if(laneH < 1) laneH = 1;
 
-	// Colour a wave/arp cell by its control byte's waveform bits.
-	private int waveformColor(int ctrl) {
-		if(ctrl == 0) return 8;                     // leave waveform unchanged (dim)
-		if(ctrl <= 0x0f) return 12;                 // wave-delay override (grey)
-		if(ctrl >= 0xe0 && ctrl <= 0xef) return 8;  // raw control, no waveform
-		if(ctrl & 0x80) return 11;                  // noise (grey)
-		if(ctrl & 0x40) return 7;                   // pulse (yellow)
-		if(ctrl & 0x20) return 5;                   // saw (green)
-		if(ctrl & 0x10) return 3;                   // triangle (cyan)
-		return 8;
+		// Lane labels in the left gutter + a faint lane divider per lane.
+		foreach(li; 0 .. 8) {
+			int bit = 7 - li;                       // top lane = bit7 (Noise)
+			int ly = topPx + li * laneH;
+			int lrow = (ly + laneH / 2 - FONT_Y / 2) / FONT_Y;
+			screen.cprint(g.labelX, lrow, BITLANE_COL[bit], 0, BITLANE_LBL[bit]);
+			video.olHLine(g.plotX0px, g.plotX0px + g.plotWpx - 1, ly, COL_AXIS);
+		}
+
+		foreach(f; 0 .. n) {
+			int ctrl = s.ctrlOf[f];
+			int xa = xForFrame(g, f);
+			int xb = xForFrame(g, f + 1);
+			if(xb <= xa) xb = xa + 1;
+			foreach(li; 0 .. 8) {
+				int bit = 7 - li;
+				if(!(ctrl & (1 << bit))) continue;
+				int ly = topPx + li * laneH;
+				video.olFillRect(xa, ly + 1, xb - xa, max(1, laneH - 1), BITLANE_COL[bit]);
+			}
+		}
+		if(s.loopFrame >= 0 && s.loopFrame < VISIBLE_FRAMES)
+			video.olVLine(xForFrame(g, s.loopFrame), topPx, botPx, COL_LOOP);
 	}
 
 	// ---- raw table data strip (bottom) ----
@@ -718,6 +819,38 @@ class SoundEditor : Window {
 			row = (row + 1) & 0xff;
 		}
 		return w;
+	}
+
+	// §9.3: flatten the wave program to one control byte per FRAME, following $7F
+	// jump / $7E loop-to-previous exactly like simPulse/simFilter follow their jumps.
+	// Carries the last real control byte forward across delay/unchanged rows.
+	private WaveFrameSim simWaveFrames(int startRow) {
+		WaveFrameSim s;
+		enum int MAXF = VISIBLE_FRAMES;
+		if(startRow < 0 || startRow > 0xff) return s;
+		int row = startRow & 0xff;
+		int cur = 0;                    // carried effective control byte
+		bool[256] visited;
+		int[256] firstFrame; firstFrame[] = -1;
+		while(s.ctrlOf.length < MAXF) {
+			int w1 = song.waveTable[row];
+			int w2 = song.waveTable[row + 256];
+			// Loop back-edge: $7F jumps to the row in wave2; $7E loops to previous.
+			if(w1 == 0x7f || w1 == 0x7e) {
+				int tgt = (w1 == 0x7f) ? (w2 & 0xff) : ((row - 1) & 0xff);
+				if(firstFrame[tgt] >= 0) { s.loopFrame = firstFrame[tgt]; break; }
+				s.loopFrame = cast(int)s.ctrlOf.length;
+				row = tgt;
+				continue;
+			}
+			if(firstFrame[row] < 0) firstFrame[row] = cast(int)s.ctrlOf.length;
+			if(w2 >= 0x10) cur = w2;    // real SID control byte (else 0/delay = keep)
+			s.ctrlOf ~= cur;
+			if(visited[row]) break;
+			visited[row] = true;
+			row = (row + 1) & 0xff;
+		}
+		return s;
 	}
 
 	override int keypress(Keyinfo key) {

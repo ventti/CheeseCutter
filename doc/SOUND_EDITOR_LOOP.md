@@ -33,7 +33,7 @@ Editing byte-parity is P4+ (out of scope this run) — DO NOT implement editing.
 ## Agent strategy
 - Dedicated agents scaffolded in `.claude/agents/`.
 
-## Status: P1–P3 COMPLETE + independently verified. v2 LAYOUT (§7) committed (4f588d6). v3 (§8) separate-view/Z-order + restart conditions implemented (read-only) — awaiting verify. P4–P6 (editing/write-back, mouse, docs polish) NOT started.
+## Status: P1–P3 COMPLETE + independently verified. v2 LAYOUT (§7) committed (4f588d6). v3 (§8) committed (be8e371). v4 (§9) graph-sync + bit-lane wave + restart pre-roll + pixel-perfect output implemented (read-only) — awaiting verify. P4–P6 (editing/write-back, mouse, docs polish) NOT started.
 Commits on feat/sound-editor: 85ccd8e (P1), e8a0f39 (P2), bee75eb (P3), 41a8e65 (checkpoint). v2 relayout uncommitted (loop orchestrator commits).
 
 Tech-debt to address in P6 polish (non-blocking, from verifiers):
@@ -294,4 +294,68 @@ Tech-debt to address in P6 polish (non-blocking, from verifiers):
       no tracker cells showing through.
   - Regenerated `make map` (ARCHITECTURE.md dep edges: soundedit.d → ui.menubar,
     ui.palette). No shortcut/CLI/flag added, so no KEYBOARD.md / man-page regen.
+    NOT done: data editing / write-back / undo (P4+, still read-only).
+- (v4 GRAPH-SYNC + BIT-LANE WAVE + RESTART PRE-ROLL + PIXEL-PERFECT OUTPUT, §9
+  2026-07-07) Still READ-ONLY. All four §9 fixes in `src/ui/soundedit.d` only.
+  - **§9.1 one true shared X-axis.** `xForFrame(g,f)` is now THE single frame->pixel
+    map for every band (folds in the pre-roll offset, accepts negative pre-roll
+    frames). The ADSR band was the desync culprit: it now samples the envelope PER
+    FRAME on that axis (SID ms tables -> frames for A/D/R; ramp to 1.0 over attackF,
+    decay to sustain/15 over decayF, sustain hold for NOMINAL_GATE_FRAMES=46, then
+    release over releaseF) instead of its old ms-proportional/stretch-to-fill X, so
+    its knees line up in time with pulse/filter/wave/output. New TOTAL_FRAMES =
+    RESTART_FRAMES + VISIBLE_FRAMES; every per-pixel band maps px->frame with the
+    same constants.
+  - **§9.5 output pixel-perfect again.** `drawOutputBand` restored to PER-PIXEL
+    min/max (one column per horizontal pixel, not per frame — the classic
+    oscilloscope approach) over the note region [trigger divider .. right edge].
+    Live mix (`audio.audio.mixbuf`+`getbufsize()`) while `audio.player.isPlaying()`
+    for a moving trace; `captureBuf` (visible = VISIBLE_FRAMES*captureFrameSamples,
+    clamped to captureLen) for a held keyjam note. Continuous/non-blocky again and
+    still frame-aligned (pixel<->frame is the shared mapping).
+  - **§9.2 restart pre-roll + trigger divider.** RESTART_FRAMES=10 reserved at the
+    LEFT (frames -10..0). A red note-trigger divider (`COL_TRIGGER`) is drawn at
+    xForFrame(0) full-height across ALL bands. The ADSR band shades the pre-roll
+    (dim gradient wash) and draws the restart ramp from col2 ($80 hard from full /
+    $40 soft from mid / else 3-frame from low), decaying to 0 by the trigger, with a
+    small `rst:hard|soft|3fr` label. Other bands start at frame 0 (pre-roll empty).
+  - **§9.3 wave band -> 8 stacked control-bit lanes.** New `simWaveFrames(startRow)`
+    flattens the wave program to one effective SID control byte per FRAME (follows
+    $7F jump / $7E loop-prev like simPulse/simFilter; carries the last real control
+    byte forward across delay/unchanged rows; records loopFrame). `drawWaveBand`
+    now stacks 8 thin lanes b7 Noise(top)..b0 Gate(bottom), a filled coloured block
+    per ON bit per frame (distinct colour + 3-char gutter label Noi/Pul/Saw/Tri/Tst/
+    Rng/Snc/Gat), faint lane separators, loop-back marker kept. A combined-waveform
+    frame lights >1 waveform lane. Band weights re-tuned to [1,1,0.9,0.9,2.0] so the
+    wave band is tall enough for 8 lanes. (Old per-cell `drawWaveBand`/`waveformColor`
+    removed; `simWave`/`WaveSim` kept — still used by the param column + raw strip.)
+  - Build: `make -f Makefile.mac clean && make -f Makefile.mac -j4 ccutter ccdriver`
+    → both binaries produced (ccutter 7435544, ccdriver 7446808).
+  - Smoke (headless dummy SDL), tunes/vent-arkijuusto.ct, ENTER seq
+    `load:... key:ESC key:Ctrl-e` (first ESC dismisses the splash), `key:+`×N to step:
+    * se-v4-ins0A.png — ins0A "Basari+Bass" (AD05 SR CA Rst80 hard, Pul01 Flt01
+      Wav1B): ADSR restart pre-roll + red trigger divider, pulse sweep, bit-lanes
+      Noi(grey)->Pul(yellow) with Gat(green) held. Cross-checks the Instruments
+      table row 0A `05 CA 80 41 01 01 00 1B`.
+    * se-v4-play.png — ins07 "Lead", `play ff:6 scopefill:3 tick:2` (light scopefill
+      w/ retry to dodge the pre-existing reSID-fp resampler segfault): PIXEL-PERFECT
+      continuous Output trace from the live mix; one white playhead + red divider,
+      each a single 407px full-height column, crossing every band aligned; ADSR knee
+      + pulse ramp + wave bits all start at the divider. Wave $0F row10 = ctrl $61 =
+      pulse+saw+gate → the **Pul(yellow) and Saw(green) lanes light on the SAME
+      frame** (combined waveform, honest to HW) — see se-v4-combined-zoom.png.
+    * se-v4-ins12.png — Restart `$00 3fr` (a DIFFERENT restart mode vs 0A/07 hard):
+      pre-roll ramp shape differs; all bands update together.
+    * se-v4-dialog.png — F12 help dialog over the editor renders clean, zero graph
+      pixel bleed (z-order §8.1 still intact).
+    * se-v4-cleanexit.png — `key:Ctrl-e` exits: "Sound Editor closed.", classic
+      tracker fully restored, no lingering graph pixels/text.
+  - Alignment CONFIRMED programmatically (PIL scan of se-v4-play.png): red divider at
+    x=379 and white playhead at x=386 are each a single continuous 407px vertical run
+    spanning the whole band stack; Output content begins at x=380 (the divider). The
+    shared-axis mapping is structural (all bands call the one `xForFrame`).
+  - Read-only CONFIRMED: `git status` shows only soundedit.d (code) changed; grep finds
+    NO writes to song.instrumentTable/waveTable/pulseTable/filterTable.
+  - Regenerated `make map` (module synopsis updated to v4); `make check-map` clean. No
+    shortcut/CLI/flag added, so no KEYBOARD.md / man-page regen.
     NOT done: data editing / write-back / undo (P4+, still read-only).
