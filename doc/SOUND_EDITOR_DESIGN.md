@@ -310,3 +310,57 @@ left param column present with a cursor; raw hex table data along the bottom.
 Switch instrument → graphs + params + raw data all change together. Drive song
 playback → the single playhead moves across all bands in lockstep. No writes to
 song bytes (still read-only).
+
+---
+
+## 8. Separate-view semantics, Z-order, and restart conditions (2026-07-07 v3)
+
+Still **read-only** this pass. Two user requirements:
+
+### 8.1 Treat the Sound Editor as a separate VIEW, not an overlay
+The graphs use `com.fb`'s post-composite pixel layer (`renderGrid()` tail), which
+by construction paints on top of *everything* — including the top menu bar,
+menu dropdowns, the command palette and modal dialogs. That makes it read like a
+floating overlay and lets its pixels cover chrome/pop-ups. Fix so it behaves as a
+clean full-screen view:
+
+1. **Menu + pop-ups have higher Z than the Sound Editor.** The Sound Editor must
+   YIELD its pixel layer to chrome. In `SoundEditor.update()`, when ANY of these
+   is active, emit `olClear()` and draw **no** graph pixels this frame (let the
+   text-cell chrome show unobstructed):
+   - `mainui.dialog !is null` (modal dialog / pop-up),
+   - `mainui.menubar.active` (menu dropdown open),
+   - `mainui.palette.active` (command palette open).
+   Also confine ALL graph pixels to **below the top menu bar row(s)** so the
+   always-visible menu bar is never overpainted even when no pop-up is up.
+   (Queries confirmed: `MenuBar.active` `menubar.d:90`, `CommandPalette.active`
+   `palette.d:79`, `UI.dialog` `ui.d:57`.)
+2. **Flawless view switch, no lingering elements.** Entering must fully clear the
+   previous (tracker) screen (`screen.clrscr()` / refresh) so no tracker cells
+   peek through gaps; leaving must `video.olClear()` + full `refresh()` so no
+   graph pixels or Sound-Editor text linger over the restored tracker. Verify
+   both directions pixel-clean.
+
+Rationale: given the framebuffer offers only a text grid + one top pixel layer,
+"separate view" is realized by (a) clipping the view's pixels to its content
+region below the menu, and (b) suppressing them whenever higher-Z chrome/pop-ups
+are present — the pop-up/menu then renders above with nothing bleeding over it.
+
+### 8.2 Display the restart conditions
+The instrument's restart/hard-restart config must be shown (read-only), in the
+left param column and the bottom raw-data strip:
+- **col 2** restart/arp byte: `$00` = 3-frame restart, `$40` = soft restart,
+  `$80` = hard restart; low nibble = gate-on / arp delay. Show as a readable
+  label (e.g. `Restart: hard  (gate-on delay N)`).
+- **col 3** hard-restart waveform byte.
+- **col 6** hard-restart SR (the AD/SR-style byte used during hard restart).
+Label them plainly ("Restart", "HR wave", "HR ADSR") next to the other params;
+include the raw hex in the bottom strip.
+
+### 8.3 Verify (v3)
+Clean build. (1) Enter → non-blue bg, stacked aligned graphs, left params incl.
+the restart rows, bottom raw data. (2) Open the top menu (Esc) while in the Sound
+Editor → the dropdown draws ABOVE the graphs (no pixels over it); close → graphs
+return. (3) Trigger a pop-up/dialog → it renders above, unobstructed. (4) Exit
+(Ctrl-E) → tracker fully restored, zero lingering graph pixels or text. (5) Enter
+again → no leftover tracker cells showing through. (6) Still read-only.

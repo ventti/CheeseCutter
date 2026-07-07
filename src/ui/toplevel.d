@@ -548,6 +548,11 @@ final package class Toplevel : WindowSwitcher, Undoable {
 		savedWindows = windows;
 		savedActiveWindowNum = activeWindowNum;
 		prevKeyjamStatus = state.keyjamStatus;
+		// v3: treat the Sound Editor as a separate full-screen VIEW. Wipe the whole
+		// text grid first so no tracker cells peek through the gaps between the
+		// Sound Editor's frame/param column/bands (its content region isn't a solid
+		// fill). activateWindow()/refresh() below repaints the Sound Editor clean.
+		screen.clrscr();
 		windows = [cast(Window)soundEditor];
 		soundEditorActive = true;
 		activateWindow(0);
@@ -567,6 +572,10 @@ final package class Toplevel : WindowSwitcher, Undoable {
 		// Drop the Sound Editor's overlay draw-list so its graphs don't linger over
 		// the classic editor (overlayActive would otherwise force stale re-renders).
 		video.olClear();
+		// v3: wipe the text grid so no Sound Editor text (frame/params/raw strip)
+		// lingers where the restored tracker doesn't repaint. activateWindow() below
+		// calls refresh(), repainting the classic editor over the cleared screen.
+		screen.clrscr();
 		windows = savedWindows;
 		int n = savedActiveWindowNum;
 		if(n < 0 || n >= cast(int)windows.length) n = 0;

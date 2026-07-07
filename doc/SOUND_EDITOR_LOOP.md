@@ -33,7 +33,7 @@ Editing byte-parity is P4+ (out of scope this run) — DO NOT implement editing.
 ## Agent strategy
 - Dedicated agents scaffolded in `.claude/agents/`.
 
-## Status: P1–P3 COMPLETE + independently verified. v2 LAYOUT REDESIGN (§7) implemented (read-only) — awaiting verify. P4–P6 (editing/write-back, mouse, docs polish) NOT started.
+## Status: P1–P3 COMPLETE + independently verified. v2 LAYOUT (§7) committed (4f588d6). v3 (§8) separate-view/Z-order + restart conditions implemented (read-only) — awaiting verify. P4–P6 (editing/write-back, mouse, docs polish) NOT started.
 Commits on feat/sound-editor: 85ccd8e (P1), e8a0f39 (P2), bee75eb (P3), 41a8e65 (checkpoint). v2 relayout uncommitted (loop orchestrator commits).
 
 Tech-debt to address in P6 polish (non-blocking, from verifiers):
@@ -244,4 +244,54 @@ Tech-debt to address in P6 polish (non-blocking, from verifiers):
   - Headless-capture note: the playhead's `frameSinceTrigger` advances per UI
     `tick` (not per player frame), so headless it sits near the left unless extra
     ticks are driven; on real hardware update()≈50 fps ≈ player rate so it tracks.
+    NOT done: data editing / write-back / undo (P4+, still read-only).
+- (v3 SEPARATE-VIEW + Z-ORDER + RESTART CONDITIONS, §8 2026-07-07) Still READ-ONLY.
+  - **§8.1 Z-order — yield the pixel overlay to higher-Z chrome.** The com.fb
+    overlay is a post-composite pixel layer drawn on top of ALL text cells (menu
+    bar, dropdowns, palette, dialogs), so its graphs bled over pop-ups. Fix:
+    `SoundEditor.update()` now calls a new `chromeActive()` guard first — when
+    `mainui.dialogActive` (new trailing `@property bool UI.dialogActive` exposing
+    the private `dialog` field), or `mainui.menubar.active`, or
+    `mainui.palette.active` — it does `video.olClear()` and RETURNS, emitting no
+    graph pixels that frame. The chrome (drawMenu / dialog.update, both text) then
+    renders unobstructed; the editor's own text cells stay beneath it exactly like
+    the classic editor. Added imports `com.session : mainui`, `ui.menubar`,
+    `ui.palette` to soundedit.d.
+  - **§8.1 confine pixels below the menu bar:** verified no change needed — the
+    band stack starts at `stackTopRow = area.y + 3` (area.y=zone1y=4 → row 7,
+    pixel Y=98), far below the row-0 menu bar (px 0..13). All graph pixels (bands +
+    the full-height playhead spanning stackTopPx..stackBotPx) live below it.
+  - **§8.2 clean view switch:** `ui.toplevel.startSoundEditor()` now `screen.clrscr()`s
+    BEFORE the window swap so no tracker cells peek through the editor's non-solid
+    content region; `stopSoundEditor()` now `screen.clrscr()`s after `video.olClear()`
+    and before restoring `windows` (activateWindow→refresh repaints the tracker
+    clean) so no Sound-Editor text/pixels linger. Both directions verified
+    pixel-clean (enter and re-enter PNGs are byte-identical; exit fully restores the
+    tracker).
+  - **§8.2 restart conditions in the param column + raw strip:** left param row 8
+    relabelled `HardRst`→`Restart`, value now `$40 soft g0` (mode from bits 6-7:
+    hard/soft/3fr + gate-on/arp-delay low nibble); rows 9/10 `HR wave $80` / `HR SR
+    $00` (cols 3/6). The bottom raw strip already prints `Rst %02X  HRw %02X ...
+    HRsr %02X` (cols 2/3/6 hex) — verified present.
+  - Files: `src/ui/soundedit.d` (chromeActive guard + early-return; Restart row
+    relabel/gate-on; new imports), `src/ui/ui.d` (trailing `dialogActive`
+    accessor), `src/ui/toplevel.d` (clrscr on enter+exit).
+  - Build: `make -f Makefile.mac clean && make -f Makefile.mac -j4 ccutter ccdriver`
+    → exit 0, both binaries (ccutter 7434984, ccdriver 7446232).
+  - Smoke (headless dummy SDL), tune tunes/vent-arkijuusto.ct, ENTER seq
+    `load:... key:ESC key:Ctrl-e` (first ESC dismisses the startup splash):
+    * se-v3fix-enter.png — non-blue bg, menu bar intact, param col incl.
+      `Restart $40 soft g0 / HR wave $80 / HR SR $00`, raw strip
+      `Rst 40 HRw 80 ... HRsr 00`, five stacked bands.
+    * se-v3fix-menu.png — `key:ESC` inside the editor opens the File dropdown
+      (Esc resolves in `UI.keypress` above the toplevel routing guard). Dropdown
+      fully visible, ZERO graph pixels over it (ADSR curve + pulse fill suppressed).
+    * se-v3fix-dialog.png — `key:F12` (help_dialog, Ctx.global) opens the modal
+      help dialog over the editor, clean, no graph pixels over it.
+    * se-v3fix-exit.png — `key:Ctrl-e` exits; classic tracker fully restored, no
+      lingering graph pixels/text ("Sound Editor closed.").
+    * se-v3fix-reenter.png — `key:Ctrl-e` re-enters; byte-identical to enter PNG,
+      no tracker cells showing through.
+  - Regenerated `make map` (ARCHITECTURE.md dep edges: soundedit.d → ui.menubar,
+    ui.palette). No shortcut/CLI/flag added, so no KEYBOARD.md / man-page regen.
     NOT done: data editing / write-back / undo (P4+, still read-only).

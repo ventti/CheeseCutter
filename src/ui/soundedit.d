@@ -27,11 +27,13 @@ import std.algorithm : max, min;
 import std.math : lround;
 import derelict.sdl2.sdl;
 import com.fb : FONT_X, FONT_Y, keyjamBackground;
-import com.session : screen, video, state, song;
+import com.session : screen, video, state, song, mainui;
 import com.shortcuts : Ctx;
 import ui.window;
 import ui.input;
 import ui.ui : UI;
+import ui.menubar : MenuBar;
+import ui.palette : CommandPalette;
 static import audio.player;
 static import audio.audio;
 static import audio.visualizer;
@@ -186,6 +188,18 @@ class SoundEditor : Window {
 		// trace lingers underneath the bands.
 		video.clearScopeTrace();
 
+		// v3 (§8.1): higher-Z chrome (a modal dialog/pop-up, an open menu dropdown,
+		// or the command palette) must render UNOBSTRUCTED. The com.fb overlay is a
+		// post-composite PIXEL layer drawn on top of ALL text cells, so any graph
+		// pixels would bleed over that chrome. Yield the layer: clear the draw-list
+		// and emit no graph pixels this frame. The chrome (text) is drawn after us
+		// (drawMenu / dialog.update) and now shows cleanly; our own text cells stay
+		// from the prior frame beneath it, exactly like the classic editor.
+		if(chromeActive()) {
+			video.olClear();
+			return;
+		}
+
 		drawFrame(area);
 
 		int ins = state.activeInstrument;
@@ -243,6 +257,17 @@ class SoundEditor : Window {
 		drawRawData(ins, g);
 	}
 
+	// True while any higher-Z chrome is up (§8.1): a modal dialog/pop-up, an open
+	// menu dropdown, or the command palette. Used to yield the pixel overlay so the
+	// chrome renders unobstructed. All three are read-only queries.
+	private bool chromeActive() {
+		if(mainui is null) return false;
+		if(mainui.dialogActive) return true;
+		if(mainui.menubar !is null && mainui.menubar.active) return true;
+		if(mainui.palette !is null && mainui.palette.active) return true;
+		return false;
+	}
+
 	// Find a voice currently sounding instrument `ins` (for playhead placement);
 	// -1 if none.
 	private int findVoiceFor(int ins) {
@@ -272,8 +297,11 @@ class SoundEditor : Window {
 		int firstCtrl = 0;
 		foreach(c; w.cells) if(c.ctrl >= 0x10) { firstCtrl = c.ctrl; break; }
 
+		// §8.2 restart-condition byte (col 2): $80 hard / $40 soft / else 3-frame
+		// restart; the low nibble is the gate-on / arp delay.
 		string rstStr = (rst & 0xc0) == 0x80 ? "hard"
 			: ((rst & 0xc0) == 0x40 ? "soft" : "3fr");
+		int gateOn = rst & 0x0f;
 
 		// 6-char text bar for a 0..15 nibble.
 		static string nibbleBar(int n) {
@@ -285,7 +313,7 @@ class SoundEditor : Window {
 
 		string[PARAM_ROWS] labels = [
 			"Attack", "Decay", "Sustain", "Release", "Waveform", "Wave ptr",
-			"Pulse ptr", "Filter ptr", "HardRst", "HR wave", "HR SR"
+			"Pulse ptr", "Filter ptr", "Restart", "HR wave", "HR SR"
 		];
 		string[PARAM_ROWS] vals;
 		vals[0]  = format("%X %s", attack,  nibbleBar(attack));
@@ -296,7 +324,7 @@ class SoundEditor : Window {
 		vals[5]  = format("$%02X", wpt);
 		vals[6]  = ppt >= 0x80 ? format("fix $%03X", (ppt & 0x0f) << 8) : format("$%02X", ppt);
 		vals[7]  = fpt == 0 ? "off" : format("$%02X", fpt);
-		vals[8]  = format("$%02X %s", rst, rstStr);
+		vals[8]  = format("$%02X %s g%X", rst, rstStr, gateOn);
 		vals[9]  = format("$%02X", hrw);
 		vals[10] = format("$%02X", hsr);
 

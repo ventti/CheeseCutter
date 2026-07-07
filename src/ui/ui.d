@@ -94,6 +94,11 @@ final class UI {
 	package OscilloscopeWindow scopeWindow;
 	package bool scopeVisible;
 
+	// Read-only accessor so views outside this module (e.g. the Sound Editor)
+	// can query whether a modal dialog/pop-up is up without reaching the private
+	// `dialog` field. Non-virtual method on a final class -> no vtable change.
+	@property bool dialogActive() const { return dialog !is null; }
+
 	this() {
 		sm = new ShortcutManager();
 		statusline = new Statusline(Rectangle(0, 2, 1));
