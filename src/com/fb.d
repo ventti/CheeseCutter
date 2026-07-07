@@ -165,6 +165,24 @@ abstract class Video {
 	bool splashScroll;
 
 	abstract void updateFrame();
+
+	// --- Immediate-mode overlay draw-list (Sound Editor et al.) ---
+	// A per-frame list of simple pixel ops in DEVICE-pixel coords with a palette
+	// colour index `col`, flushed on top of the finished text grid in
+	// renderGrid() right alongside the single-slot scope trace (so both
+	// updateFrame() and saveScreenshot() composite it identically). The caller
+	// rebuilds the list every frame: olClear() at the start of its draw, then any
+	// number of ol* ops. Several independent graphs can coexist here at once, and
+	// it lives beside — not instead of — setScopeTrace above. Declared as TRAILING
+	// no-op virtuals on the base for vtable compatibility (this repo has no dep
+	// tracking, so new virtuals must be appended); only the SDL subclass draws.
+	void olClear() {}
+	void olLine(int x0, int y0, int x1, int y1, int col) {}
+	void olVLine(int x, int y0, int y1, int col) {}
+	void olHLine(int x0, int x1, int y, int col) {}
+	void olRect(int x, int y, int w, int h, int col) {}   // outline
+	void olFillRect(int x, int y, int w, int h, int col) {}
+	void olPoint(int x, int y, int col) {}
 }
 
 class VideoStandard : Video {
@@ -290,6 +308,66 @@ class VideoStandard : Video {
 		}
 	}
 
+	// --- Immediate-mode overlay draw-list (see base Video.ol*) ---
+	// Rebuilt each frame by the caller (olClear + ol* ops). overlayActive forces
+	// a per-frame re-render like scopeActive, and the list is kept between frames
+	// so saveScreenshot() re-renders the same overlay. Device-pixel coords.
+	private enum OlKind { line, vline, hline, rect, fillrect, point }
+	private struct OlOp { OlKind kind; int a, b, c, d, col; }
+	private OlOp[] olOps;
+	private bool overlayActive;
+
+	override void olClear() { olOps.length = 0; overlayActive = false; }
+	override void olLine(int x0, int y0, int x1, int y1, int col) {
+		olOps ~= OlOp(OlKind.line, x0, y0, x1, y1, col); overlayActive = true;
+	}
+	override void olVLine(int x, int y0, int y1, int col) {
+		olOps ~= OlOp(OlKind.vline, x, y0, y1, 0, col); overlayActive = true;
+	}
+	override void olHLine(int x0, int x1, int y, int col) {
+		olOps ~= OlOp(OlKind.hline, x0, x1, y, 0, col); overlayActive = true;
+	}
+	override void olRect(int x, int y, int w, int h, int col) {
+		olOps ~= OlOp(OlKind.rect, x, y, w, h, col); overlayActive = true;
+	}
+	override void olFillRect(int x, int y, int w, int h, int col) {
+		olOps ~= OlOp(OlKind.fillrect, x, y, w, h, col); overlayActive = true;
+	}
+	override void olPoint(int x, int y, int col) {
+		olOps ~= OlOp(OlKind.point, x, y, 0, 0, col); overlayActive = true;
+	}
+
+	// Flush the overlay draw-list on top of the finished text grid.
+	private void drawOverlay() {
+		if(!overlayActive || olOps.length == 0) return;
+		foreach(ref op; olOps) {
+			auto c = PALETTE[op.col & 0xff];
+			SDL_SetRenderDrawColor(renderer, c.r, c.g, c.b, 255);
+			final switch(op.kind) {
+			case OlKind.line:
+				SDL_RenderDrawLine(renderer, op.a, op.b, op.c, op.d);
+				break;
+			case OlKind.vline:
+				SDL_RenderDrawLine(renderer, op.a, op.b, op.a, op.c);
+				break;
+			case OlKind.hline:
+				SDL_RenderDrawLine(renderer, op.a, op.c, op.b, op.c);
+				break;
+			case OlKind.rect:
+				SDL_Rect ro = { op.a, op.b, op.c, op.d };
+				SDL_RenderDrawRect(renderer, &ro);
+				break;
+			case OlKind.fillrect:
+				SDL_Rect rf = { op.a, op.b, op.c, op.d };
+				SDL_RenderFillRect(renderer, &rf);
+				break;
+			case OlKind.point:
+				SDL_RenderDrawPoint(renderer, op.a, op.b);
+				break;
+			}
+		}
+	}
+
 	private SDL_Texture* splashTexture;
 
 	// Scroller state. scrollCells is the message expanded into one entry per
@@ -398,7 +476,7 @@ class VideoStandard : Video {
 		if(splashActive) { drawSplash(); return; }
 		// The oscilloscope trace moves every frame, so re-render while it is
 		// active even when the text grid itself is unchanged.
-		if (!isDirty && !scopeActive) return;
+		if (!isDirty && !scopeActive && !overlayActive) return;
 		isDirty = false;
 		renderGrid();
 		SDL_RenderPresent(renderer);
@@ -515,8 +593,10 @@ class VideoStandard : Video {
 		}
 			//SDL_UnlockSurface(surface);
 			//SDL_Flip(surface);
-		// Composite the pixel-sharp oscilloscope trace over the finished grid.
+		// Composite the pixel-sharp oscilloscope trace over the finished grid,
+		// then the immediate-mode overlay draw-list (both captured by screenshots).
 		drawScopeTrace();
+		drawOverlay();
 	}
 
 	// Capture the current frame to a PNG in the current working directory.

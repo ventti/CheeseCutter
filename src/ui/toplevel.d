@@ -559,6 +559,9 @@ final package class Toplevel : WindowSwitcher, Undoable {
 	void stopSoundEditor() {
 		if(!soundEditorActive) return;
 		soundEditorActive = false;
+		// Drop the Sound Editor's overlay draw-list so its graphs don't linger over
+		// the classic editor (overlayActive would otherwise force stale re-renders).
+		video.olClear();
 		windows = savedWindows;
 		int n = savedActiveWindowNum;
 		if(n < 0 || n >= cast(int)windows.length) n = 0;
