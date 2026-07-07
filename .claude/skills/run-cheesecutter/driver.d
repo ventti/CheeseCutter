@@ -385,6 +385,18 @@ private bool processCommand(string arg) {
 					audio.visualizer.getRecordingLength(v));
 			break;
 		}
+		case "insdump": {
+			// insdump — print every instrument's AD/SR bytes with the decoded release
+			// nibble. A read-only oracle for picking fast-R vs slow-R instruments when
+			// verifying the Sound Editor's §12 auto-fit X-axis zoom.
+			stderr.writeln("ins: AD SR (R nibble)");
+			foreach(i; 0 .. 48) {
+				ubyte ad = song.instrumentTable[i];
+				ubyte sr = song.instrumentTable[i + 48];
+				stderr.writefln("ins%02X: AD=%02x SR=%02x R=%X", i, ad, sr, sr & 0x0f);
+			}
+			break;
+		}
 		case "seqdump": {
 			// seqdump:<n> — dump sequence n's rows as hex (4 bytes/row). A
 			// read-only oracle for verifying block copy/paste/merge/cut edits.

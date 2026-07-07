@@ -33,7 +33,7 @@ Editing byte-parity is P4+ (out of scope this run) — DO NOT implement editing.
 ## Agent strategy
 - Dedicated agents scaffolded in `.claude/agents/`.
 
-## Status: P1–P3 COMPLETE + independently verified. v2 LAYOUT (§7) committed (4f588d6). v3 (§8) committed (be8e371). v4 (§9) committed (f0aae3f). v5 (§10) filter-type colours + resonance-over-time + frequency band + F12 help committed (7b5255c) + fixed 8-row wave band (a09a81f). v6 (§11) RECORDING VIEW — bands now reflect the ACTUAL played audio (per-voice per-frame SID recording) with dimmed table-sim as idle preview, loop replication + subtle loop lines, full-word bit-lane labels — implemented (read-only) — awaiting verify. P4–P6 (editing/write-back, mouse, docs polish) NOT started.
+## Status: P1–P3 COMPLETE + independently verified. v2 LAYOUT (§7) committed (4f588d6). v3 (§8) committed (be8e371). v4 (§9) committed (f0aae3f). v5 (§10) filter-type colours + resonance-over-time + frequency band + F12 help committed (7b5255c) + fixed 8-row wave band (a09a81f). v6 (§11) RECORDING VIEW committed (caaa93c). v7 (§12) AUTO-FIT X-AXIS ZOOM — the shared X window is no longer a fixed VISIBLE_FRAMES=128; it auto-fits the note's full duration each draw (dynamic zoom) — implemented (read-only) — awaiting verify. P4–P6 (editing/write-back, mouse, docs polish) NOT started.
 Commits on feat/sound-editor: 85ccd8e (P1), e8a0f39 (P2), bee75eb (P3), 41a8e65 (checkpoint). v2 relayout uncommitted (loop orchestrator commits).
 
 Tech-debt to address in P6 polish (non-blocking, from verifiers):
@@ -503,4 +503,59 @@ Tech-debt to address in P6 polish (non-blocking, from verifiers):
   - NOTE (headless): the Output band needs a real audio device to fill `captureBuf`, so it is
     flat under headless song playback (documented in §11.5); the SID-STATE bands (ADSR/Freq/
     Pulse/Filter/Wave) DO populate from `ff:` because they read the per-frame recording.
+    NOT done: data editing / write-back / undo (P4+, still read-only).
+- (v7 AUTO-FIT X-AXIS ZOOM to the note's full duration, §12 2026-07-07) Still READ-ONLY.
+  Files: `src/ui/soundedit.d` (dynamic window + scale label + all bands scaled),
+  `src/audio/visualizer.d` (RECORD_FRAMES bumped 138 -> 1650 >= MAX_VIS; new
+  `getRecordedAmpEnd(v,eps)` helper), `.claude/skills/run-cheesecutter/driver.d` (new
+  read-only `insdump` oracle to pick fast-R vs slow-R instruments). Regenerated ARCHITECTURE.md.
+  - **§12.1 dynamic `visFrames`** replaces the fixed `VISIBLE_FRAMES=128` post-trigger span.
+    New `computeVisFrames(ins)` = MAX of (a) the ADSR-derived duration
+    `attackFrames+decayFrames+NOMINAL_GATE_FRAMES+releaseFrames` (A/D/R from the SID ms tables
+    at FRAME_MS) and (b) the actual recorded extent when the viewed voice has a live recording:
+    `getRecordedAmpEnd(v,AMP_EPS)` returns one-past the last frame whose envelope amp>eps — if
+    that's < the record head, silent frames follow so the note ENDED and its real end wins over
+    the table; else (still sounding) `max(baseline, recLen)` grows the window. Clamped to
+    `[MIN_VIS=24, MAX_VIS=1600]`. Computed ONCE per draw at the top of `update()` and threaded
+    through as the `visFrames`/`totalFrames` members (never recomputed per band).
+  - **§12.2 everything scales to the dynamic window.** `xForFrame` now maps
+    `[-RESTART_FRAMES, visFrames]` across `plotWpx` (dynamic frames-per-pixel = zoom). EVERY band
+    loop, both sims' MAXF caps (`simPulse/simFilter/simWaveFrames` replicate up to visFrames),
+    the trigger divider, the playhead (record head clamped to visFrames) and the loop-lines use
+    `visFrames`/`totalFrames`, so they stay aligned at any zoom. Unobtrusive scale label
+    `scale 0-N f (~X.Xs)` printed at the top of the plot gutter (frames + seconds at FRAME_MS).
+    RECORD_FRAMES raised to 1650 (>= MAX_VIS + pre-roll) so a long slow-release note records to
+    its real end.
+  - enter/exit, z-order chrome guard, F12 help, F1..F3, the fixed 8-row wave band, loop lines,
+    and recording-vs-dimmed-sim behaviour all UNCHANGED.
+  - Build: `make -f Makefile.mac clean && make -f Makefile.mac -j4 ccutter ccdriver` -> exit 0,
+    both binaries (touched the shared audio.visualizer -> full clean build; ccutter 7512328,
+    ccdriver relinked).
+  - Smoke (headless dummy SDL), tunes/vent-arkijuusto.ct. New `insdump` oracle listed every
+    instrument's SR/R nibble -> picked FAST **ins00 "HihatClosed"** (SR=00, R=0) vs SLOW
+    **ins06 "Bgtr"** (SR=9B, R=B, a 2400 ms release).
+    * /tmp/se-v7-fast-ins00.png — ENTER seq `load:... key:ESC key:Ctrl-e`: scale label reads
+      **"scale 0-50 f (~1.0s)"** — ZOOMED IN (small span). (ins00 is percussive, sustain=0, so
+      the dim idle envelope collapses early, but the axis IS fitted to the 50-frame ADSR total.)
+    * /tmp/se-v7-slow-ins06.png — `key:+`x6 -> ins06: scale label **"scale 0-172 f (~3.4s)"** —
+      ZOOMED OUT; the long release tail slopes across the ENTIRE plot width and ends near the
+      right edge (no truncation). Release nibble = B, sustain = 9.
+    * /tmp/se-v7-play-ins07.png — `key:F2 ff:24` then `key:+`x7 to view **ins07 "Lead"** while
+      voice1 sounds it (recLen 116, still sounding): scale **"scale 0-116 f (~2.3s)"** (recording
+      extent won). VIVID recorded bands — green ADSR envelope, cyan Freq staircase, blue Pulse
+      sweep, purple LP+HP Filter + resonance, Pulse/Saw/Gate bit-lanes — with the WHITE playhead
+      at the record head (right edge) and the red trigger divider at the left edge, all bands
+      aligned at the new zoom.
+    * /tmp/se-v7-exit.png — `key:Ctrl-e` exits: "Sound Editor closed.", classic tracker fully
+      restored (Instruments/Wave/Pulse/Filter/Command/Tracks); the restored Instruments panel
+      cross-checks the R nibbles (00:13/00, 06:04/9B, 07:67/B9).
+  - SPAN-DIFFERS EVIDENCE (the core §12 check): ins00 R=0 -> 50 f (~1.0 s); ins06 R=B -> 172 f
+    (~3.4 s) — a ~3.4x zoom difference driven purely by the release nibble; ins07 recording ->
+    116 f (~2.3 s). Axis auto-fits each.
+  - READ-ONLY CONFIRMED: grep finds NO writes to song.{instrumentTable/waveTable/pulseTable/
+    filterTable/superTable/insLabels} in soundedit.d or visualizer.d; git status shows only code
+    + the design doc + driver.d changed.
+  - Ran `make map` — idempotent (no module's one-line synopsis first-sentence changed, so
+    ARCHITECTURE.md is unchanged). No shortcut/CLI/flag/help-registry change -> no KEYBOARD.md /
+    man-page regen needed.
     NOT done: data editing / write-back / undo (P4+, still read-only).

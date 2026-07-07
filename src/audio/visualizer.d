@@ -90,10 +90,11 @@ private __gshared int activeFilterRow = -1;
 // from audio.callback), so it works for keyjam on real HW AND for song playback /
 // ccdriver `ff:` headless. Reset on a gate 0->1 transition (new note = frame 0).
 // The Sound Editor reads these to draw its bands from the recording instead of a
-// table simulation. Capped at RECORD_FRAMES, which MUST match the Sound Editor's
-// TOTAL_FRAMES window (RESTART_FRAMES 10 + VISIBLE_FRAMES 128) so the frame axis
-// lines up 1:1. All read-only: we record playback state, never write song bytes.
-enum int RECORD_FRAMES = 138;
+// table simulation. Capped at RECORD_FRAMES, which MUST be >= the Sound Editor's
+// widest dynamic X window (§12: MAX_VIS + the restart pre-roll) so even a long,
+// slow-release note records to its actual end and the axis can auto-fit it.
+// All read-only: we record playback state, never write song bytes.
+enum int RECORD_FRAMES = 1650;
 
 private __gshared int[RECORD_FRAMES][3]   recCtrl;    // control byte (sidreg[v*7+4])
 private __gshared int[RECORD_FRAMES][3]   recFreq;    // 16-bit frequency
@@ -508,6 +509,18 @@ const(int)[] getRecordedMode(int voiceNum) nothrow {
 const(float)[] getRecordedAmp(int voiceNum) nothrow {
 	if(voiceNum < 0 || voiceNum >= 3) return null;
 	return recAmp[voiceNum][0 .. recLen[voiceNum]];
+}
+
+/// §12.1: one past the index of the LAST recorded frame whose envelope amplitude
+/// exceeded `eps` — i.e. the recorded note's audible length. 0 when the note
+/// never rose above eps. The Sound Editor uses this to auto-fit the X axis to the
+/// note's ACTUAL end: when this is < the record head, silent frames follow, so the
+/// note has ENDED and its real duration (this value) wins over the ADSR estimate.
+int getRecordedAmpEnd(int voiceNum, float eps) nothrow {
+	if(voiceNum < 0 || voiceNum >= 3) return 0;
+	int last = -1;
+	foreach(i; 0 .. recLen[voiceNum]) if(recAmp[voiceNum][i] > eps) last = i;
+	return last + 1;
 }
 
 /**

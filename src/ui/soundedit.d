@@ -7,7 +7,10 @@ This is the full-screen alternative sound-editing mode toggled from the classic
 editor (Ctrl-E). It runs keyjam (notes play) but uses the *normal* background,
 not the dark-blue keyjam tint. The layout (design doc §7, §9 v4) stacks every
 time-varying graph on ONE shared horizontal axis = frames since note-on
-(~19.95 ms PAL ticks) mapped through the single xForFrame(): a pixel-perfect
+(~19.95 ms PAL ticks). The X span AUTO-FITS the note's full duration (§12):
+visFrames is computed once per draw as the max of the ADSR-derived length (SID ms
+tables) and the actual recorded extent, so short sounds zoom in and long releases
+zoom out to fit; every band maps frame->pixel through the single xForFrame(): a pixel-perfect
 output waveform (per-horizontal-pixel min/max of the live mix while playing, or
 the per-note capture for a held keyjam note), the ADSR envelope (SID ms tables
 converted to frames, sampled per frame with a nominal gate so A/D/S/R all show),
@@ -45,8 +48,15 @@ static import audio.visualizer;
 
 // PAL player tick period (ms) -- the frame quantum every over-time graph shares.
 private enum float FRAME_MS = 19.95f;
-// Visible frames across the shared X axis (~2.5 s at PAL) AFTER the note trigger.
-private enum int VISIBLE_FRAMES = 128;
+// §12.1: the post-trigger X span is no longer a fixed constant -- it AUTO-FITS the
+// note's full duration each frame (see SoundEditor.computeVisFrames). These are the
+// sane clamp bounds: a floor so a tiny sound isn't absurdly zoomed in, and a ceiling
+// so a pathological length still renders (long sounds get <1px/frame = zoomed out).
+private enum int MIN_VIS = 24;
+private enum int MAX_VIS = 1600;
+// §12.1: envelope-amplitude threshold for "the note is still audible" when reading
+// the recorded extent (below this counts as silence / note ended).
+private enum float AMP_EPS = 0.02f;
 // §9.2: pre-roll region reserved at the LEFT of the shared axis for the hard/soft
 // restart phase that runs in the frames BEFORE the note triggers (frames
 // -RESTART_FRAMES .. 0). Frame 0 = the note-trigger divider. Every band maps
@@ -195,6 +205,12 @@ class SoundEditor : Window {
 	private int viewVoice = -1;
 	private bool useRec = false;
 
+	// §12 dynamic X window, computed ONCE per draw at the top of update() and threaded
+	// through xForFrame + every band so they all share the exact same zoom. visFrames
+	// = the auto-fitted post-trigger span (frames); totalFrames = pre-roll + visFrames.
+	private int visFrames = MIN_VIS;
+	private int totalFrames = RESTART_FRAMES + MIN_VIS;
+
 	// The screen owns its own keyjam so note keys play while the panel is
 	// focused and navigating (the classic editor's global inputKeyjam is
 	// bypassed for this window by the Toplevel routing guard).
@@ -266,17 +282,45 @@ class SoundEditor : Window {
 		return g;
 	}
 
-	// Total frames across the shared axis: RESTART_FRAMES of pre-roll + VISIBLE_FRAMES
-	// of note. Kept as one place so xForFrame and the per-pixel bands agree exactly.
-	private enum int TOTAL_FRAMES = RESTART_FRAMES + VISIBLE_FRAMES;
+	// §12.1 Auto-fit the post-trigger X span to the note's full duration. Baseline =
+	// the ADSR-derived duration from the SID ms tables (A+D+nominal-gate+R frames); if
+	// a live recording of the viewed voice exists it overrides: the recorded end frame
+	// wins once the note has fallen silent (release finished), else the growing record
+	// head keeps the axis fitted while it is still sounding. Clamped to [MIN_VIS,MAX_VIS]
+	// (long sounds zoom out to <1px/frame; that is the intended fit).
+	private int computeVisFrames(int ins) {
+		// ADSR-derived baseline (frames).
+		ubyte ad = song.instrumentTable[ins + 0 * 48];
+		ubyte sr = song.instrumentTable[ins + 1 * 48];
+		int attack  = (ad >> 4) & 0x0f, decay = ad & 0x0f, release = sr & 0x0f;
+		int aF = cast(int)lround(ATTACK_TIME_MS[attack]         / FRAME_MS);
+		int dF = cast(int)lround(DECAY_RELEASE_TIME_MS[decay]   / FRAME_MS);
+		int rF = cast(int)lround(DECAY_RELEASE_TIME_MS[release] / FRAME_MS);
+		int vf = aF + dF + NOMINAL_GATE_FRAMES + rF;
 
-	// §9.1 THE one true frame->pixel map every band shares. Frame f may be negative
-	// (pre-roll / restart); f=0 is the note-trigger divider.
+		// Recorded extent overrides the estimate when we have real audio.
+		if(useRec) {
+			int rl = audio.visualizer.getRecordingLength(viewVoice);
+			int ampEnd = audio.visualizer.getRecordedAmpEnd(viewVoice, AMP_EPS);
+			if(ampEnd > 0 && ampEnd < rl)
+				vf = ampEnd;            // note ENDED: the actual end wins over the table
+			else
+				vf = max(vf, rl);       // still sounding: grow the window to fit
+		}
+
+		if(vf < MIN_VIS) vf = MIN_VIS;
+		if(vf > MAX_VIS) vf = MAX_VIS;
+		return vf;
+	}
+
+	// §9.1/§12.2 THE one true frame->pixel map every band shares, now over the DYNAMIC
+	// window [-RESTART_FRAMES, visFrames] (dynamic frames-per-pixel = zoom). Frame f may
+	// be negative (pre-roll / restart); f=0 is the note-trigger divider.
 	private int xForFrame(ref Geo g, int f) {
 		int rel = f + RESTART_FRAMES;
 		if(rel < 0) rel = 0;
-		if(rel > TOTAL_FRAMES) rel = TOTAL_FRAMES;
-		return g.plotX0px + rel * g.plotWpx / TOTAL_FRAMES;
+		if(rel > totalFrames) rel = totalFrames;
+		return g.plotX0px + rel * g.plotWpx / totalFrames;
 	}
 
 	override void update() {
@@ -324,6 +368,17 @@ class SoundEditor : Window {
 		viewVoice = chooseVoice(ins);
 		useRec = viewVoice >= 0 && audio.visualizer.voiceHasRecording(viewVoice);
 
+		// §12.1 auto-fit the shared X window to the note's full duration, ONCE per draw,
+		// then thread visFrames/totalFrames through xForFrame + every band so they all
+		// share the exact same zoom (they'd misalign if recomputed per band).
+		visFrames = computeVisFrames(ins);
+		totalFrames = RESTART_FRAMES + visFrames;
+
+		// §12.2 unobtrusive scale label so the current zoom is legible.
+		float secs = visFrames * FRAME_MS / 1000.0f;
+		screen.cprint(g.labelX, area.y + 2, COL_LABEL, 0,
+					  format("scale 0-%d f (~%.1fs)", visFrames, secs));
+
 		// Vertical separator between the param column and the graph stack.
 		for(int y = area.y + 2; y <= g.rawTopRow - 1; y++)
 			screen.setChar(g.sepX, y, 0x0500 | 216);
@@ -358,7 +413,7 @@ class SoundEditor : Window {
 		// bands (the idle sim preview has no record head).
 		if(useRec) {
 			int rh = audio.visualizer.getRecordingLength(viewVoice);
-			if(rh > VISIBLE_FRAMES) rh = VISIBLE_FRAMES;
+			if(rh > visFrames) rh = visFrames;
 			video.olVLine(xForFrame(g, rh), g.stackTopPx, g.stackBotPx, COL_HEAD);
 		}
 
@@ -400,7 +455,7 @@ class SoundEditor : Window {
 		// section worth marking — skip it so it doesn't draw a line every frame.
 		if(loopFrame < 0 || period < 2) return;
 		int lastX = -1_000_000;
-		for(int f = loopFrame; f < n && f < VISIBLE_FRAMES; f += period) {
+		for(int f = loopFrame; f < n && f < visFrames; f += period) {
 			int x = xForFrame(g, f);
 			if(lastX > -1_000_000 && x - lastX < MIN_LOOP_PX) continue; // stay subtle, no comb
 			video.olVLine(x, topPx, botPx, COL_LOOPLINE);
@@ -414,7 +469,7 @@ class SoundEditor : Window {
 			int topPx, int botPx, ref Geo g) {
 		int hh = botPx - topPx;
 		if(hh <= 0 || maxVal <= 0) return;
-		int n = min(cast(int)vals.length, VISIBLE_FRAMES);
+		int n = min(cast(int)vals.length, visFrames);
 		foreach(f; 0 .. n) {
 			int v = vals[f];
 			if(v < 0) v = 0; if(v > maxVal) v = maxVal;
@@ -526,7 +581,7 @@ class SoundEditor : Window {
 	// ---- output waveform band (§11.2 RECORDING VIEW, §9.5 pixel-perfect min/max) ----
 	// A recording of the played note's actual output, NOT a live oscilloscope: one
 	// column per horizontal PIXEL of the per-note capture buffer (captureBuf), frame-
-	// aligned to the note region (frames 0..VISIBLE_FRAMES, from the trigger divider
+	// aligned to the note region (frames 0..visFrames, from the trigger divider
 	// rightwards). captureBuf is filled by the audio device during a keyjam note, so
 	// headless / song playback (no capture) shows a flat baseline — the SID-state
 	// bands below still populate from the per-frame recording either way.
@@ -546,9 +601,9 @@ class SoundEditor : Window {
 		short* buf = audio.audio.captureBuf.ptr;
 		int total = audio.audio.captureLen;
 		int fs = audio.audio.captureFrameSamples;
-		// Spread the visible note span (VISIBLE_FRAMES frames) across noteWpx, clamped
+		// Spread the visible note span (visFrames frames) across noteWpx, clamped
 		// to what was actually recorded.
-		int span = fs > 0 ? VISIBLE_FRAMES * fs : total;
+		int span = fs > 0 ? visFrames * fs : total;
 		if(span > total) span = total;
 		if(buf is null || span < 2) {
 			// Flat baseline when nothing has been recorded (headless / song playback).
@@ -595,7 +650,7 @@ class SoundEditor : Window {
 		// recording begins at the note trigger (frame 0).
 		if(useRec) {
 			auto amp = audio.visualizer.getRecordedAmp(viewVoice);
-			int n = min(cast(int)amp.length, VISIBLE_FRAMES);
+			int n = min(cast(int)amp.length, visFrames);
 			int prevY = -1;
 			foreach(f; 0 .. n) {
 				int y = botPx - cast(int)lround(clamp01(amp[f]) * h);
@@ -666,7 +721,7 @@ class SoundEditor : Window {
 		int plotEndPx = g.plotX0px + g.plotWpx;
 		int prevY = -1;
 		for(int x = noteX0px; x < plotEndPx; x++) {
-			float f = cast(float)(x - g.plotX0px) * TOTAL_FRAMES / g.plotWpx - RESTART_FRAMES;
+			float f = cast(float)(x - g.plotX0px) * totalFrames / g.plotWpx - RESTART_FRAMES;
 			if(f < 0) f = 0;
 			int y = botPx - cast(int)lround(clamp01(amp(f)) * h);
 			// §11.2 sim = dimmed idle preview.
@@ -693,7 +748,7 @@ class SoundEditor : Window {
 			drawValueBand(s.val, 4095, COL_DIMFILL, COL_DIM, topPx, botPx, g);
 		}
 		drawLoopLines(g, topPx, botPx, s.loopFrame, s.loopPeriod,
-			min(cast(int)s.val.length, VISIBLE_FRAMES));
+			min(cast(int)s.val.length, visFrames));
 	}
 
 	// §10.1/§10.2 Filter band: cutoff fill/line coloured PER FRAME by the active
@@ -720,7 +775,7 @@ class SoundEditor : Window {
 			cutoff = s.val; modeA = s.modeOf; resA = s.resOf;
 			dim = true;
 		}
-		int n = min(cast(int)cutoff.length, VISIBLE_FRAMES);
+		int n = min(cast(int)cutoff.length, visFrames);
 
 		// Cutoff fill + top line, coloured by the mode active on each frame. A "filter
 		// off" frame (mode 0x00 -> col < 0) leaves that column empty; dim uses grey.
@@ -760,7 +815,7 @@ class SoundEditor : Window {
 
 		// §11.3 subtle loop-boundary lines (from the sim's period, in both paths).
 		drawLoopLines(g, topPx, botPx, s.loopFrame, s.loopPeriod,
-			min(cast(int)s.val.length, VISIBLE_FRAMES));
+			min(cast(int)s.val.length, visFrames));
 
 		// Label the resonance overlay in the band's left gutter (row below "Filter").
 		int lrow = g.bandTopPx[4] / FONT_Y + 1;
@@ -783,7 +838,7 @@ class SoundEditor : Window {
 		// even semitone steps. Absolute-tuning colour (cyan) — it is a real pitch.
 		if(useRec) {
 			auto fr = audio.visualizer.getRecordedFreq(viewVoice);
-			int n = min(cast(int)fr.length, VISIBLE_FRAMES);
+			int n = min(cast(int)fr.length, visFrames);
 			if(n <= 0) return;
 			float lo = 1e9f, hi = -1e9f;
 			foreach(f; 0 .. n) if(fr[f] > 0) {
@@ -810,7 +865,7 @@ class SoundEditor : Window {
 
 		// Idle dimmed sim: the wave-table transpose/arp program (semitones), floor at
 		// 12 semitones (one octave) so small arps stay visible.
-		int n = min(cast(int)s.transOf.length, VISIBLE_FRAMES);
+		int n = min(cast(int)s.transOf.length, visFrames);
 		if(n <= 0) return;
 		int scale = 12;
 		foreach(f; 0 .. n) if(s.transOf[f] > scale) scale = s.transOf[f];
@@ -854,7 +909,7 @@ class SoundEditor : Window {
 		bool dim;
 		if(useRec) { ctrlA = audio.visualizer.getRecordedControl(viewVoice); dim = false; }
 		else       { ctrlA = s.ctrlOf; dim = true; }
-		int n = min(cast(int)ctrlA.length, VISIBLE_FRAMES);
+		int n = min(cast(int)ctrlA.length, visFrames);
 
 		// §11.4 lane labels (full words) in the left gutter + a faint divider per lane.
 		foreach(li; 0 .. 8) {
@@ -880,7 +935,7 @@ class SoundEditor : Window {
 		}
 		// §11.3 subtle loop-boundary lines (from the sim's period, in both paths).
 		drawLoopLines(g, topPx, botPx, s.loopFrame, s.loopPeriod,
-			min(cast(int)s.ctrlOf.length, VISIBLE_FRAMES));
+			min(cast(int)s.ctrlOf.length, visFrames));
 	}
 
 	// ---- raw table data strip (bottom) ----
@@ -971,7 +1026,7 @@ class SoundEditor : Window {
 	// Simulate the pulse-width program starting at table row `startRow`.
 	private SweepSim simPulse(int startRow) {
 		SweepSim s;
-		enum int MAXF = VISIBLE_FRAMES;
+		int MAXF = visFrames;   // §12.2 sims produce/replicate up to the dynamic window
 		if(startRow < 0 || startRow >= 0x40) return s;
 		int pw = 0x800;
 		int row = startRow;
@@ -1024,7 +1079,7 @@ class SoundEditor : Window {
 	// routing PERSIST from the last CONFIG row.
 	private SweepSim simFilter(int startRow) {
 		SweepSim s;
-		enum int MAXF = VISIBLE_FRAMES;
+		int MAXF = visFrames;   // §12.2 sims produce/replicate up to the dynamic window
 		if(startRow <= 0 || startRow >= 0x40) return s;
 		int cutoff = 0;
 		int mode = 0, res = 0, routing = 0;   // persist across rows
@@ -1088,7 +1143,7 @@ class SoundEditor : Window {
 	// Walk the wave/arp program starting at row `startRow`.
 	private WaveSim simWave(int startRow) {
 		WaveSim w;
-		enum int MAXR = VISIBLE_FRAMES;
+		int MAXR = visFrames;   // §12.2 dynamic window (loop stops early on revisit)
 		if(startRow < 0 || startRow > 0xff) return w;
 		int row = startRow & 0xff;
 		bool[256] visited;
@@ -1112,7 +1167,7 @@ class SoundEditor : Window {
 	// Carries the last real control byte forward across delay/unchanged rows.
 	private WaveFrameSim simWaveFrames(int startRow) {
 		WaveFrameSim s;
-		enum int MAXF = VISIBLE_FRAMES;
+		int MAXF = visFrames;   // §12.2 sims produce/replicate up to the dynamic window
 		if(startRow < 0 || startRow > 0xff) return s;
 		int row = startRow & 0xff;
 		int cur = 0;                    // carried effective control byte

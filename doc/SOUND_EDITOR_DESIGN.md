@@ -598,3 +598,50 @@ the SID-state bands must still populate from `ff:`). (3) Idle (no note) shows th
 dimmed sim preview. (4) A looping program replicates across the window with subtle
 loop lines at the boundaries. (5) Labels read Noise/Pulse/Saw/Tri/Test/Ring/Sync/
 Gate and reflect the actual control bits. (6) Still read-only (no song-byte writes).
+
+---
+
+## 12. Auto-fit X-axis zoom to the note's full duration (2026-07-07 v7)
+
+Still **read-only**. The shared X window is a FIXED `VISIBLE_FRAMES=128` today,
+so long sounds get truncated and short ones waste the width. Make the X-axis
+**auto-fit**: the visible frame span = the note's full duration, zoomed so the
+whole audio fits the plot width (zoom OUT when it's long).
+
+### 12.1 Compute the displayed duration (frames)
+`visFrames` (post-trigger, replacing the fixed constant) = the max of:
+- **ADSR-derived duration** (the baseline, from the selected instrument):
+  `attackFrames + decayFrames + sustainHoldFrames + releaseFrames`, where
+  attack/decay/release come from the real SID ms tables (ms→frames at FRAME_MS)
+  and `sustainHoldFrames` is a nominal hold (reuse `NOMINAL_GATE_FRAMES`). This is
+  the "duration determined by the combination of ADSR."
+- **Actual recorded extent** (when a live recording exists for the voice): if the
+  recorded envelope amplitude has returned to ~0 after being >0, the note ENDED —
+  use that end frame ("determine from reSID/the recording when the audio played to
+  the end"); if it's still sounding, use the current record-head length so the
+  axis grows to fit. This lets the real audio override the table estimate.
+So: **release time is taken from the known SID durations UNLESS the recording
+tells us the actual end** — then the actual end wins.
+Clamp `visFrames` to `[MIN_VIS, MAX_VIS]` (a sane floor so tiny sounds aren't
+absurdly zoomed in, and a ceiling so a pathological length still renders; long
+sounds simply get <1px/frame — that's the intended "zoom out until it fits").
+
+### 12.2 Everything scales to the dynamic window
+- `xForFrame` maps the full span `[-RESTART_FRAMES, visFrames]` across `plotWpx`
+  (dynamic frames-per-pixel = zoom). Every band, the trigger divider, the playhead
+  and the loop-lines go through it, so they stay aligned at any zoom.
+- All per-band loops iterate to `visFrames` (not the old constant); the sims
+  (`simPulse/simFilter/simWaveFrames` + ADSR/Freq builders) replicate/produce up to
+  `visFrames`. The per-frame recording cap must be ≥ `MAX_VIS`.
+- Show the current scale somewhere unobtrusive (e.g. a small "0–N f (~X.Xs)" label
+  on the axis) so the zoom level is legible.
+
+### 12.3 Verify (v7)
+Clean build. (1) A short sound (fast A/D/R) zooms IN — the envelope fills the width
+and ends near the right edge, not squished at the far left. (2) A long sound (slow
+release, e.g. R=$D..$F) zooms OUT so the whole release tail fits on screen (no
+truncation at the right edge). (3) When played, if the recording ends earlier/later
+than the ADSR estimate, the axis fits the ACTUAL end. (4) All bands + playhead +
+loop lines stay aligned at the new zoom. (5) A small scale label shows the span.
+(6) Still read-only. Cross-check: pick two instruments with very different R nibble
+and confirm the axis span differs accordingly.
