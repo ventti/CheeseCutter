@@ -33,7 +33,7 @@ Editing byte-parity is P4+ (out of scope this run) — DO NOT implement editing.
 ## Agent strategy
 - Dedicated agents scaffolded in `.claude/agents/`.
 
-## Status: P1–P3 COMPLETE + independently verified. v2 LAYOUT (§7) committed (4f588d6). v3 (§8) committed (be8e371). v4 (§9) committed (f0aae3f). v5 (§10) filter-type colours + resonance-over-time overlay + frequency/arp band below ADSR + context F12 help implemented (read-only) — awaiting verify. P4–P6 (editing/write-back, mouse, docs polish) NOT started.
+## Status: P1–P3 COMPLETE + independently verified. v2 LAYOUT (§7) committed (4f588d6). v3 (§8) committed (be8e371). v4 (§9) committed (f0aae3f). v5 (§10) filter-type colours + resonance-over-time + frequency band + F12 help committed (7b5255c) + fixed 8-row wave band (a09a81f). v6 (§11) RECORDING VIEW — bands now reflect the ACTUAL played audio (per-voice per-frame SID recording) with dimmed table-sim as idle preview, loop replication + subtle loop lines, full-word bit-lane labels — implemented (read-only) — awaiting verify. P4–P6 (editing/write-back, mouse, docs polish) NOT started.
 Commits on feat/sound-editor: 85ccd8e (P1), e8a0f39 (P2), bee75eb (P3), 41a8e65 (checkpoint). v2 relayout uncommitted (loop orchestrator commits).
 
 Tech-debt to address in P6 polish (non-blocking, from verifiers):
@@ -424,4 +424,83 @@ Tech-debt to address in P6 polish (non-blocking, from verifiers):
     orchestrator commits) — the map is in sync with source (genmap is stable across reruns).
   - NOTE (headless, same as prior iterations): the Output band needs song playback (mix
     buffer) to show a trace; keyjam capture stays flat with the dummy audio driver.
+    NOT done: data editing / write-back / undo (P4+, still read-only).
+- (v6 RECORDING VIEW — bands reflect the ACTUAL played audio, §11 2026-07-07) Still
+  READ-ONLY (we record playback state; NO song-byte writes). Files: `src/audio/visualizer.d`
+  (per-frame recording + getters), `src/ui/soundedit.d` (bands read the recording; sim =
+  dimmed idle preview; loop replication + subtle loop lines; full-word bit-lane labels),
+  `.claude/skills/run-cheesecutter/driver.d` (added read-only `voices` + `wavedump:<row>`
+  oracles for verification). Regenerated `doc/ARCHITECTURE.md`.
+  - **§11.1 per-frame recording in `audio.visualizer`.** New per-voice rolling log
+    (`enum RECORD_FRAMES = 138` = the Sound Editor's TOTAL_FRAMES), appended once per player
+    frame from the real `sidreg` in `updateSidRegisters()` (called every tick from
+    `audio.callback`, so it works for keyjam on HW AND song playback / ccdriver `ff:`
+    headless). Per frame per voice: control byte, 16-bit freq, 12-bit pulse, 11-bit cutoff,
+    resonance, routing, mode(&0x70), and the visualizer's envelope amplitude 0..1. RESET on a
+    gate 0->1 edge (own `recPrevGate[]`, independent of the envelope FSM's `voice.gateOn`);
+    capped at RECORD_FRAMES (freezes trigger-aligned). Trailing module-level state + getters
+    (`voiceHasRecording`, `getRecordingLength`, `getRecorded{Control,Freq,Pulse,Cutoff,
+    Resonance,Routing,Mode,Amp}` returning slices) — no vtable-affecting base-class change.
+    Reset in `resetVisualizer()`.
+  - **§11.2 bands read the recording; sim = dimmed idle preview.** `chooseVoice(ins)` picks a
+    voice sounding the viewed instrument (else one holding a recording of it); `useRec` gates
+    every band. Recording path (vivid): Output = `captureBuf` pixel-perfect min/max (recording
+    view — the live-mixbuf oscilloscope branch was REMOVED, so it's flat under headless song
+    playback where no device fills the capture — documented); ADSR = recorded amp per frame
+    (green step line, no restart pre-roll); Freq = recorded 16-bit freq on a log2(pitch) scale
+    auto-fit to the window (cyan); Pulse = recorded 12-bit PW; Filter = recorded cutoff coloured
+    per-frame by recorded mode (§10.1 map) + recorded resonance overlay (yellow); Wave = recorded
+    control byte -> 8 bit-lanes. Idle fallback (no note yet): the existing table SIMULATION,
+    drawn DIMMED (line+fill = palette 16 dark-navy) so it reads as a muted preview and sits
+    BELOW the darkgray(11) loop lines. Playhead = the recording's record head (`recLen`), so it
+    advances during a live note and freezes at the note end.
+  - **§11.3 loop replication + subtle loop lines.** `simPulse`/`simFilter`/`simWaveFrames` no
+    longer break at a revisited row — they REPLICATE the looped section across VISIBLE_FRAMES
+    (record `loopFrame` + `loopPeriod` on first detection, then keep walking; a `steps` guard
+    bounds jump-only cycles in the wave sim). `drawLoopLines()` draws a SUBTLE darkgray(11)
+    vertical at loopFrame + k*period across each band, in BOTH the recording and sim paths;
+    distinct from the bright red trigger divider (COL_TRIGGER=2) and white playhead
+    (COL_HEAD=1). Period-1 single-row "holds" are skipped (not a repeating section), and a
+    MIN_LOOP_PX=6 min spacing thins dense combs so fast loops stay subtle. (BUGFIX during
+    dev: the min-spacing `lastX` seeded at `int.min` overflowed `x-lastX` and suppressed ALL
+    loop lines — seeded to -1e6 instead.)
+  - **§11.4 full-word bit-lane labels.** `BITLANE_LBL` = Noise/Pulse/Saw/Tri/Test/Ring/Sync/
+    Gate (b7..b0); they fit the existing 8-char gutter (max word "Noise"/"Pulse" = 5). Lanes
+    light from the actual recorded control byte (dimmed sim ctrl when idle). Fixed 8-row wave
+    band + enter/exit/z-order/F12/F1-F3 all unchanged.
+  - Build: `make -f Makefile.mac clean && make -f Makefile.mac -j4 ccutter ccdriver` -> exit 0,
+    both binaries (touched the shared audio.visualizer module -> full clean build).
+  - Smoke (headless dummy SDL), tunes/vent-arkijuusto.ct (mult=2). ENTER seq
+    `load:... key:ESC key:Ctrl-e` (first ESC dismisses the splash), `key:+`xN to step; drive
+    SONG PLAYBACK via `key:F2 ff:N tick:2` (ff: runs audio_frame() headless -> the per-frame
+    recording populates). New driver `voices`/`wavedump` oracles confirmed the state:
+    * /tmp/se-v6-1-idle-ins00.png — idle: all bands DIMMED navy sim (nothing played yet).
+    * /tmp/se-v6-2-idle-loop-ins03.png — ins03 "Snare" idle: dimmed navy arp staircase +
+      wave lanes REPLICATED across the full window; subtle darkgray loop lines every period
+      (verified: wave $07 jumps 0C:7F/0A -> loops rows 0A,0B = period 2; PIL found 63 darkgray
+      loop-line columns spaced ~13px in the Freq band).
+    * /tmp/se-v6-3-play-ins04.png then -4-play-ins04-evolved.png — viewing ins04 "Flute" while
+      voice2 sounds it: RECORDED bands (green ADSR envelope, cyan freq staircase, blue pulse
+      sweep, purple LP+HP filter + yellow resonance, Tri+Gate lanes) that EVOLVE — the same
+      voice's recording grew recLen 16 -> 72 between the two shots (bands extend right, more
+      purple/cyan pixels), playhead riding the record head. NOT the idle sim.
+    * /tmp/se-v6-5-switch-ins07.png — SWITCHED to ins07 "Lead" (voice1, recLen 20): different
+      recorded envelope/freq/pulse, Pulse+Saw+Gate lanes; labels read the full words
+      Noise/Pulse/Saw/Tri/Test/Ring/Sync/Gate.
+    * /tmp/se-v6-6-exit.png — `key:Ctrl-e` exits: "Sound Editor closed.", classic tracker fully
+      restored (Instruments/Wave/Pulse/Filter/Tracks tables), no lingering graph pixels. The
+      restored Wave table cross-checks the recordings (ins04 row 0D=00/11 tri+gate; ins03
+      07..0B then 0C:7F/0A).
+  - Recorded-vs-sim CONFIRMED: idle shots are dominated by dim navy (palette 16) + darkgray;
+    play shots drop the dim content and gain vivid mode-coloured filter (purple 141,59,151),
+    cyan freq, blue pulse, green ADSR — and change with recLen over time. Loop lines confirmed
+    as subtle darkgray verticals distinct from the red trigger + white playhead.
+  - READ-ONLY CONFIRMED: grep finds NO writes to song.{instrumentTable/waveTable/pulseTable/
+    filterTable/superTable/insLabels} in soundedit.d or visualizer.d.
+  - Regenerated `make map` (visualizer synopsis updated to mention the recording; idempotent —
+    `make check-map` "fails" only vs the uncommitted HEAD, orchestrator commits). No shortcut/
+    CLI/flag/help-registry change -> no KEYBOARD.md / man-page regen needed.
+  - NOTE (headless): the Output band needs a real audio device to fill `captureBuf`, so it is
+    flat under headless song playback (documented in §11.5); the SID-STATE bands (ADSR/Freq/
+    Pulse/Filter/Wave) DO populate from `ff:` because they read the per-frame recording.
     NOT done: data editing / write-back / undo (P4+, still read-only).

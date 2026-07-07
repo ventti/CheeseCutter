@@ -48,7 +48,7 @@ The dependency graph and module list are generated from the source; the only han
 | `timer` | Playback timing: the frame- and row-tick counters that pace the player. | `audio.audio`, `audio.callback`, `com.session`, `ct.base` |
 | `ultimate` | C64 Ultimate (1541U / Ultimate64) playback transport. | `audio.remote` |
 | `vice` | VICE (x64sc) playback transport over the binary monitor. | `audio.remote` |
-| `visualizer` | Oscilloscope / SID-register visualizer rendering into the text framebuffer. | — |
+| `visualizer` | Oscilloscope / SID-register visualizer: tracks per-voice envelope brightness and player table rows, and keeps a read-only per-frame… | — |
 | `wav` | Minimal canonical PCM WAV (RIFF/WAVE) writer for the offline audio export. | — |
 
 ### `audio.resid`

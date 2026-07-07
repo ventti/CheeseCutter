@@ -532,3 +532,69 @@ ui.help.HELPSOUNDEDITOR; }` to `SoundEditor` (pattern: sequencer.d:1062). Shorte
 the on-screen title line to a minimal hint. (No new registry shortcuts needed, so
 man-page/KEYBOARD regen is optional — but run `make docs`+`make map` anyway to
 stay in sync.)
+
+---
+
+## 11. Reflect the ACTUAL played audio — recording view (2026-07-07 v6)
+
+Still **read-only** re: song data (we record playback state, we never write song
+bytes). User feedback: the bands are static simulations of the tables; they must
+instead reflect the **actual played audio** over time (a recording), like a
+waveform recording rather than an oscilloscope.
+
+### 11.1 Per-frame recording of the auditioned voice's real SID state
+Extend `audio.visualizer` to keep, per voice, a rolling **per-frame log since the
+last gate-on trigger** — appended each frame from the real `sidreg` in the
+existing per-frame path (`updateVisualizerFrame()` / `updateSidRegisters()`,
+called from `audio.callback` every player tick, so it works for keyjam on real HW
+AND for song playback / ccdriver `ff:` headless). Record per frame, per voice:
+- control byte (`sidreg[v*7+4]`) → waveform + gate/ring/sync/test bits,
+- frequency 16-bit (`sidreg[v*7]` | `sidreg[v*7+1]<<8`),
+- pulse width 12-bit (`sidreg[v*7+2]` | `(sidreg[v*7+3]&0x0f)<<8`),
+- filter cutoff 11-bit (`sidreg[0x15]&7` | `sidreg[0x16]<<3`), resonance
+  (`sidreg[0x17]>>4`), routing (`sidreg[0x17]&0x0f`), mode (`sidreg[0x18]&0x70`),
+- envelope amplitude 0..1 (the visualizer's already-tracked per-voice value).
+Reset a voice's log on a gate 0→1 transition (new note = frame 0). Cap at
+`TOTAL_FRAMES`. Expose read-only getters returning the per-frame arrays + length.
+
+### 11.2 All bands drawn from the recording (actual), sim as idle preview
+The Sound Editor picks the voice matching the viewed instrument (or the keyjam
+voice) and draws EVERY band from that voice's recorded log, on the shared frame
+axis (frame 0 = trigger), playhead = current record head:
+- **Output** = the recorded note **waveform** (`captureBuf` min/max per PIXEL —
+  §9.5 pixel-perfect) — a recording view, NOT the live-mixbuf oscilloscope.
+- **ADSR** = recorded envelope amplitude per frame.
+- **Freq** = recorded frequency per frame (map to a sensible pitch/Hz scale).
+- **Pulse** = recorded pulse width per frame (0..4095).
+- **Filter** = recorded cutoff per frame, coloured by the recorded **mode**
+  (§10.1 colour map), with recorded **resonance** as the over-time overlay.
+- **Wave** = recorded control byte per frame → the bit-lanes (§11.4).
+**Idle fallback:** when the voice has no active recording (nothing played yet),
+draw the table **simulation** (existing `simPulse/simFilter/simWaveFrames` + the
+per-frame ADSR/Freq) as a **dimmed preview** so the screen is populated and the
+loop behaviour (§11.3) is visible; switch to the live recording the instant a note
+plays. Keep one set of drawing fns fed by either source (same per-frame arrays).
+
+### 11.3 Loop replication + subtle loop-boundary lines
+Where a table program loops, do NOT stop at the loop — **replicate** the looped
+section across the full visible window (the actual audio repeats it anyway), and
+draw a **subtle vertical line** (dim, e.g. darkgray) at every loop-boundary frame.
+Apply to the sim-preview (extend the sims to keep looping to `VISIBLE_FRAMES`
+instead of breaking, recording each wrap frame) and mark the same period on the
+recording path. Distinct from the bright trigger divider / playhead.
+
+### 11.4 Full-word bit-lane labels, from actual control byte
+Rename the wave bit-lanes to full words (fit the 8-char gutter): **Noise, Pulse,
+Saw, Tri, Test, Ring, Sync, Gate** (b7..b0). Lanes light from the recorded
+(actual) control byte per frame (sim preview when idle).
+
+### 11.5 Verify (v6)
+Clean build. Headless via `ff:` playback (per-frame SID updates work headless):
+(1) play the song / jam so a voice sounds an instrument, and confirm ADSR/Freq/
+Pulse/Filter/Wave show the RECORDED per-frame values (change with the actual audio
+over time), time-aligned, playhead at the record head. (2) Output shows the
+recorded waveform (or flat headless where samples need a real device — documented;
+the SID-state bands must still populate from `ff:`). (3) Idle (no note) shows the
+dimmed sim preview. (4) A looping program replicates across the window with subtle
+loop lines at the boundaries. (5) Labels read Noise/Pulse/Saw/Tri/Test/Ring/Sync/
+Gate and reflect the actual control bits. (6) Still read-only (no song-byte writes).

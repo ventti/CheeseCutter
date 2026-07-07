@@ -1,7 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
 
-Oscilloscope / SID-register visualizer rendering into the text framebuffer.
+Oscilloscope / SID-register visualizer: tracks per-voice envelope brightness and player table rows, and keeps a read-only per-frame recording of each voice's real SID state (control/freq/pulse/cutoff/resonance/routing/mode/amplitude) since the last note trigger for the Sound Editor to draw the actual played audio.
 (This visualizer lib vibe-coded by Vent.)
 
 */
@@ -83,6 +83,55 @@ private __gshared int[3] activeWaveRows = [-1, -1, -1];
 private __gshared int[3] activePulseRows = [-1, -1, -1];
 private __gshared int[3] activeChordRows = [-1, -1, -1];
 private __gshared int activeFilterRow = -1;
+
+// ---- §11.1 per-voice per-frame RECORDING of the real SID state ----------------
+// A rolling log of the ACTUAL played audio, per voice, appended once per player
+// frame from the real `sidreg` in updateSidRegisters() (called every player tick
+// from audio.callback), so it works for keyjam on real HW AND for song playback /
+// ccdriver `ff:` headless. Reset on a gate 0->1 transition (new note = frame 0).
+// The Sound Editor reads these to draw its bands from the recording instead of a
+// table simulation. Capped at RECORD_FRAMES, which MUST match the Sound Editor's
+// TOTAL_FRAMES window (RESTART_FRAMES 10 + VISIBLE_FRAMES 128) so the frame axis
+// lines up 1:1. All read-only: we record playback state, never write song bytes.
+enum int RECORD_FRAMES = 138;
+
+private __gshared int[RECORD_FRAMES][3]   recCtrl;    // control byte (sidreg[v*7+4])
+private __gshared int[RECORD_FRAMES][3]   recFreq;    // 16-bit frequency
+private __gshared int[RECORD_FRAMES][3]   recPulse;   // 12-bit pulse width
+private __gshared int[RECORD_FRAMES][3]   recCutoff;  // 11-bit filter cutoff
+private __gshared int[RECORD_FRAMES][3]   recRes;     // resonance 0..15
+private __gshared int[RECORD_FRAMES][3]   recRoute;   // filter routing (b0..b2)
+private __gshared int[RECORD_FRAMES][3]   recMode;    // filter mode (sidreg[0x18]&0x70)
+private __gshared float[RECORD_FRAMES][3] recAmp;     // envelope amplitude 0..1
+private __gshared int[3]  recLen     = [0, 0, 0];       // frames recorded since trigger
+private __gshared bool[3] recActive  = [false, false, false]; // a note has played
+private __gshared bool[3] recPrevGate = [false, false, false];// gate edge tracking
+
+// Append one frame of the voice's real SID state to its rolling recording log.
+// Resets the log on a gate 0->1 edge (new note). Independent gate tracking so it
+// doesn't disturb the envelope state machine's own voice.gateOn.
+private void recordVoiceFrame(int v, const ubyte[] sidreg) nothrow {
+	int baseReg = v * 7;
+	ubyte ctrl = sidreg[baseReg + 4];
+	bool gate = (ctrl & 0x01) != 0;
+	if(gate && !recPrevGate[v]) {   // new note: restart the log at frame 0
+		recLen[v] = 0;
+		recActive[v] = true;
+	}
+	recPrevGate[v] = gate;
+	if(!recActive[v]) return;               // nothing played on this voice yet
+	if(recLen[v] >= RECORD_FRAMES) return;  // window full: freeze (trigger-aligned)
+	int i = recLen[v];
+	recCtrl[v][i]   = ctrl;
+	recFreq[v][i]   = sidreg[baseReg + 0] | (sidreg[baseReg + 1] << 8);
+	recPulse[v][i]  = sidreg[baseReg + 2] | ((sidreg[baseReg + 3] & 0x0f) << 8);
+	recCutoff[v][i] = (sidreg[0x15] & 7) | (sidreg[0x16] << 3);
+	recRes[v][i]    = sidreg[0x17] >> 4;
+	recRoute[v][i]  = sidreg[0x17] & 0x0f;
+	recMode[v][i]   = sidreg[0x18] & 0x70;
+	recAmp[v][i]    = voices[v].brightness;
+	recLen[v]++;
+}
 
 /**
  * Call this from audio callback to update SID register monitoring.
@@ -178,6 +227,10 @@ void updateSidRegisters(const ubyte[] sidreg, const ubyte[] playerMem, int playe
 	if(playerStateOffset > 0 && playerStateOffset + 45 < playerMem.length) {
 		activeFilterRow = playerMem[playerStateOffset + 45] >> 2;
 	}
+
+	// §11.1: append this frame's real SID state to each voice's recording log.
+	for(int v = 0; v < 3; v++)
+		recordVoiceFrame(v, sidreg);
 }
 
 /**
@@ -407,6 +460,56 @@ int getActiveFilterRow() nothrow {
 	return activeFilterRow;
 }
 
+// ---- §11.1 recording read-only getters ---------------------------------------
+// Each returns a slice of the voice's rolling per-frame log (length = frames
+// recorded since the last trigger). The slices are views into __gshared storage;
+// the Sound Editor reads them synchronously on the UI thread. All read-only.
+
+/// True once a note has played on the voice and its recording log has >=1 frame.
+bool voiceHasRecording(int voiceNum) nothrow {
+	if(voiceNum < 0 || voiceNum >= 3) return false;
+	return recActive[voiceNum] && recLen[voiceNum] > 0;
+}
+
+/// Number of frames recorded on the voice since the last note trigger.
+int getRecordingLength(int voiceNum) nothrow {
+	if(voiceNum < 0 || voiceNum >= 3) return 0;
+	return recLen[voiceNum];
+}
+
+const(int)[] getRecordedControl(int voiceNum) nothrow {
+	if(voiceNum < 0 || voiceNum >= 3) return null;
+	return recCtrl[voiceNum][0 .. recLen[voiceNum]];
+}
+const(int)[] getRecordedFreq(int voiceNum) nothrow {
+	if(voiceNum < 0 || voiceNum >= 3) return null;
+	return recFreq[voiceNum][0 .. recLen[voiceNum]];
+}
+const(int)[] getRecordedPulse(int voiceNum) nothrow {
+	if(voiceNum < 0 || voiceNum >= 3) return null;
+	return recPulse[voiceNum][0 .. recLen[voiceNum]];
+}
+const(int)[] getRecordedCutoff(int voiceNum) nothrow {
+	if(voiceNum < 0 || voiceNum >= 3) return null;
+	return recCutoff[voiceNum][0 .. recLen[voiceNum]];
+}
+const(int)[] getRecordedResonance(int voiceNum) nothrow {
+	if(voiceNum < 0 || voiceNum >= 3) return null;
+	return recRes[voiceNum][0 .. recLen[voiceNum]];
+}
+const(int)[] getRecordedRouting(int voiceNum) nothrow {
+	if(voiceNum < 0 || voiceNum >= 3) return null;
+	return recRoute[voiceNum][0 .. recLen[voiceNum]];
+}
+const(int)[] getRecordedMode(int voiceNum) nothrow {
+	if(voiceNum < 0 || voiceNum >= 3) return null;
+	return recMode[voiceNum][0 .. recLen[voiceNum]];
+}
+const(float)[] getRecordedAmp(int voiceNum) nothrow {
+	if(voiceNum < 0 || voiceNum >= 3) return null;
+	return recAmp[voiceNum][0 .. recLen[voiceNum]];
+}
+
 /**
  * Reset all visualization state
  */
@@ -417,6 +520,9 @@ void resetVisualizer() nothrow {
 		activeWaveRows[v] = -1;
 		activePulseRows[v] = -1;
 		activeChordRows[v] = -1;
+		recLen[v] = 0;
+		recActive[v] = false;
+		recPrevGate[v] = false;
 	}
 	activeFilterRow = -1;
 	instrumentBrightness[] = 0.0f;

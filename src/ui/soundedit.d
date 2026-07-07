@@ -28,7 +28,7 @@ module ui.soundedit;
 import std.conv : to;
 import std.string : format, stripRight;
 import std.algorithm : max, min;
-import std.math : lround;
+import std.math : lround, log2;
 import derelict.sdl2.sdl;
 import com.fb : FONT_X, FONT_Y, keyjamBackground;
 import com.session : screen, video, state, song, mainui;
@@ -91,7 +91,8 @@ private struct SweepSim {
 	int[] modeOf;
 	int[] resOf;
 	int[] routeOf;
-	int loopFrame = -1; // frame index the program loops back to (-1 = none)
+	int loopFrame = -1; // frame index the looped section starts at (-1 = none)
+	int loopPeriod = 0; // §11.3 length in frames of one loop cycle (for loop-line spacing)
 	bool stops;         // program halts ($7F) rather than loops
 }
 
@@ -118,7 +119,8 @@ private struct WaveFrameSim {
 	// absOf is true); absOf = true when wave1 was an absolute tuning byte ($80+).
 	int[] transOf;
 	bool[] absOf;
-	int loopFrame = -1; // frame index the program loops back to (-1 = none)
+	int loopFrame = -1; // frame index the looped section starts at (-1 = none)
+	int loopPeriod = 0; // §11.3 length in frames of one loop cycle (for loop-line spacing)
 }
 
 /// Full-screen visual Sound Editor (see module doc). v2 layout: left parameter
@@ -146,6 +148,13 @@ class SoundEditor : Window {
 	private enum int COL_RES = 7;       // §10.2 resonance-over-time overlay (yellow)
 	private enum int COL_FREQ_REL = 13; // §10.3 relative transpose step (light-green)
 	private enum int COL_FREQ_ABS = 3;  // §10.3 absolute-tuning step (cyan)
+		// §11 recording view: dim colours for the idle table-sim preview + loop lines.
+		private enum int COL_LOOPLINE = 11; // §11.3 subtle loop-boundary line (darkgray)
+		// §11.2 dimmed idle-preview: line + fill both use the darkest gradient (navy) so
+		// they read as a muted preview AND sit *below* the darkgray loop lines, which
+		// therefore stay visible over the dimmed sim too.
+		private enum int COL_DIM      = 16;
+		private enum int COL_DIMFILL  = 16;
 
 	// §10.1 filter cutoff fill/line colour per active mode (b0 & 0x70), C64 palette
 	// indices in the standard order. -1 = no mode (filter off -> empty band).
@@ -173,17 +182,18 @@ class SoundEditor : Window {
 	// (b0 Gate .. b7 Noise); the lanes are stacked b7 at the TOP down to b0 at the
 	// bottom. Distinct palette colour + 3-char label per bit.
 	private static immutable int[8]    BITLANE_COL = [13, 14, 8, 4, 3, 5, 7, 15];
-	private static immutable string[8] BITLANE_LBL = ["Gat","Snc","Rng","Tst","Tri","Saw","Pul","Noi"];
+	private static immutable string[8] BITLANE_LBL = ["Gate","Sync","Ring","Test","Tri","Saw","Pulse","Noise"];
 
 	// Left parameter column: fixed set of rows, cursor moved with Up/Down.
 	// Display-only this pass (no byte writes).
 	private enum int PARAM_ROWS = 11;
 	private int paramCursor;
 
-	// Per-voice frame-since-trigger counter (drives the shared playhead) and the
-	// previous gate bit used to detect a retrigger (gate 0->1).
-	private int[3] frameSinceTrigger = 0;
-	private bool[3] prevGate = false;
+	// §11.2 the voice whose real recording feeds the bands this frame (-1 = none),
+	// and whether that voice actually has a recording (else the bands fall back to
+	// the dimmed table simulation). Recomputed at the top of update().
+	private int viewVoice = -1;
+	private bool useRec = false;
 
 	// The screen owns its own keyjam so note keys play while the panel is
 	// focused and navigating (the classic editor's global inputKeyjam is
@@ -307,13 +317,12 @@ class SoundEditor : Window {
 
 		Geo g = layout();
 
-		// Advance the per-voice frame-since-trigger counters (gate 0->1 = retrigger).
-		foreach(v; 0 .. 3) {
-			bool gate = (audio.audio.sidreg[4 + v * 7] & 1) != 0;
-			if(gate && !prevGate[v]) frameSinceTrigger[v] = 0;
-			else if(frameSinceTrigger[v] < 1_000_000) frameSinceTrigger[v]++;
-			prevGate[v] = gate;
-		}
+		// §11.2: pick the voice whose ACTUAL recording drives the bands this frame —
+		// a voice currently sounding this instrument, else one that has a recording of
+		// it. When it has a recording the bands draw the real played audio; otherwise
+		// they fall back to the dimmed table simulation as an idle preview.
+		viewVoice = chooseVoice(ins);
+		useRec = viewVoice >= 0 && audio.visualizer.voiceHasRecording(viewVoice);
 
 		// Vertical separator between the param column and the graph stack.
 		for(int y = area.y + 2; y <= g.rawTopRow - 1; y++)
@@ -343,12 +352,14 @@ class SoundEditor : Window {
 		// every band.
 		video.olVLine(xForFrame(g, 0), g.stackTopPx, g.stackBotPx, COL_TRIGGER);
 
-		// One full-height playhead across every band, at the sounding voice's
-		// current frame-since-trigger.
-		int pv = findVoiceFor(ins);
-		if(pv >= 0) {
-			int px = xForFrame(g, frameSinceTrigger[pv]);
-			video.olVLine(px, g.stackTopPx, g.stackBotPx, COL_HEAD);
+		// §11.2 one full-height playhead = the recording's current record head. It
+		// advances right as the recording grows during a live note and freezes at the
+		// end once the note has finished. Only shown when a recording is driving the
+		// bands (the idle sim preview has no record head).
+		if(useRec) {
+			int rh = audio.visualizer.getRecordingLength(viewVoice);
+			if(rh > VISIBLE_FRAMES) rh = VISIBLE_FRAMES;
+			video.olVLine(xForFrame(g, rh), g.stackTopPx, g.stackBotPx, COL_HEAD);
 		}
 
 		drawRawData(ins, g);
@@ -365,14 +376,57 @@ class SoundEditor : Window {
 		return false;
 	}
 
-	// Find a voice currently sounding instrument `ins` (for playhead placement);
-	// -1 if none.
-	private int findVoiceFor(int ins) {
-		foreach(v; 0 .. 3) {
+	// §11.2 Choose the voice whose real SID recording should drive the bands for the
+	// viewed instrument: prefer a voice CURRENTLY sounding it (live note), else any
+	// voice whose last recording is of it (a finished note still shown frozen).
+	// -1 when nothing has played this instrument (bands then show the dimmed sim).
+	private int chooseVoice(int ins) {
+		foreach(v; 0 .. 3)
 			if(audio.visualizer.getVoiceInstrument(v) == ins
 			   && audio.visualizer.getVoiceBrightness(v) > 0.01f) return v;
-		}
+		foreach(v; 0 .. 3)
+			if(audio.visualizer.getVoiceInstrument(v) == ins
+			   && audio.visualizer.voiceHasRecording(v)) return v;
 		return -1;
+	}
+
+	// §11.3 Draw SUBTLE dim vertical lines at every loop-boundary frame across a band
+	// (loopFrame, +period, +2*period, ...). Distinct from the bright red trigger
+	// divider and the white playhead. Used in BOTH the recording and sim paths (the
+	// real audio repeats the looped section on the same period the sim computes).
+	private enum int MIN_LOOP_PX = 6;   // keep loop lines subtle: never closer than this
+	private void drawLoopLines(ref Geo g, int topPx, int botPx, int loopFrame, int period, int n) {
+		// A period < 2 is a single-row "hold" (waveform sustained), not a repeating
+		// section worth marking — skip it so it doesn't draw a line every frame.
+		if(loopFrame < 0 || period < 2) return;
+		int lastX = -1_000_000;
+		for(int f = loopFrame; f < n && f < VISIBLE_FRAMES; f += period) {
+			int x = xForFrame(g, f);
+			if(lastX > -1_000_000 && x - lastX < MIN_LOOP_PX) continue; // stay subtle, no comb
+			video.olVLine(x, topPx, botPx, COL_LOOPLINE);
+			lastX = x;
+		}
+	}
+
+	// A per-frame value staircase (pulse width or filter cutoff) as an area fill +
+	// top line on the shared frame axis. Fed from either the recording or the sim.
+	private void drawValueBand(const(int)[] vals, int maxVal, int fillCol, int lineCol,
+			int topPx, int botPx, ref Geo g) {
+		int hh = botPx - topPx;
+		if(hh <= 0 || maxVal <= 0) return;
+		int n = min(cast(int)vals.length, VISIBLE_FRAMES);
+		foreach(f; 0 .. n) {
+			int v = vals[f];
+			if(v < 0) v = 0; if(v > maxVal) v = maxVal;
+			int y = botPx - v * hh / maxVal;
+			int xa = xForFrame(g, f);
+			int xb = xForFrame(g, f + 1);
+			if(xb <= xa) xb = xa + 1;
+			for(int x = xa; x < xb; x++) {
+				video.olVLine(x, botPx, y, fillCol);
+				video.olPoint(x, y, lineCol);
+			}
+		}
 	}
 
 	// ---- left parameter column (display-only, movable cursor) ----
@@ -469,12 +523,13 @@ class SoundEditor : Window {
 		if(botPx <= topPx) botPx = topPx + 1;
 	}
 
-	// ---- output/keyjam waveform band (§9.5 pixel-perfect min/max) ----
-	// One column per horizontal PIXEL (not per frame) so the trace is continuous,
-	// yet still frame-aligned: it fills only the note region (frames 0..VISIBLE_FRAMES,
-	// i.e. from the trigger divider rightwards), the same span the other bands use.
-	// Live mix (audio.audio.mixbuf) gives a moving trace while the song plays; the
-	// per-note capture (captureBuf) holds a keyjam note.
+	// ---- output waveform band (§11.2 RECORDING VIEW, §9.5 pixel-perfect min/max) ----
+	// A recording of the played note's actual output, NOT a live oscilloscope: one
+	// column per horizontal PIXEL of the per-note capture buffer (captureBuf), frame-
+	// aligned to the note region (frames 0..VISIBLE_FRAMES, from the trigger divider
+	// rightwards). captureBuf is filled by the audio device during a keyjam note, so
+	// headless / song playback (no capture) shows a flat baseline — the SID-state
+	// bands below still populate from the per-frame recording either way.
 	private void drawOutputBand(ref Geo g) {
 		int topPx, botPx; bandBox(g, 0, topPx, botPx);
 		int mid = (topPx + botPx) / 2;
@@ -487,23 +542,16 @@ class SoundEditor : Window {
 		int noteWpx = plotEndPx - noteX0px;
 		if(noteWpx < 1) return;
 
-		// Pick the sample source: live mix while playing, else the held-note capture.
-		short* buf;
-		int span;          // number of samples to spread across noteWpx
-		bool playing = audio.player.isPlaying();
-		if(playing) {
-			buf = audio.audio.mixbuf;
-			span = audio.audio.getbufsize();
-		} else {
-			buf = audio.audio.captureBuf.ptr;
-			int total = audio.audio.captureLen;
-			int fs = audio.audio.captureFrameSamples;
-			// Show the visible note span (VISIBLE_FRAMES frames), clamped to recorded.
-			span = fs > 0 ? VISIBLE_FRAMES * fs : total;
-			if(span > total) span = total;
-		}
+		// Sample source is the per-note recording only (never the live mixbuf).
+		short* buf = audio.audio.captureBuf.ptr;
+		int total = audio.audio.captureLen;
+		int fs = audio.audio.captureFrameSamples;
+		// Spread the visible note span (VISIBLE_FRAMES frames) across noteWpx, clamped
+		// to what was actually recorded.
+		int span = fs > 0 ? VISIBLE_FRAMES * fs : total;
+		if(span > total) span = total;
 		if(buf is null || span < 2) {
-			// Flat baseline when there's nothing to draw.
+			// Flat baseline when nothing has been recorded (headless / song playback).
 			video.olHLine(noteX0px, plotEndPx - 1, mid, COL_AXIS);
 			return;
 		}
@@ -540,6 +588,28 @@ class SoundEditor : Window {
 		int topPx, botPx; bandBox(g, 1, topPx, botPx);
 		int h = botPx - topPx;
 		if(h < 1) return;
+
+		// §11.2 recording path: draw the ACTUAL per-frame envelope amplitude the voice
+		// produced (the real A/D/S/R the ear heard, including retrigger/release), as a
+		// bright step line on the shared frame axis. No restart pre-roll here — the
+		// recording begins at the note trigger (frame 0).
+		if(useRec) {
+			auto amp = audio.visualizer.getRecordedAmp(viewVoice);
+			int n = min(cast(int)amp.length, VISIBLE_FRAMES);
+			int prevY = -1;
+			foreach(f; 0 .. n) {
+				int y = botPx - cast(int)lround(clamp01(amp[f]) * h);
+				int xa = xForFrame(g, f);
+				int xb = xForFrame(g, f + 1);
+				if(xb <= xa) xb = xa + 1;
+				video.olHLine(xa, xb - 1, y, COL_CURVE);
+				if(prevY >= 0 && prevY != y)
+					video.olVLine(xa, min(prevY, y), max(prevY, y), COL_CURVE);
+				prevY = y;
+			}
+			return;
+		}
+
 		ubyte ad = song.instrumentTable[ins + 0 * 48];
 		ubyte sr = song.instrumentTable[ins + 1 * 48];
 		int attack  = (ad >> 4) & 0x0f, decay = ad & 0x0f;
@@ -599,41 +669,31 @@ class SoundEditor : Window {
 			float f = cast(float)(x - g.plotX0px) * TOTAL_FRAMES / g.plotWpx - RESTART_FRAMES;
 			if(f < 0) f = 0;
 			int y = botPx - cast(int)lround(clamp01(amp(f)) * h);
-			if(prevY >= 0) video.olLine(x - 1, prevY, x, y, COL_CURVE);
-			else video.olPoint(x, y, COL_CURVE);
+			// §11.2 sim = dimmed idle preview.
+			if(prevY >= 0) video.olLine(x - 1, prevY, x, y, COL_DIM);
+			else video.olPoint(x, y, COL_DIM);
 			prevY = y;
 		}
 	}
 
-	// ---- pulse / filter bands (sweep sims on the frame axis) ----
+	// ---- pulse / filter bands (recording, with the table sim as dimmed preview) ----
 
-	private void drawSweepBand(ref SweepSim s, int maxVal, int fillCol, int lineCol,
-			int topPx, int botPx, ref Geo g) {
-		int len = cast(int)s.val.length;
-		if(len <= 0 || maxVal <= 0) return;
-		int n = min(len, VISIBLE_FRAMES);
-		foreach(f; 0 .. n) {
-			int v = s.val[f];
-			if(v < 0) v = 0; if(v > maxVal) v = maxVal;
-			int y = botPx - v * (botPx - topPx) / maxVal;
-			int xa = xForFrame(g, f);
-			int xb = xForFrame(g, f + 1);
-			if(xb <= xa) xb = xa + 1;
-			for(int x = xa; x < xb; x++) {
-				video.olVLine(x, botPx, y, fillCol);
-				video.olPoint(x, y, lineCol);
-			}
-		}
-		if(s.loopFrame >= 0 && s.loopFrame < VISIBLE_FRAMES)
-			video.olVLine(xForFrame(g, s.loopFrame), topPx, botPx, COL_LOOP);
-	}
-
+	// §11.2/§11.3 Pulse-width band: the RECORDED per-frame pulse width when a note has
+	// played (vivid), else the table simulation as a dimmed idle preview. The sim is
+	// always computed for its loop period so the subtle loop-boundary lines mark the
+	// same repeating section in either path.
 	private void drawPulseBand(int ins, ref Geo g) {
 		int topPx, botPx; bandBox(g, 3, topPx, botPx);
 		int ptr = song.instrumentTable[ins + 5 * 48];
-		if(ptr >= 0x80) return;               // direct fixed pulse: no program
-		SweepSim s = simPulse(ptr);
-		drawSweepBand(s, 4095, COL_PULSE_FILL, COL_PULSE_LINE, topPx, botPx, g);
+		SweepSim s = simPulse(ptr);           // loop period + idle-preview values
+		if(useRec) {
+			drawValueBand(audio.visualizer.getRecordedPulse(viewVoice), 4095,
+				COL_PULSE_FILL, COL_PULSE_LINE, topPx, botPx, g);
+		} else if(ptr < 0x80) {               // direct fixed pulse ($80+) = no program
+			drawValueBand(s.val, 4095, COL_DIMFILL, COL_DIM, topPx, botPx, g);
+		}
+		drawLoopLines(g, topPx, botPx, s.loopFrame, s.loopPeriod,
+			min(cast(int)s.val.length, VISIBLE_FRAMES));
 	}
 
 	// §10.1/§10.2 Filter band: cutoff fill/line coloured PER FRAME by the active
@@ -642,21 +702,34 @@ class SoundEditor : Window {
 	private void drawFilterBand(int ins, ref Geo g) {
 		int topPx, botPx; bandBox(g, 4, topPx, botPx);
 		int ptr = song.instrumentTable[ins + 4 * 48];
-		if(ptr <= 0) return;
-		SweepSim s = simFilter(ptr);
-		int len = cast(int)s.val.length;
+		SweepSim s = simFilter(ptr);          // loop period + idle-preview values
 		int h = botPx - topPx;
-		if(len <= 0 || h < 2) return;
-		int n = min(len, VISIBLE_FRAMES);
+		if(h < 2) return;
 		enum int maxVal = 2047;
 
+		// §11.2 source: recorded cutoff/mode/resonance when a note has played, else the
+		// simulation (dimmed). `dim` greys the whole band so the idle preview is obvious.
+		const(int)[] cutoff, modeA, resA;
+		bool dim;
+		if(useRec) {
+			cutoff = audio.visualizer.getRecordedCutoff(viewVoice);
+			modeA  = audio.visualizer.getRecordedMode(viewVoice);
+			resA   = audio.visualizer.getRecordedResonance(viewVoice);
+			dim = false;
+		} else {
+			cutoff = s.val; modeA = s.modeOf; resA = s.resOf;
+			dim = true;
+		}
+		int n = min(cast(int)cutoff.length, VISIBLE_FRAMES);
+
 		// Cutoff fill + top line, coloured by the mode active on each frame. A "filter
-		// off" frame (mode 0x00 -> col < 0) leaves that column empty.
+		// off" frame (mode 0x00 -> col < 0) leaves that column empty; dim uses grey.
 		foreach(f; 0 .. n) {
-			int mode = f < s.modeOf.length ? s.modeOf[f] : 0;
-			int col = filterModeColor(mode);
-			if(col < 0) continue;             // filter off -> empty band this frame
-			int v = s.val[f];
+			int mode = f < modeA.length ? modeA[f] : 0;
+			int mc = filterModeColor(mode);
+			if(mc < 0) continue;              // filter off -> empty band this frame
+			int col = dim ? COL_DIMFILL : mc;
+			int v = cutoff[f];
 			if(v < 0) v = 0; if(v > maxVal) v = maxVal;
 			int y = botPx - v * h / maxVal;
 			int xa = xForFrame(g, f);
@@ -667,28 +740,32 @@ class SoundEditor : Window {
 				video.olPoint(x, y, col);          // top edge (line) in the mode colour
 			}
 		}
-		if(s.loopFrame >= 0 && s.loopFrame < VISIBLE_FRAMES)
-			video.olVLine(xForFrame(g, s.loopFrame), topPx, botPx, COL_LOOP);
 
-		// §10.2 resonance (0..15) as a function of time: a thin bright yellow step line,
-		// clearly separate from the cutoff fill, on the same frame axis.
+		// §10.2 resonance (0..15) over time: a thin step line, clearly separate from the
+		// cutoff fill. Bright yellow on the recording path, dim grey on the sim preview.
+		int rescol = dim ? COL_DIM : COL_RES;
 		int prevY = -1;
 		foreach(f; 0 .. n) {
-			int res = f < s.resOf.length ? s.resOf[f] : 0;
+			int res = f < resA.length ? resA[f] : 0;
 			if(res < 0) res = 0; if(res > 15) res = 15;
 			int ry = botPx - res * h / 15;
 			int xa = xForFrame(g, f);
 			int xb = xForFrame(g, f + 1);
 			if(xb <= xa) xb = xa + 1;
-			video.olHLine(xa, xb - 1, ry, COL_RES);              // level segment
+			video.olHLine(xa, xb - 1, ry, rescol);              // level segment
 			if(prevY >= 0 && prevY != ry)
-				video.olVLine(xa, min(prevY, ry), max(prevY, ry), COL_RES); // riser
+				video.olVLine(xa, min(prevY, ry), max(prevY, ry), rescol); // riser
 			prevY = ry;
 		}
+
+		// §11.3 subtle loop-boundary lines (from the sim's period, in both paths).
+		drawLoopLines(g, topPx, botPx, s.loopFrame, s.loopPeriod,
+			min(cast(int)s.val.length, VISIBLE_FRAMES));
+
 		// Label the resonance overlay in the band's left gutter (row below "Filter").
 		int lrow = g.bandTopPx[4] / FONT_Y + 1;
 		if(lrow < g.bandTopPx[5] / FONT_Y)
-			screen.cprint(g.labelX, lrow, COL_RES, 0, "res");
+			screen.cprint(g.labelX, lrow, rescol, 0, "res");
 	}
 
 	// §10.3 Frequency/pitch band: the instrument's per-frame semitone program taken
@@ -699,28 +776,57 @@ class SoundEditor : Window {
 		int h = botPx - topPx;
 		if(h < 2) return;
 		int ptr = song.instrumentTable[ins + 7 * 48];
-		WaveFrameSim s = simWaveFrames(ptr);
+		WaveFrameSim s = simWaveFrames(ptr);   // sim pitch program + loop period
+
+		// §11.2 recording path: the ACTUAL 16-bit SID frequency per frame, drawn on a
+		// log2 (pitch) scale auto-fitted to the recorded range so pitch moves read as
+		// even semitone steps. Absolute-tuning colour (cyan) — it is a real pitch.
+		if(useRec) {
+			auto fr = audio.visualizer.getRecordedFreq(viewVoice);
+			int n = min(cast(int)fr.length, VISIBLE_FRAMES);
+			if(n <= 0) return;
+			float lo = 1e9f, hi = -1e9f;
+			foreach(f; 0 .. n) if(fr[f] > 0) {
+				float l = log2(cast(float)fr[f]);
+				if(l < lo) lo = l;
+				if(l > hi) hi = l;
+			}
+			if(hi <= lo) hi = lo + 1.0f;       // flat / silent: avoid divide-by-zero
+			int prevY = -1;
+			foreach(f; 0 .. n) {
+				float l = fr[f] > 0 ? log2(cast(float)fr[f]) : lo;
+				int y = botPx - cast(int)lround((l - lo) / (hi - lo) * h);
+				int xa = xForFrame(g, f);
+				int xb = xForFrame(g, f + 1);
+				if(xb <= xa) xb = xa + 1;
+				video.olHLine(xa, xb - 1, y, COL_FREQ_ABS);
+				if(prevY >= 0 && prevY != y)
+					video.olVLine(xa, min(prevY, y), max(prevY, y), COL_FREQ_ABS);
+				prevY = y;
+			}
+			drawLoopLines(g, topPx, botPx, s.loopFrame, s.loopPeriod, n);
+			return;
+		}
+
+		// Idle dimmed sim: the wave-table transpose/arp program (semitones), floor at
+		// 12 semitones (one octave) so small arps stay visible.
 		int n = min(cast(int)s.transOf.length, VISIBLE_FRAMES);
 		if(n <= 0) return;
-		// Scale so small arpeggios stay visible but tall absolute-note programs fit;
-		// floor at 12 semitones (one octave).
 		int scale = 12;
 		foreach(f; 0 .. n) if(s.transOf[f] > scale) scale = s.transOf[f];
 		int prevY = -1;
 		foreach(f; 0 .. n) {
 			int pv = s.transOf[f];
-			int col = s.absOf[f] ? COL_FREQ_ABS : COL_FREQ_REL;
 			int y = botPx - pv * h / scale;
 			int xa = xForFrame(g, f);
 			int xb = xForFrame(g, f + 1);
 			if(xb <= xa) xb = xa + 1;
-			video.olHLine(xa, xb - 1, y, col);                   // level segment
+			video.olHLine(xa, xb - 1, y, COL_DIM);               // level segment (dim)
 			if(prevY >= 0 && prevY != y)
-				video.olVLine(xa, min(prevY, y), max(prevY, y), col); // step riser
+				video.olVLine(xa, min(prevY, y), max(prevY, y), COL_DIM); // step riser
 			prevY = y;
 		}
-		if(s.loopFrame >= 0 && s.loopFrame < VISIBLE_FRAMES)
-			video.olVLine(xForFrame(g, s.loopFrame), topPx, botPx, COL_LOOP);
+		drawLoopLines(g, topPx, botPx, s.loopFrame, s.loopPeriod, n);
 	}
 
 	// ---- wave band = §9.3 stacked SID control-bit lanes ----
@@ -740,10 +846,17 @@ class SoundEditor : Window {
 		int availRows = botPx / FONT_Y - topRow + 1;
 		if(availRows < 8) return;                     // no room for 8 lanes
 		int ptr = song.instrumentTable[ins + 7 * 48];
-		WaveFrameSim s = simWaveFrames(ptr);
-		int n = min(cast(int)s.ctrlOf.length, VISIBLE_FRAMES);
+		WaveFrameSim s = simWaveFrames(ptr);    // loop period + idle-preview control bytes
 
-		// Lane labels in the left gutter + a faint lane divider per lane.
+		// §11.2 source: the RECORDED control byte per frame when a note has played
+		// (vivid per-bit lane colours), else the sim's effective control byte (dimmed).
+		const(int)[] ctrlA;
+		bool dim;
+		if(useRec) { ctrlA = audio.visualizer.getRecordedControl(viewVoice); dim = false; }
+		else       { ctrlA = s.ctrlOf; dim = true; }
+		int n = min(cast(int)ctrlA.length, VISIBLE_FRAMES);
+
+		// §11.4 lane labels (full words) in the left gutter + a faint divider per lane.
 		foreach(li; 0 .. 8) {
 			int bit = 7 - li;                       // top lane = bit7 (Noise)
 			int lrow = topRow + li;
@@ -753,7 +866,7 @@ class SoundEditor : Window {
 		}
 
 		foreach(f; 0 .. n) {
-			int ctrl = s.ctrlOf[f];
+			int ctrl = ctrlA[f];
 			int xa = xForFrame(g, f);
 			int xb = xForFrame(g, f + 1);
 			if(xb <= xa) xb = xa + 1;
@@ -761,11 +874,13 @@ class SoundEditor : Window {
 				int bit = 7 - li;
 				if(!(ctrl & (1 << bit))) continue;
 				int ly = (topRow + li) * FONT_Y;
-				video.olFillRect(xa, ly + 1, xb - xa, FONT_Y - 2, BITLANE_COL[bit]);
+				video.olFillRect(xa, ly + 1, xb - xa, FONT_Y - 2,
+					dim ? COL_DIM : BITLANE_COL[bit]);
 			}
 		}
-		if(s.loopFrame >= 0 && s.loopFrame < VISIBLE_FRAMES)
-			video.olVLine(xForFrame(g, s.loopFrame), topPx, botPx, COL_LOOP);
+		// §11.3 subtle loop-boundary lines (from the sim's period, in both paths).
+		drawLoopLines(g, topPx, botPx, s.loopFrame, s.loopPeriod,
+			min(cast(int)s.ctrlOf.length, VISIBLE_FRAMES));
 	}
 
 	// ---- raw table data strip (bottom) ----
@@ -884,7 +999,18 @@ class SoundEditor : Window {
 			else if(b3 == 0x7f) { s.stops = true; break; }
 			else if(b3 <= 0x3f) nextRow = b3;
 			else { s.stops = true; break; }
-			if(visited[nextRow]) { s.loopFrame = firstFrame[nextRow]; break; }
+			// §11.3 loop: on the FIRST return to an already-emitted row, record where
+			// the looped section starts and its period, then KEEP replicating it across
+			// the visible window (the real player repeats it too) instead of breaking.
+			if(visited[nextRow]) {
+				if(s.loopFrame < 0) {
+					s.loopFrame = firstFrame[nextRow];
+					s.loopPeriod = cast(int)s.val.length - firstFrame[nextRow];
+					if(s.loopPeriod < 1) s.loopPeriod = 1;
+				}
+				row = nextRow;
+				continue;
+			}
 			visited[nextRow] = true;
 			row = nextRow;
 		}
@@ -943,7 +1069,16 @@ class SoundEditor : Window {
 			else if(b3 == 0x7f) { s.stops = true; break; }
 			else if(b3 <= 0x3f) nextRow = b3;
 			else { s.stops = true; break; }
-			if(visited[nextRow]) { s.loopFrame = firstFrame[nextRow]; break; }
+			// §11.3 loop replication (see simPulse).
+			if(visited[nextRow]) {
+				if(s.loopFrame < 0) {
+					s.loopFrame = firstFrame[nextRow];
+					s.loopPeriod = cast(int)s.val.length - firstFrame[nextRow];
+					if(s.loopPeriod < 1) s.loopPeriod = 1;
+				}
+				row = nextRow;
+				continue;
+			}
 			visited[nextRow] = true;
 			row = nextRow;
 		}
@@ -981,18 +1116,30 @@ class SoundEditor : Window {
 		if(startRow < 0 || startRow > 0xff) return s;
 		int row = startRow & 0xff;
 		int cur = 0;                    // carried effective control byte
-		bool[256] visited;
 		int[256] firstFrame; firstFrame[] = -1;
-		while(s.ctrlOf.length < MAXF) {
+		// §11.3 REPLICATE the looped section across the window instead of stopping at
+		// the loop. `steps` bounds jump-only cycles (no frame emitted) so we can't spin.
+		int steps = 0;
+		while(s.ctrlOf.length < MAXF && steps < MAXF * 8) {
+			steps++;
 			int w1 = song.waveTable[row];
 			int w2 = song.waveTable[row + 256];
 			// Loop back-edge: $7F jumps to the row in wave2; $7E loops to previous.
 			if(w1 == 0x7f || w1 == 0x7e) {
 				int tgt = (w1 == 0x7f) ? (w2 & 0xff) : ((row - 1) & 0xff);
-				if(firstFrame[tgt] >= 0) { s.loopFrame = firstFrame[tgt]; break; }
-				s.loopFrame = cast(int)s.ctrlOf.length;
+				if(firstFrame[tgt] >= 0 && s.loopFrame < 0) {
+					s.loopFrame = firstFrame[tgt];
+					s.loopPeriod = cast(int)s.ctrlOf.length - firstFrame[tgt];
+					if(s.loopPeriod < 1) s.loopPeriod = 1;
+				}
 				row = tgt;
 				continue;
+			}
+			// A sequential advance back onto an already-emitted row is also a loop.
+			if(firstFrame[row] >= 0 && s.loopFrame < 0) {
+				s.loopFrame = firstFrame[row];
+				s.loopPeriod = cast(int)s.ctrlOf.length - firstFrame[row];
+				if(s.loopPeriod < 1) s.loopPeriod = 1;
 			}
 			if(firstFrame[row] < 0) firstFrame[row] = cast(int)s.ctrlOf.length;
 			if(w2 >= 0x10) cur = w2;    // real SID control byte (else 0/delay = keep)
@@ -1001,8 +1148,6 @@ class SoundEditor : Window {
 			// $00..$5F = relative transpose up (semitone offset). Recorded per frame.
 			if(w1 >= 0x80) { s.transOf ~= w1 & 0x7f; s.absOf ~= true; }
 			else           { s.transOf ~= w1;        s.absOf ~= false; }
-			if(visited[row]) break;
-			visited[row] = true;
 			row = (row + 1) & 0xff;
 		}
 		return s;

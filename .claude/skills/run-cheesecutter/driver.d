@@ -157,6 +157,8 @@ private void usage(File f) {
 "  state            print editor state to stderr (title/seqs/playing/SID regs)\n" ~
 "  seqdump:<n>      dump sequence n's rows as hex (read-only edit oracle)\n" ~
 "  tracks           dump each voice's tracklist entries (trans,number)\n" ~
+"  voices           per-voice visualizer: instrument, brightness, recording len\n" ~
+"  wavedump:<row>   dump 24 wave-table rows (w1/w2) from row (Sound Editor oracle)\n" ~
 "\n" ~
 "Remote backend (--vice/--ultimate) testing:\n" ~
 "  vice:[target]    enable the VICE backend: empty = launch x64sc from PATH,\n" ~
@@ -358,6 +360,31 @@ private bool processCommand(string arg) {
 		case "state":
 			dumpState();
 			break;
+		case "wavedump": {
+			// wavedump:<startRow> — print 24 wave-table rows (w1/w2) from startRow, a
+			// read-only oracle for verifying the Sound Editor's wave loop simulation.
+			int r0 = val.length ? (val.startsWith("0x") ? to!int(val[2..$],16) : to!int(val)) : 0;
+			stderr.writef("wave rows from %02X:", r0);
+			foreach(k; 0 .. 24) {
+				int r = (r0 + k) & 0xff;
+				stderr.writef(" %02X:%02x/%02x", r, song.waveTable[r], song.waveTable[r+256]);
+			}
+			stderr.writeln();
+			break;
+		}
+		case "voices": {
+			// voices — per-voice visualizer state: the instrument each voice last
+			// triggered, its brightness, and whether it has a per-frame recording +
+			// how many frames (a read-only oracle for the Sound Editor recording view).
+			static import audio.visualizer;
+			foreach(v; 0 .. 3)
+				stderr.writefln("voice%d: ins=%d bright=%.3f hasRec=%s recLen=%d", v,
+					audio.visualizer.getVoiceInstrument(v),
+					audio.visualizer.getVoiceBrightness(v),
+					audio.visualizer.voiceHasRecording(v),
+					audio.visualizer.getRecordingLength(v));
+			break;
+		}
 		case "seqdump": {
 			// seqdump:<n> — dump sequence n's rows as hex (4 bytes/row). A
 			// read-only oracle for verifying block copy/paste/merge/cut edits.
