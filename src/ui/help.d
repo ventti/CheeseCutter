@@ -171,35 +171,29 @@ ContextHelp HELPSOUNDEDITOR = ContextHelp("Sound Editor help",
 
 `+dSound Editor (Ctrl-E toggles it from the classic editor)
 
-A live, read-only view of the selected instrument: stacked time-aligned
-graph bands (output waveform, ADSR envelope, frequency/arp, pulse, filter
-coloured by filter type with a resonance overlay, and the wave control bits)
-sharing one frames-from-note-on axis, plus a parameter column and raw table
-strip. Play a note (jam or song playback) to see the playhead sweep across.
+A live, read-only view of the selected instrument: stacked, time-
+aligned graph bands (output, ADSR, freq/arp, pulse, filter+resonance,
+wave control bits) on one note-on axis, plus a parameter column and a
+raw table strip. Play a note to see the playhead sweep across.
 
 `+dJamming notes
 
  2 3   5 6 7   9 0
-Q W E R T Y U I O P.....Play notes (base octave + 1)
+Q W E R T Y U I O P.....Notes, base octave + 1
  S D   G H J
-Z X C V B N M...........Play notes (base octave)
-1 ! A Z S X ............(the piano-key row plays notes as you type)
+Z X C V B N M...........Notes, base octave
 
-Keypad /................Lower the base octave
-Keypad *................Raise the base octave
+Keypad / *..............Lower / raise the base octave
 
 `+dNavigation
 
-Keypad - / +............Previous / next instrument (updates every band)
-- / +...................Previous / next instrument
++ / - (or Keypad -/+)...Previous / next instrument
 Up / Down...............Move the parameter cursor (display-only)
 Ctrl-E..................Exit back to the classic editor
 
 `+dPlayback
 
-F1......................Play from the playback mark
-F2......................Play from the start
-F3......................Play from the cursor position
+F1 / F2 / F3............Play from mark / start / cursor
 Shift-F1/F2/F3..........Play with tracking (follow)
 F4......................Stop playback
 "]);

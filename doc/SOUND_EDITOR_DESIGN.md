@@ -645,3 +645,60 @@ than the ADSR estimate, the axis fits the ACTUAL end. (4) All bands + playhead +
 loop lines stay aligned at the new zoom. (5) A small scale label shows the span.
 (6) Still read-only. Cross-check: pick two instruments with very different R nibble
 and confirm the axis span differs accordingly.
+
+---
+
+## 13. Help-dialog bleed fix, title-row instrument, restart marker (2026-07-07 v8)
+
+Still **read-only**. Three items.
+
+### 13.1 BUG: tracker tables bleed over the Sound Editor when F12 help is shown
+Root cause: `Toplevel.refresh()` (toplevel.d:377-385) unconditionally calls
+`bottomTabSwitcher.refresh()` — a direct field, not via `windows[]`. While the
+Sound Editor is active `windows == [soundEditor]`, but `activateDialog()`
+(ui.d:789) runs `enableKeyjamMode(false)` → `refresh()`, so opening the help
+dialog repaints the classic instrument/wave/pulse/filter tables over the Sound
+Editor; `SoundEditor.update()` then early-returns under `chromeActive()` and never
+paints over them, so they show behind the help window.
+Fix (both, for robustness):
+1. `Toplevel.refresh()`: when `soundEditorActive`, refresh ONLY the sound editor —
+   do NOT call `bottomTabSwitcher.refresh()` (nor draw any savedWindows).
+2. `SoundEditor.update()`: under `chromeActive()`, still draw the full TEXT chrome
+   (frame, title row, param column, raw-data strip) — suppress only the PIXEL
+   graph bands (olClear + no ol* band calls). Then the Sound Editor is always the
+   backdrop behind any dialog/menu/palette, never tables or stale content.
+
+### 13.2 Sound Editor help doesn't fit its window
+`HELPSOUNDEDITOR` (help.d:169) overflows the `HelpDialog` box (too-wide/too-many
+lines). Fix so it fits: wrap/shorten lines to the dialog's inner width and keep
+within one page (the HelpDialog paginates at PAGE_ROWS and draws in a fixed
+Rectangle from keymap.d's F12 action). Keep the leading "Press F12 again to see
+the global help." line and a title != HELPMAIN.title. If needed, size the F12
+HelpDialog Rectangle for this context, but prefer fitting the text.
+
+### 13.3 Show the instrument in the "Sound Editor" title row
+The separate `Instrument NN Name` line can overflow. Move the instrument number +
+name INTO the top title row, which is wide: e.g.
+`" Sound Editor  —  NN Name        (F12 help) "` (and keep Octave in the row or the
+param gutter). Drop/trim the now-redundant separate instrument line so nothing runs
+off-screen. Ensure long instrument names are truncated to fit the row width.
+
+### 13.4 Indicate the restart→trigger interval with a vertical line
+The hard/soft restart runs a small number of frames BEFORE the note triggers
+(commonly ~2 frames; `$00`=3-frame). Draw a vertical line at the RESTART point
+(the start of the restart phase, frame `-restartFrames` where `restartFrames` is
+the actual restart length for the instrument's restart type) across all bands, in
+a colour distinct from the bright red note-trigger divider (frame 0) and the white
+playhead — so the trigger↔restart interval is visible. (Today only the trigger
+divider at frame 0 is drawn; add the restart marker. Consider making the pre-roll
+width reflect the actual restart length: `$80` hard ≈ 2, `$00` ≈ 3, `$40` soft.)
+
+### 13.5 Verify (v8)
+Clean build. (1) In the Sound Editor press F12 → the help window shows ONLY the
+sound-editor help over the Sound Editor — NO tracker tables bleeding through; F12
+again → global help; close → Sound Editor intact. (2) The help text fits its
+window (no clipped/overflowing lines). (3) The instrument NN+name shows in the
+title row and doesn't run off-screen even for a long name; no stale separate line.
+(4) A vertical restart marker appears ~2-3 frames left of the trigger divider,
+distinct colour, across the bands. (5) Regression: z-order, zoom, recording bands,
+loop lines, clean exit all intact. (6) Still read-only.

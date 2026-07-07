@@ -375,6 +375,20 @@ final package class Toplevel : WindowSwitcher, Undoable {
 	}
 
 	override void refresh() {
+		// §13.1: while the Sound Editor owns the screen, refresh ONLY it. Do NOT
+		// repaint the classic tables (bottomTabSwitcher, a direct field not in
+		// `windows`) or any savedWindows — otherwise activateDialog() -> refresh()
+		// (e.g. opening F12 help) paints them over the Sound Editor and they bleed
+		// through behind the dialog.
+		if(soundEditorActive) {
+			foreach(t; windows) {
+				t.refresh();
+				t.update();
+			}
+			// needed because 'input' might be messed by a subdialog
+			activeWindow.activate();
+			return;
+		}
 		foreach(t; windows) {
 			t.refresh();
 			t.update();

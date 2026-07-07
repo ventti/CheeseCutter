@@ -153,6 +153,8 @@ class SoundEditor : Window {
 	private enum int COL_FILT_FILL  = 4;  // purple area
 	private enum int COL_FILT_LINE  = 10; // light-red top edge
 	private enum int COL_TRIGGER = 2;   // note-trigger divider (red)
+	private enum int COL_RESTART = 3;   // §13.4 restart-phase marker (cyan; distinct
+	                                    // from the red trigger + white playhead)
 	private enum int COL_RSTFILL = 9;   // restart pre-roll shading (brown, dim)
 	private enum int COL_RSTCURVE = 10; // restart envelope ramp (light-red)
 	private enum int COL_RES = 7;       // §10.2 resonance-over-time overlay (yellow)
@@ -323,6 +325,63 @@ class SoundEditor : Window {
 		return g.plotX0px + rel * g.plotWpx / totalFrames;
 	}
 
+	// §13.4 The actual restart-phase length in frames for this instrument's col2
+	// restart type: $80 hard ~= 2, $40 soft ~= 2, else ($00) the 3-frame restart ~= 3.
+	// Used to place the restart marker at frame -restartFramesFor(ins) (inside the
+	// fixed RESTART_FRAMES pre-roll), so the trigger<->restart interval is visible.
+	private int restartFramesFor(int ins) {
+		ubyte rst = song.instrumentTable[ins + 2 * 48];
+		if((rst & 0xc0) == 0x80) return 2;   // hard restart
+		if((rst & 0xc0) == 0x40) return 2;   // soft restart
+		return 3;                            // $00 3-frame restart
+	}
+
+	// §13.1(b) The full TEXT backdrop of the Sound Editor: frame, title row (with the
+	// instrument NN + name, §13.3), Octave, param column, band text-labels, zoom scale
+	// label, the param/graph separator, and the raw-data strip. Emits NO overlay (ol*)
+	// pixels, so it is safe to draw as the sole backdrop under chromeActive() (behind a
+	// dialog/menu/palette). On the normal path the graph bands + axis lines + playhead
+	// are layered on top afterwards.
+	private void drawTextChrome(int ins, ref Geo g) {
+		drawFrame(area);
+
+		// §13.3 instrument NN + name now live in the wide title row (the old separate
+		// "Instrument NN Name" line could run off-screen for a long name). Truncate a
+		// long name to whatever fits between the fixed prefix and the "(F12 help)" tail.
+		string name = stripRight(to!string(song.insLabels[ins][]));
+		string prefix = format(" Sound Editor  -  %02X ", ins);
+		string suffix = "   (F12 help) ";
+		int avail = area.width - 3 - cast(int)prefix.length - cast(int)suffix.length;
+		if(avail < 0) avail = 0;
+		if(cast(int)name.length > avail) name = name[0 .. avail];
+		screen.cprint(area.x + 2, area.y, COL_TITLE, 0, prefix ~ name ~ suffix);
+
+		// Octave kept in the row below (nothing else there now).
+		screen.cprint(area.x + 2, area.y + 1, COL_LABEL, 0, "Octave");
+		screen.cprint(area.x + 9, area.y + 1, COL_VALUE, 0, format("%d", state.octave));
+
+		// §12.2 unobtrusive scale label so the current zoom is legible.
+		float secs = visFrames * FRAME_MS / 1000.0f;
+		screen.cprint(g.labelX, area.y + 2, COL_LABEL, 0,
+					  format("scale 0-%d f (~%.1fs)", visFrames, secs));
+
+		// Vertical separator between the param column and the graph stack.
+		for(int y = area.y + 2; y <= g.rawTopRow - 1; y++)
+			screen.setChar(g.sepX, y, 0x0500 | 216);
+
+		drawParamColumn(ins, g);
+
+		// Band TEXT labels (the pixel axis lines are drawn with the bands themselves).
+		drawBandLabelText(g, 0, "Output");
+		drawBandLabelText(g, 1, "ADSR");
+		drawBandLabelText(g, 2, "Freq");
+		drawBandLabelText(g, 3, "Pulse");
+		drawBandLabelText(g, 4, "Filter");
+		// band 5 (wave) is self-labelled by its 8 bit-lane gutter labels.
+
+		drawRawData(ins, g);
+	}
+
 	override void update() {
 		// v2: keep note routing but never the blue keyjam tint on this screen.
 		keyjamBackground = false;
@@ -330,34 +389,9 @@ class SoundEditor : Window {
 		// trace lingers underneath the bands.
 		video.clearScopeTrace();
 
-		// v3 (§8.1): higher-Z chrome (a modal dialog/pop-up, an open menu dropdown,
-		// or the command palette) must render UNOBSTRUCTED. The com.fb overlay is a
-		// post-composite PIXEL layer drawn on top of ALL text cells, so any graph
-		// pixels would bleed over that chrome. Yield the layer: clear the draw-list
-		// and emit no graph pixels this frame. The chrome (text) is drawn after us
-		// (drawMenu / dialog.update) and now shows cleanly; our own text cells stay
-		// from the prior frame beneath it, exactly like the classic editor.
-		if(chromeActive()) {
-			video.olClear();
-			return;
-		}
-
-		drawFrame(area);
-
 		int ins = state.activeInstrument;
 		if(ins < 0) ins = 0;
 		if(ins > 47) ins = 47;
-		string name = stripRight(to!string(song.insLabels[ins][]));
-
-		// §10.4: keys now live on the context F12 help page, so the title line is a
-		// minimal hint instead of a cramped key list.
-		screen.cprint(area.x + 2, area.y, COL_TITLE, 0,
-					  " Sound Editor   (F12 help) ");
-		screen.cprint(area.x + 2, area.y + 1, COL_LABEL, 0, "Instrument");
-		screen.cprint(area.x + 13, area.y + 1, COL_VALUE, 0,
-					  format("%02X %s", ins, name));
-		screen.cprint(area.x + 40, area.y + 1, COL_LABEL, 0, "Octave");
-		screen.cprint(area.x + 47, area.y + 1, COL_VALUE, 0, format("%d", state.octave));
 
 		Geo g = layout();
 
@@ -374,33 +408,50 @@ class SoundEditor : Window {
 		visFrames = computeVisFrames(ins);
 		totalFrames = RESTART_FRAMES + visFrames;
 
-		// §12.2 unobtrusive scale label so the current zoom is legible.
-		float secs = visFrames * FRAME_MS / 1000.0f;
-		screen.cprint(g.labelX, area.y + 2, COL_LABEL, 0,
-					  format("scale 0-%d f (~%.1fs)", visFrames, secs));
-
-		// Vertical separator between the param column and the graph stack.
-		for(int y = area.y + 2; y <= g.rawTopRow - 1; y++)
-			screen.setChar(g.sepX, y, 0x0500 | 216);
+		// v3 (§8.1) / §13.1(b): higher-Z chrome (a modal dialog/pop-up, an open menu
+		// dropdown, or the command palette) must render UNOBSTRUCTED. The com.fb overlay
+		// is a post-composite PIXEL layer drawn on top of ALL text cells, so any graph
+		// pixels would bleed over that chrome. Yield the pixel layer (olClear + no ol*
+		// this frame) BUT still repaint the full TEXT chrome so the Sound Editor — never
+		// the classic tables or stale content — is the backdrop behind the dialog/menu.
+		// The chrome (drawMenu / dialog.update, both text) is drawn after us and shows
+		// cleanly over our text cells, exactly like the classic editor.
+		if(chromeActive()) {
+			video.olClear();
+			drawTextChrome(ins, g);
+			return;
+		}
 
 		// Rebuild the overlay draw-list from scratch (all bands + the playhead).
 		video.olClear();
 
-		drawParamColumn(ins, g);
+		// Full text backdrop (frame, title row incl. instrument, param column, band
+		// labels, scale label, separators, raw-data strip).
+		drawTextChrome(ins, g);
 
-		// Stacked, frame-aligned graph bands (top -> bottom).
-		drawBandLabel(g, 0, "Output");
+		// Stacked, frame-aligned graph bands (top -> bottom); text labels are already
+		// drawn by drawTextChrome, so here we draw only the pixel axis + band content.
+		drawBandAxis(g, 0);
 		drawOutputBand(g);
-		drawBandLabel(g, 1, "ADSR");
+		drawBandAxis(g, 1);
 		drawAdsrBand(ins, g);
-		drawBandLabel(g, 2, "Freq");
+		drawBandAxis(g, 2);
 		drawFreqBand(ins, g);
-		drawBandLabel(g, 3, "Pulse");
+		drawBandAxis(g, 3);
 		drawPulseBand(ins, g);
-		drawBandLabel(g, 4, "Filter");
+		drawBandAxis(g, 4);
 		drawFilterBand(ins, g);
-		drawBandLabel(g, 5, "");   // wave band is self-labelled by its 8 bit lanes
+		drawBandAxis(g, 5);
 		drawWaveBand(ins, g);
+
+		// §13.4 restart marker: a vertical line at the START of the restart phase
+		// (frame -restartFrames, the actual hard/soft/3-frame restart length for this
+		// instrument's col2 type), in a colour DISTINCT from the red trigger divider
+		// (frame 0) and the white playhead — so the short trigger<->restart interval
+		// is visible. Drawn before the trigger so the (brighter) trigger wins on any
+		// pixel overlap at extreme zoom.
+		int restF = restartFramesFor(ins);
+		video.olVLine(xForFrame(g, -restF), g.stackTopPx, g.stackBotPx, COL_RESTART);
 
 		// §9.2 note-trigger divider at frame 0 across ALL bands: everything left of it
 		// is the restart pre-roll, everything right of it is the same frame index in
@@ -416,8 +467,6 @@ class SoundEditor : Window {
 			if(rh > visFrames) rh = visFrames;
 			video.olVLine(xForFrame(g, rh), g.stackTopPx, g.stackBotPx, COL_HEAD);
 		}
-
-		drawRawData(ins, g);
 	}
 
 	// True while any higher-Z chrome is up (§8.1): a modal dialog/pop-up, an open
@@ -564,9 +613,15 @@ class SoundEditor : Window {
 
 	// ---- band chrome ----
 
-	private void drawBandLabel(ref Geo g, int band, string label) {
+	// §13.1(b) split so the TEXT label (drawn in drawTextChrome, incl. under
+	// chromeActive) is independent of the pixel baseline axis (drawn only with the
+	// graph bands on the normal path).
+	private void drawBandLabelText(ref Geo g, int band, string label) {
 		int row = g.bandTopPx[band] / FONT_Y;
 		screen.cprint(g.labelX, row, COL_LABEL, 0, label);
+	}
+
+	private void drawBandAxis(ref Geo g, int band) {
 		// Faint baseline axis at the band's bottom.
 		int botPx = g.bandTopPx[band + 1] - 2;
 		video.olHLine(g.plotX0px, g.plotX0px + g.plotWpx - 1, botPx, COL_AXIS);
