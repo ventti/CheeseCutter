@@ -551,9 +551,14 @@ final package class Toplevel : WindowSwitcher, Undoable {
 		windows = [cast(Window)soundEditor];
 		soundEditorActive = true;
 		activateWindow(0);
-		// Force keyjam on so the piano keys sound the moment the screen opens.
+		// Force keyjam ON so the piano keys sound the moment the screen opens, but
+		// v2 layout drops the whole-screen dark-blue keyjam tint: keep note routing
+		// (keyjamStatus) while forcing the cosmetic background off. The SoundEditor
+		// also re-asserts keyjamBackground=false every frame (see its update()).
 		state.keyjamStatus = true;
 		ui.enableKeyjamMode(true);
+		com.fb.keyjamBackground = false;   // v2: no keyjam tint in the Sound Editor
+		refresh();                          // repaint without the tint
 	}
 
 	void stopSoundEditor() {

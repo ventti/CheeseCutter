@@ -1,20 +1,22 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
 
-Visual Sound Editor screen: a live, keyjam-driven view of the selected instrument (chrome, output scope, ADSR curve, and per-tick pulse/filter/wave-arp timelines with playheads).
+Visual Sound Editor screen: a live, keyjam-driven view of the selected instrument laid out as a left parameter column, a stack of time-aligned graph bands sharing one frames-from-note-on X axis (output waveform, ADSR, pulse, filter, wave/arp) with a single vertical playhead, and a raw-hex table strip along the bottom.
 
 This is the full-screen alternative sound-editing mode toggled from the classic
-editor (Ctrl-E). P1 provided the screen skeleton: framed chrome (title, selected
-instrument number/name, current octave), a self-contained keyjam so notes play
-while the panel is focused, and a live output oscilloscope reusing
-ui.oscilloscope's sample->pixel trace. P2 added a read-only ADSR envelope curve
-for the selected instrument, drawn with the com.fb immediate-mode overlay using
-the real SID ms timing tables, plus a live playhead that rides the curve from the
-jammed voice's envelope. P3 adds the per-tick TABLE TIMELINES for the selected
-instrument -- pulse-width-over-time, filter-cutoff-over-time and the wave/arp
-lane -- simulated read-only from the exact ct.base byte tables the C64 player
-interprets each frame, with loop/jump markers and realtime playheads driven from
-audio.visualizer's active table rows. All read-only; data editing arrives in P4+.
+editor (Ctrl-E). It runs keyjam (notes play) but uses the *normal* background,
+not the dark-blue keyjam tint. The v2 layout (design doc §7) stacks every
+time-varying graph on ONE shared horizontal axis = frames since note-on
+(~19.95 ms PAL ticks): the output/keyjam waveform (min/max per frame from
+audio.audio.captureBuf), the ADSR envelope (SID ms tables converted to frames),
+and the pulse / filter / wave-arp table programs (simulated read-only from the
+ct.base byte tables the C64 player interprets each frame). All bands share the
+same left edge and pixel width so a single full-height vertical playhead, placed
+at the current frame-since-trigger of the sounding voice, crosses them all in
+lockstep. Left of the graphs a parameter column lists the instrument's editable
+fields with a movable cursor (display-only this pass); the bottom strip shows the
+raw hex of the instrument's 8 bytes plus the wave/pulse/filter rows it points
+into. Everything is READ-ONLY -- data editing / write-back / undo arrive in P4+.
 */
 
 module ui.soundedit;
@@ -24,18 +26,25 @@ import std.string : format, stripRight;
 import std.algorithm : max, min;
 import std.math : lround;
 import derelict.sdl2.sdl;
-import com.fb : FONT_X, FONT_Y;
+import com.fb : FONT_X, FONT_Y, keyjamBackground;
 import com.session : screen, video, state, song;
 import com.shortcuts : Ctx;
 import ui.window;
 import ui.input;
 import ui.ui : UI;
-import ui.oscilloscope;
 static import audio.player;
 static import audio.audio;
 static import audio.visualizer;
 
-// SID ADSR timing (ms) per 4-bit nibble value 0..15 — the real, non-linear MOS
+// PAL player tick period (ms) -- the frame quantum every over-time graph shares.
+private enum float FRAME_MS = 19.95f;
+// Visible frames across the shared X axis (~2.5 s at PAL).
+private enum int VISIBLE_FRAMES = 128;
+// Vertical gain for the output-waveform band (sample units per half-band height);
+// mirrors ui.oscilloscope's FULLSCALE so typical output fills the band.
+private enum int FULLSCALE = 12000;
+
+// SID ADSR timing (ms) per 4-bit nibble value 0..15 -- the real, non-linear MOS
 // tables (mirrors audio.visualizer / doc/ADSR_VISUALIZATION_SPEC.md, duplicated
 // here because the visualizer's copies are private). Used to slope the drawn
 // envelope so it matches what you hear.
@@ -77,51 +86,106 @@ private struct WaveSim {
 	int loopTargetRow = -1; // $7F jump target row; -2 = $7E loop-to-previous
 }
 
-/// Full-screen visual Sound Editor (see module doc). P3: chrome + keyjam + scope
-/// + ADSR curve + pulse/filter/wave-arp per-tick timelines, all read-only.
+/// Full-screen visual Sound Editor (see module doc). v2 layout: left parameter
+/// column + stacked frame-aligned graph bands with one shared playhead + raw
+/// table-data strip. All read-only.
 class SoundEditor : Window {
 	// Palette indices (mirroring ui.oscilloscope's language): white title,
 	// yellow values, dim grey labels.
 	private enum int COL_TITLE = 1;
 	private enum int COL_VALUE = 7;
 	private enum int COL_LABEL = 11;
-	// Envelope panel colours: green curve, dim-grey axis, yellow playhead marker,
-	// dim playhead stem.
-	private enum int COL_CURVE = 13;
-	private enum int COL_AXIS = 11;
-	private enum int COL_HEAD = 1;      // playhead / active-row highlight (white)
-	private enum int COL_HEADSTEM = 8;
-	private enum int COL_LOOP = 8;      // loop/jump marker (orange)
-	// Timeline graph colours.
+	private enum int COL_SEP   = 11;    // separators / band frames (dim grey)
+	private enum int COL_CURVE = 13;    // ADSR curve (green)
+	private enum int COL_AXIS  = 11;    // baseline axis (dim grey)
+	private enum int COL_HEAD  = 1;     // playhead (white)
+	private enum int COL_LOOP  = 8;     // loop/jump marker (orange)
+	private enum int COL_TRACE = 13;    // output waveform (green)
 	private enum int COL_PULSE_FILL = 6;  // blue area
 	private enum int COL_PULSE_LINE = 14; // light-blue top edge
 	private enum int COL_FILT_FILL  = 4;  // purple area
 	private enum int COL_FILT_LINE  = 10; // light-red top edge
 
-	// Previous per-voice brightness, so we can tell attack (rising) from decay
-	// (falling) when placing the playhead along the ADSR curve.
-	private float[3] prevBright = 0.0f;
+	// Left parameter column: fixed set of rows, cursor moved with Up/Down.
+	// Display-only this pass (no byte writes).
+	private enum int PARAM_ROWS = 11;
+	private int paramCursor;
+
+	// Per-voice frame-since-trigger counter (drives the shared playhead) and the
+	// previous gate bit used to detect a retrigger (gate 0->1).
+	private int[3] frameSinceTrigger = 0;
+	private bool[3] prevGate = false;
 
 	// The screen owns its own keyjam so note keys play while the panel is
 	// focused and navigating (the classic editor's global inputKeyjam is
 	// bypassed for this window by the Toplevel routing guard).
 	private InputKeyjam inputKeyjam;
-	// Live output scope, reused wholesale from the classic editor overlay: it
-	// draws its own frame + trace via video.setScopeTrace each frame.
-	private OscilloscopeWindow scopeView;
 
 	this(Rectangle a) {
 		super(a);
 		inputKeyjam = new InputKeyjam();
-		// Top-right band: the live resulting waveform (ADSR curve sits top-left,
-		// the three timelines stack full-width below).
-		scopeView = new OscilloscopeWindow(
-			Rectangle(area.x + 56, area.y + 4, 11, area.width - 58));
 	}
 
 	override @property string contextId() { return Ctx.soundEditor; }
 
+	// ---- shared geometry (recomputed each frame from `area`) ----
+	private struct Geo {
+		int paramX, paramW;     // left parameter column (cells)
+		int sepX;               // vertical separator column (cells)
+		int labelX;             // band label gutter start (cells)
+		int plotX0px, plotWpx;  // shared pixel X origin + width for every band
+		int stackTopPx, stackBotPx;
+		int[6] bandTopPx;       // 5 bands + trailing bottom bound
+		int rawTopRow;          // top border row of the raw-data strip (cells)
+	}
+
+	private Geo layout() {
+		Geo g;
+		g.paramX = area.x + 2;
+		g.paramW = 26;
+		g.sepX   = g.paramX + g.paramW;
+		g.labelX = g.sepX + 2;
+		int labelW = 8;
+		int plotX0c = g.labelX + labelW;
+		int plotEndC = area.x + area.width - 2;
+		int plotWc = plotEndC - plotX0c;
+		if(plotWc < 8) plotWc = 8;
+		g.plotX0px = plotX0c * FONT_X;
+		g.plotWpx  = plotWc * FONT_X;
+
+		int stackTopRow = area.y + 3;
+		enum int RAW_H = 8;
+		g.rawTopRow = area.y + area.height - RAW_H;
+		int stackBotRow = g.rawTopRow - 1;
+		g.stackTopPx = stackTopRow * FONT_Y;
+		g.stackBotPx = stackBotRow * FONT_Y;
+
+		// Five bands: output, adsr, pulse, filter, wave (thin). Weights sum ~4.6.
+		immutable float[5] wgt = [1.0f, 1.0f, 1.0f, 1.0f, 0.55f];
+		float tot = 0; foreach(w; wgt) tot += w;
+		float acc = 0;
+		int span = g.stackBotPx - g.stackTopPx;
+		g.bandTopPx[0] = g.stackTopPx;
+		foreach(i; 0 .. 5) {
+			acc += wgt[i];
+			g.bandTopPx[i + 1] = g.stackTopPx + cast(int)lround(acc / tot * span);
+		}
+		return g;
+	}
+
+	private int xForFrame(ref Geo g, int f) {
+		if(f < 0) f = 0;
+		if(f > VISIBLE_FRAMES) f = VISIBLE_FRAMES;
+		return g.plotX0px + f * g.plotWpx / VISIBLE_FRAMES;
+	}
+
 	override void update() {
+		// v2: keep note routing but never the blue keyjam tint on this screen.
+		keyjamBackground = false;
+		// We drive our own overlay each frame; make sure no stale single-slot scope
+		// trace lingers underneath the bands.
+		video.clearScopeTrace();
+
 		drawFrame(area);
 
 		int ins = state.activeInstrument;
@@ -130,30 +194,53 @@ class SoundEditor : Window {
 		string name = stripRight(to!string(song.insLabels[ins][]));
 
 		screen.cprint(area.x + 2, area.y, COL_TITLE, 0,
-					  " Sound Editor - Ctrl-E to exit, jam with the keyboard ");
-		screen.cprint(area.x + 3, area.y + 2, COL_LABEL, 0, "Instrument:");
-		screen.cprint(area.x + 15, area.y + 2, COL_VALUE, 0,
-					  format("%02X  %s", ins, name));
-		screen.cprint(area.x + 30, area.y + 2, COL_LABEL, 0, "Octave:");
-		screen.cprint(area.x + 38, area.y + 2, COL_VALUE, 0,
-					  format("%d", state.octave));
+					  " Sound Editor - Ctrl-E exit - jam keys - +/- instrument - Up/Down param ");
+		screen.cprint(area.x + 2, area.y + 1, COL_LABEL, 0, "Instrument");
+		screen.cprint(area.x + 13, area.y + 1, COL_VALUE, 0,
+					  format("%02X %s", ins, name));
+		screen.cprint(area.x + 40, area.y + 1, COL_LABEL, 0, "Octave");
+		screen.cprint(area.x + 47, area.y + 1, COL_VALUE, 0, format("%d", state.octave));
 
-		// Rebuild the overlay draw-list from scratch this frame (every graph +
-		// playhead lives here; the scope trace uses its own single slot).
+		Geo g = layout();
+
+		// Advance the per-voice frame-since-trigger counters (gate 0->1 = retrigger).
+		foreach(v; 0 .. 3) {
+			bool gate = (audio.audio.sidreg[4 + v * 7] & 1) != 0;
+			if(gate && !prevGate[v]) frameSinceTrigger[v] = 0;
+			else if(frameSinceTrigger[v] < 1_000_000) frameSinceTrigger[v]++;
+			prevGate[v] = gate;
+		}
+
+		// Vertical separator between the param column and the graph stack.
+		for(int y = area.y + 2; y <= g.rawTopRow - 1; y++)
+			screen.setChar(g.sepX, y, 0x0500 | 216);
+
+		// Rebuild the overlay draw-list from scratch (all bands + the playhead).
 		video.olClear();
-		drawEnvelope(ins);
 
-		// The resulting-audio scope proves live audio data reaches this screen
-		// (it draws its own framed title).
-		scopeView.update();
+		drawParamColumn(ins, g);
 
-		// P3: the three per-tick table timelines, stacked full-width below the top
-		// band. Full content width, ~8 rows each.
-		int tx = area.x + 1;
-		int tw = area.width - 3;
-		drawPulseTimeline(ins, tx, area.y + 16, tw, 8);
-		drawFilterTimeline(ins, tx, area.y + 24, tw, 8);
-		drawWaveLane(ins, tx, area.y + 32, tw, 8);
+		// Stacked, frame-aligned graph bands (top -> bottom).
+		drawBandLabel(g, 0, "Output");
+		drawOutputBand(g);
+		drawBandLabel(g, 1, "ADSR");
+		drawAdsrBand(ins, g);
+		drawBandLabel(g, 2, "Pulse");
+		drawPulseBand(ins, g);
+		drawBandLabel(g, 3, "Filter");
+		drawFilterBand(ins, g);
+		drawBandLabel(g, 4, "Wave");
+		drawWaveBand(ins, g);
+
+		// One full-height playhead across every band, at the sounding voice's
+		// current frame-since-trigger.
+		int pv = findVoiceFor(ins);
+		if(pv >= 0) {
+			int px = xForFrame(g, frameSinceTrigger[pv]);
+			video.olVLine(px, g.stackTopPx, g.stackBotPx, COL_HEAD);
+		}
+
+		drawRawData(ins, g);
 	}
 
 	// Find a voice currently sounding instrument `ins` (for playhead placement);
@@ -166,134 +253,345 @@ class SoundEditor : Window {
 		return -1;
 	}
 
-	// Draw the classic A->D->S->R envelope polyline for instrument `ins` in a
-	// dedicated framed panel, using the real SID ms timing tables for the segment
-	// slopes, plus a live playhead that rides the curve from the jammed voice.
-	// Read-only: never writes song data.
-	private void drawEnvelope(int ins) {
-		// Instrument ADSR nibbles (column-major table: col0 AD, col1 SR).
+	// ---- left parameter column (display-only, movable cursor) ----
+
+	private void drawParamColumn(int ins, ref Geo g) {
 		ubyte ad = song.instrumentTable[ins + 0 * 48];
 		ubyte sr = song.instrumentTable[ins + 1 * 48];
-		int attack  = (ad >> 4) & 0x0f;
-		int decay   =  ad       & 0x0f;
-		int sustain = (sr >> 4) & 0x0f;
-		int release =  sr       & 0x0f;
+		ubyte rst = song.instrumentTable[ins + 2 * 48];
+		ubyte hrw = song.instrumentTable[ins + 3 * 48];
+		ubyte fpt = song.instrumentTable[ins + 4 * 48];
+		ubyte ppt = song.instrumentTable[ins + 5 * 48];
+		ubyte hsr = song.instrumentTable[ins + 6 * 48];
+		ubyte wpt = song.instrumentTable[ins + 7 * 48];
+		int attack  = (ad >> 4) & 0x0f, decay   = ad & 0x0f;
+		int sustain = (sr >> 4) & 0x0f, release = sr & 0x0f;
 
-		// Panel geometry (character cells): top-left band, beside the scope.
-		int px0 = area.x + 1;
-		int py0 = area.y + 4;
-		int pw  = 54;
-		int ph  = 11;
-		if(pw < 8) return;
-		drawFrame(Rectangle(px0, py0, ph, pw));
-		screen.cprint(px0 + 2, py0, COL_TITLE, 0, " ADSR Envelope ");
-		// Segment values as hex nibbles + real ms, on the label row inside the top.
-		screen.cprint(px0 + 2, py0 + 1, COL_LABEL, 0,
-			format("A:%X D:%X S:%X R:%X", attack, decay, sustain, release));
-		screen.cprint(px0 + 2, py0 + 2, COL_LABEL, 0,
-			format("%gms %gms lvl%d/15 %gms",
-				   ATTACK_TIME_MS[attack], DECAY_RELEASE_TIME_MS[decay],
-				   sustain, DECAY_RELEASE_TIME_MS[release]));
+		// Waveform mnemonic from the first control byte the wave table sets.
+		WaveSim w = simWave(wpt);
+		int firstCtrl = 0;
+		foreach(c; w.cells) if(c.ctrl >= 0x10) { firstCtrl = c.ctrl; break; }
 
-		// Pixel drawing box (device pixels). Reserve the top rows for the title
-		// + value labels so the curve never draws over the text.
-		immutable int ix0 = (px0 + 1) * FONT_X;
-		immutable int iw  = (pw - 2) * FONT_X;
-		immutable int iyTop = (py0 + 3) * FONT_Y;
-		immutable int iyBot = (py0 + ph - 1) * FONT_Y - 2;
-		if(iw < 8 || iyBot <= iyTop) return;
+		string rstStr = (rst & 0xc0) == 0x80 ? "hard"
+			: ((rst & 0xc0) == 0x40 ? "soft" : "3fr");
 
-		int ampToY(float a) {
-			if(a < 0) a = 0; if(a > 1) a = 1;
-			return iyBot - cast(int)lround(a * (iyBot - iyTop));
+		// 6-char text bar for a 0..15 nibble.
+		static string nibbleBar(int n) {
+			int fill = n * 6 / 15;
+			char[6] b = '.';
+			foreach(k; 0 .. 6) if(k < fill) b[k] = '#';
+			return cast(string)b.dup;
 		}
 
-		immutable float sLvl = sustain / 15.0f;
-		// Fixed sustain-hold width; the remaining width is shared among A/D/R in
-		// proportion to their real ms so the whole curve fills the panel and the
-		// slopes stay honest relative to one another.
-		int sustainW = iw / 5;
-		if(sustainW < 4) sustainW = 4;
-		int availW = iw - sustainW;
-		if(availW < 3) availW = 3;
-		float aMs = ATTACK_TIME_MS[attack];
-		float dMs = DECAY_RELEASE_TIME_MS[decay];
-		float rMs = DECAY_RELEASE_TIME_MS[release];
-		float totMs = aMs + dMs + rMs;
-		if(totMs <= 0) totMs = 1;
-		int aW = max(1, cast(int)lround(aMs / totMs * availW));
-		int dW = max(1, cast(int)lround(dMs / totMs * availW));
-		int rW = availW - aW - dW;
-		if(rW < 1) rW = 1;
+		string[PARAM_ROWS] labels = [
+			"Attack", "Decay", "Sustain", "Release", "Waveform", "Wave ptr",
+			"Pulse ptr", "Filter ptr", "HardRst", "HR wave", "HR SR"
+		];
+		string[PARAM_ROWS] vals;
+		vals[0]  = format("%X %s", attack,  nibbleBar(attack));
+		vals[1]  = format("%X %s", decay,   nibbleBar(decay));
+		vals[2]  = format("%X %s", sustain, nibbleBar(sustain));
+		vals[3]  = format("%X %s", release, nibbleBar(release));
+		vals[4]  = waveformName(firstCtrl);
+		vals[5]  = format("$%02X", wpt);
+		vals[6]  = ppt >= 0x80 ? format("fix $%03X", (ppt & 0x0f) << 8) : format("$%02X", ppt);
+		vals[7]  = fpt == 0 ? "off" : format("$%02X", fpt);
+		vals[8]  = format("$%02X %s", rst, rstStr);
+		vals[9]  = format("$%02X", hrw);
+		vals[10] = format("$%02X", hsr);
 
-		immutable int x0 = ix0;
-		immutable int x1 = x0 + aW;          // attack peak
-		immutable int x2 = x1 + dW;          // decay -> sustain knee
-		immutable int x3 = x2 + sustainW;    // end of sustain hold
-		immutable int x4 = x3 + rW;          // release -> zero
-		immutable int yZero = ampToY(0);
-		immutable int yPeak = ampToY(1);
-		immutable int yS    = ampToY(sLvl);
-
-		// Zero (baseline) axis, then the envelope polyline.
-		video.olHLine(x0, x4, yZero, COL_AXIS);
-		video.olLine(x0, yZero, x1, yPeak, COL_CURVE);   // attack
-		video.olLine(x1, yPeak, x2, yS,    COL_CURVE);   // decay
-		video.olLine(x2, yS,    x3, yS,    COL_CURVE);   // sustain
-		video.olLine(x3, yS,    x4, yZero, COL_CURVE);   // release
-
-		// Live playhead: find a voice playing this instrument, ride the curve at
-		// its current envelope amplitude (brightness). Phase (attack/decay/sustain/
-		// release) is disambiguated by gate state + brightness direction.
-		int lv = findVoiceFor(ins);
-		foreach(v; 0 .. 3) {
-			float b = audio.visualizer.getVoiceBrightness(v);
-			// remember for next-frame direction; done after use below for lv
-			if(v != lv) prevBright[v] = b;
-		}
-		if(lv >= 0) {
-			float amp = audio.visualizer.getVoiceBrightness(lv);
-			if(amp < 0) amp = 0; if(amp > 1) amp = 1;
-			bool gate = (audio.audio.sidreg[4 + lv * 7] & 1) != 0;
-			float dir = amp - prevBright[lv];
-			prevBright[lv] = amp;
-			int phx;
-			if(!gate) {
-				// Release: amp falls sLvl -> 0 along x3..x4.
-				float t = sLvl > 0 ? (sLvl - amp) / sLvl : 1.0f;
-				phx = x3 + cast(int)lround(clamp01(t) * (x4 - x3));
-			}
-			else if(dir > 0.002f && amp < 0.999f) {
-				// Attack: amp rises 0 -> 1 along x0..x1.
-				phx = x0 + cast(int)lround(clamp01(amp) * (x1 - x0));
-			}
-			else if(dir < -0.002f && amp > sLvl + 0.02f) {
-				// Decay: amp falls 1 -> sLvl along x1..x2.
-				float span = 1.0f - sLvl;
-				float t = span > 0 ? (1.0f - amp) / span : 1.0f;
-				phx = x1 + cast(int)lround(clamp01(t) * (x2 - x1));
-			}
-			else {
-				// Sustain hold.
-				phx = x2 + (x3 - x2) / 2;
-			}
-			int phy = ampToY(amp);
-			video.olVLine(phx, yPeak, yZero, COL_HEADSTEM);
-			video.olFillRect(phx - 2, phy - 2, 5, 5, COL_HEAD);
+		int y0 = area.y + 3;
+		immutable int valX = g.paramX + 12;
+		immutable int valMax = g.sepX - valX;   // chars available before separator
+		screen.cprint(g.paramX, area.y + 2, COL_LABEL, 0, "Parameters");
+		foreach(i; 0 .. PARAM_ROWS) {
+			int y = y0 + i;
+			bool sel = (i == paramCursor);
+			int lc = sel ? COL_TITLE : COL_LABEL;
+			int vc = sel ? COL_TITLE : COL_VALUE;
+			screen.cprint(g.paramX, y, lc, 0, sel ? ">" : " ");
+			screen.cprint(g.paramX + 1, y, lc, 0, labels[i]);
+			string v = vals[i];
+			if(v.length > valMax) v = v[0 .. valMax];
+			screen.cprint(valX, y, vc, 0, v);
 		}
 	}
 
-	// ---- P3 timeline simulators (read-only; mirror src/c64/player_v4.acme) ----
+	private static string waveformName(int ctrl) {
+		if(ctrl == 0) return "(unchanged)";
+		string s;
+		if(ctrl & 0x10) s ~= "tri ";
+		if(ctrl & 0x20) s ~= "saw ";
+		if(ctrl & 0x40) s ~= "pul ";
+		if(ctrl & 0x80) s ~= "noi ";
+		if(s.length == 0) s = format("$%02X", ctrl);
+		return stripRight(s);
+	}
+
+	// ---- band chrome ----
+
+	private void drawBandLabel(ref Geo g, int band, string label) {
+		int row = g.bandTopPx[band] / FONT_Y;
+		screen.cprint(g.labelX, row, COL_LABEL, 0, label);
+		// Faint baseline axis at the band's bottom.
+		int botPx = g.bandTopPx[band + 1] - 2;
+		video.olHLine(g.plotX0px, g.plotX0px + g.plotWpx - 1, botPx, COL_AXIS);
+	}
+
+	private void bandBox(ref Geo g, int band, out int topPx, out int botPx) {
+		topPx = g.bandTopPx[band] + 2;
+		botPx = g.bandTopPx[band + 1] - 3;
+		if(botPx <= topPx) botPx = topPx + 1;
+	}
+
+	// ---- output/keyjam waveform band (min/max per frame from captureBuf) ----
+
+	private void drawOutputBand(ref Geo g) {
+		int topPx, botPx; bandBox(g, 0, topPx, botPx);
+		int mid = (topPx + botPx) / 2;
+		int half = (botPx - topPx) / 2;
+		if(half < 1) return;
+
+		int total = audio.audio.captureLen;
+		int fs = audio.audio.captureFrameSamples;
+		short* buf = audio.audio.captureBuf.ptr;
+		bool haveCapture = (total >= 2 && fs > 0 && buf !is null);
+
+		foreach(px; 0 .. g.plotWpx) {
+			int f = px * VISIBLE_FRAMES / g.plotWpx;
+			if(!haveCapture) {
+				video.olPoint(g.plotX0px + px, mid, COL_TRACE);
+				continue;
+			}
+			int s0 = f * fs;
+			int s1 = s0 + fs;
+			if(s0 >= total) { video.olPoint(g.plotX0px + px, mid, COL_TRACE); continue; }
+			if(s1 > total) s1 = total;
+			int mn = short.max, mx = short.min;
+			for(int s = s0; s < s1; s++) {
+				int v = buf[s];
+				if(v < mn) mn = v;
+				if(v > mx) mx = v;
+			}
+			int yhi = mid - clampOff(mx, half);   // max -> up
+			int ylo = mid - clampOff(mn, half);   // min -> down
+			video.olVLine(g.plotX0px + px, ylo, yhi, COL_TRACE);
+		}
+	}
+
+	private int clampOff(int v, int half) {
+		int off = cast(int)lround(cast(real)v * half / FULLSCALE);
+		return max(-half, min(half, off));
+	}
+
+	// ---- ADSR band (SID ms tables -> frame axis, nominal gate hold) ----
+
+	private void drawAdsrBand(int ins, ref Geo g) {
+		int topPx, botPx; bandBox(g, 1, topPx, botPx);
+		ubyte ad = song.instrumentTable[ins + 0 * 48];
+		ubyte sr = song.instrumentTable[ins + 1 * 48];
+		int attack  = (ad >> 4) & 0x0f, decay = ad & 0x0f;
+		int sustain = (sr >> 4) & 0x0f, release = sr & 0x0f;
+		float sLvl = sustain / 15.0f;
+		float aF = ATTACK_TIME_MS[attack]         / FRAME_MS;
+		float dF = DECAY_RELEASE_TIME_MS[decay]   / FRAME_MS;
+		float rF = DECAY_RELEASE_TIME_MS[release] / FRAME_MS;
+		if(rF < 1) rF = 1;
+		float relStart = VISIBLE_FRAMES - rF;
+		if(relStart < aF + dF) relStart = aF + dF;
+
+		float amp(float f) {
+			if(f < aF) return aF > 0 ? f / aF : 1.0f;
+			f -= aF;
+			if(f < dF) return dF > 0 ? 1.0f - (1.0f - sLvl) * (f / dF) : sLvl;
+			float fromStart = aF + dF + f;
+			if(fromStart < relStart) return sLvl;
+			float rt = (fromStart - relStart) / rF;
+			return clamp01(sLvl * (1.0f - rt));
+		}
+
+		int prevY = -1;
+		foreach(px; 0 .. g.plotWpx) {
+			float f = cast(float)px * VISIBLE_FRAMES / g.plotWpx;
+			int y = botPx - cast(int)lround(clamp01(amp(f)) * (botPx - topPx));
+			int x = g.plotX0px + px;
+			if(prevY >= 0) video.olLine(x - 1, prevY, x, y, COL_CURVE);
+			else video.olPoint(x, y, COL_CURVE);
+			prevY = y;
+		}
+	}
+
+	// ---- pulse / filter bands (sweep sims on the frame axis) ----
+
+	private void drawSweepBand(ref SweepSim s, int maxVal, int fillCol, int lineCol,
+			int topPx, int botPx, ref Geo g) {
+		int len = cast(int)s.val.length;
+		if(len <= 0 || maxVal <= 0) return;
+		int n = min(len, VISIBLE_FRAMES);
+		foreach(f; 0 .. n) {
+			int v = s.val[f];
+			if(v < 0) v = 0; if(v > maxVal) v = maxVal;
+			int y = botPx - v * (botPx - topPx) / maxVal;
+			int xa = xForFrame(g, f);
+			int xb = xForFrame(g, f + 1);
+			if(xb <= xa) xb = xa + 1;
+			for(int x = xa; x < xb; x++) {
+				video.olVLine(x, botPx, y, fillCol);
+				video.olPoint(x, y, lineCol);
+			}
+		}
+		if(s.loopFrame >= 0 && s.loopFrame < VISIBLE_FRAMES)
+			video.olVLine(xForFrame(g, s.loopFrame), topPx, botPx, COL_LOOP);
+	}
+
+	private void drawPulseBand(int ins, ref Geo g) {
+		int topPx, botPx; bandBox(g, 2, topPx, botPx);
+		int ptr = song.instrumentTable[ins + 5 * 48];
+		if(ptr >= 0x80) return;               // direct fixed pulse: no program
+		SweepSim s = simPulse(ptr);
+		drawSweepBand(s, 4095, COL_PULSE_FILL, COL_PULSE_LINE, topPx, botPx, g);
+	}
+
+	private void drawFilterBand(int ins, ref Geo g) {
+		int topPx, botPx; bandBox(g, 3, topPx, botPx);
+		int ptr = song.instrumentTable[ins + 4 * 48];
+		if(ptr <= 0) return;
+		SweepSim s = simFilter(ptr);
+		drawSweepBand(s, 2047, COL_FILT_FILL, COL_FILT_LINE, topPx, botPx, g);
+	}
+
+	// ---- wave/arp thin band (one colored step per frame) ----
+
+	private void drawWaveBand(int ins, ref Geo g) {
+		int topPx, botPx; bandBox(g, 4, topPx, botPx);
+		int ptr = song.instrumentTable[ins + 7 * 48];
+		WaveSim w = simWave(ptr);
+		int N = cast(int)w.cells.length;
+		if(N <= 0) return;
+		int vph = findVoiceFor(ins);
+		int actRow = vph >= 0 ? audio.visualizer.getActiveWaveRow(vph) : -1;
+		int steps = min(N, VISIBLE_FRAMES);
+		foreach(i; 0 .. steps) {
+			WaveCell c = w.cells[i];
+			int xa = xForFrame(g, i);
+			int xb = xForFrame(g, i + 1);
+			if(xb <= xa + 1) xb = xa + 1;
+			int col = waveformColor(c.ctrl);
+			video.olFillRect(xa, topPx, max(1, xb - xa - 1), botPx - topPx, col);
+			// gate/sync/ring ticks along the very top of the lane.
+			if(c.ctrl & 0x01) video.olHLine(xa, xb - 1, topPx,     13);
+			if(c.ctrl & 0x02) video.olHLine(xa, xb - 1, topPx + 1, 14);
+			if(c.ctrl & 0x04) video.olHLine(xa, xb - 1, topPx + 2, 10);
+			if(actRow >= 0 && c.row == actRow)
+				video.olRect(xa, topPx, max(1, xb - xa), botPx - topPx, COL_HEAD);
+		}
+		if(w.loopIndex >= 0 && w.loopIndex < VISIBLE_FRAMES)
+			video.olVLine(xForFrame(g, w.loopIndex), topPx, botPx, COL_LOOP);
+	}
+
+	// Colour a wave/arp cell by its control byte's waveform bits.
+	private int waveformColor(int ctrl) {
+		if(ctrl == 0) return 8;                     // leave waveform unchanged (dim)
+		if(ctrl <= 0x0f) return 12;                 // wave-delay override (grey)
+		if(ctrl >= 0xe0 && ctrl <= 0xef) return 8;  // raw control, no waveform
+		if(ctrl & 0x80) return 11;                  // noise (grey)
+		if(ctrl & 0x40) return 7;                   // pulse (yellow)
+		if(ctrl & 0x20) return 5;                   // saw (green)
+		if(ctrl & 0x10) return 3;                   // triangle (cyan)
+		return 8;
+	}
+
+	// ---- raw table data strip (bottom) ----
+
+	private void drawRawData(int ins, ref Geo g) {
+		int y = g.rawTopRow;
+		int x = area.x + 2;
+		// Horizontal separator across the interior above the strip.
+		for(int cx = area.x + 1; cx < area.x + area.width - 1; cx++)
+			screen.setChar(cx, y, 0x0500 | 192);
+		screen.cprint(x + 1, y, COL_TITLE, 0, " Raw table data (read-only) ");
+
+		ubyte b(int col) { return song.instrumentTable[ins + col * 48]; }
+		screen.cprint(x, y + 1, COL_LABEL, 0, format(
+			"Ins %02X:  AD %02X  SR %02X  Rst %02X  HRw %02X  Flt %02X  Pul %02X  HRsr %02X  Wav %02X",
+			ins, b(0), b(1), b(2), b(3), b(4), b(5), b(6), b(7)));
+
+		int maxw = area.width - 4;
+
+		// Wave rows the instrument walks (wave1/wave2 pairs).
+		{
+			WaveSim w = simWave(b(7));
+			string ln = format("Wave $%02X: ", b(7));
+			foreach(c; w.cells) {
+				string cell = format("%02X/%02X ", c.transpose & 0xff, c.ctrl & 0xff);
+				if(ln.length + cell.length > maxw) { ln ~= ".."; break; }
+				ln ~= cell;
+			}
+			screen.cprint(x, y + 2, COL_VALUE, 0, ln);
+		}
+		// Pulse rows used (unique, in first-seen order).
+		{
+			int ptr = b(5);
+			string ln;
+			if(ptr >= 0x80) ln = format("Pulse: direct fixed $%03X", (ptr & 0x0f) << 8);
+			else {
+				SweepSim s = simPulse(ptr);
+				ln = format("Pulse $%02X: ", ptr);
+				bool[0x40] seen;
+				foreach(r; s.rowOf) {
+					if(r < 0 || r >= 0x40 || seen[r]) continue;
+					seen[r] = true;
+					string cell = format("%02X:%02X %02X %02X %02X  ", r,
+						song.pulseTable[r*4], song.pulseTable[r*4+1],
+						song.pulseTable[r*4+2], song.pulseTable[r*4+3]);
+					if(ln.length + cell.length > maxw) { ln ~= ".."; break; }
+					ln ~= cell;
+				}
+			}
+			screen.cprint(x, y + 3, COL_VALUE, 0, ln);
+		}
+		// Filter rows used.
+		{
+			int ptr = b(4);
+			string ln;
+			if(ptr <= 0) ln = "Filter: none";
+			else {
+				SweepSim s = simFilter(ptr);
+				ln = format("Filter $%02X: ", ptr);
+				bool[0x40] seen;
+				foreach(r; s.rowOf) {
+					if(r < 0 || r >= 0x40 || seen[r]) continue;
+					seen[r] = true;
+					string cell = format("%02X:%02X %02X %02X %02X  ", r,
+						song.filterTable[r*4], song.filterTable[r*4+1],
+						song.filterTable[r*4+2], song.filterTable[r*4+3]);
+					if(ln.length + cell.length > maxw) { ln ~= ".."; break; }
+					ln ~= cell;
+				}
+			}
+			screen.cprint(x, y + 4, COL_VALUE, 0, ln);
+		}
+		// Live filter routing/resonance/mode (filter is shared/global).
+		ubyte r17 = audio.audio.sidreg[0x17];
+		ubyte r18 = audio.audio.sidreg[0x18];
+		string routeStr;
+		if(r17 & 1) routeStr ~= "1"; if(r17 & 2) routeStr ~= "2"; if(r17 & 4) routeStr ~= "3";
+		if(routeStr.length == 0) routeStr = "-";
+		string modeStr;
+		if(r18 & 0x10) modeStr ~= "LP"; if(r18 & 0x20) modeStr ~= "BP"; if(r18 & 0x40) modeStr ~= "HP";
+		if(modeStr.length == 0) modeStr = "off";
+		screen.cprint(x, y + 5, COL_LABEL, 0,
+			format("Live filter: Res %X  Route %s  Mode %s (shared)", r17 >> 4, routeStr, modeStr));
+	}
+
+	// ---- timeline simulators (read-only; mirror src/c64/player_v4.acme) ----
 
 	// Simulate the pulse-width program starting at table row `startRow`.
-	// pulstab is 4 bytes/row: b0 duration|dir (bit7 subtract, low7 frames),
-	// b1 add magnitude, b2 initial 12-bit PW (nibbles swapped, $FF=keep),
-	// b3 jump ($00 next / $7F stop / <=$3F row). PW delta = +/- b1 per frame.
 	private SweepSim simPulse(int startRow) {
 		SweepSim s;
-		enum int MAXF = 128;
+		enum int MAXF = VISIBLE_FRAMES;
 		if(startRow < 0 || startRow >= 0x40) return s;
-		int pw = 0x800;              // fallback initial PW (mid) until a row sets it
+		int pw = 0x800;
 		int row = startRow;
 		bool[0x40] visited;
 		int[0x40] firstFrame; firstFrame[] = -1;
@@ -306,7 +604,7 @@ class SoundEditor : Window {
 			ubyte b3 = song.pulseTable[base + 3];
 			if(firstFrame[row] < 0) firstFrame[row] = cast(int)s.val.length;
 			if(b2 != 0xff) pw = ((b2 & 0x0f) << 8) | (b2 & 0xf0);
-			int n = (b0 & 0x7f) + 1; // step applies the add on load frame + low7 more
+			int n = (b0 & 0x7f) + 1;
 			int dir = (b0 & 0x80) ? -1 : 1;
 			foreach(f; 0 .. n) {
 				pw = (pw + dir * b1) & 0xfff;
@@ -327,12 +625,9 @@ class SoundEditor : Window {
 	}
 
 	// Simulate the filter cutoff program starting at row `startRow`.
-	// Sweep row (b0 bit7 clear): b0 frames, b1 signed add (11-bit delta = 2*b1),
-	// b2 initial cutoff-hi (<<3, $FF=keep). Config row (b0 bit7 set): sets mode
-	// + $d417; instantaneous. b3 jump as pulse. Cutoff is 11-bit 0..2047 global.
 	private SweepSim simFilter(int startRow) {
 		SweepSim s;
-		enum int MAXF = 128;
+		enum int MAXF = VISIBLE_FRAMES;
 		if(startRow <= 0 || startRow >= 0x40) return s;
 		int cutoff = 0;
 		int row = startRow;
@@ -347,8 +642,6 @@ class SoundEditor : Window {
 			ubyte b3 = song.filterTable[base + 3];
 			if(firstFrame[row] < 0) firstFrame[row] = cast(int)s.val.length;
 			if(b0 & 0x80) {
-				// Filter-type/config row: instantaneous (holds one frame here so the
-				// row still occupies the timeline and can carry a playhead).
 				if(b2 != 0xff) cutoff = (b2 << 3);
 				s.val ~= cutoff; s.rowOf ~= row;
 			}
@@ -356,7 +649,7 @@ class SoundEditor : Window {
 				if(b2 != 0xff) cutoff = (b2 << 3);
 				int n = b0 & 0x7f;
 				int delta = 2 * (b1 < 0x80 ? b1 : b1 - 0x100);
-				s.val ~= cutoff; s.rowOf ~= row;   // load frame holds init, no add
+				s.val ~= cutoff; s.rowOf ~= row;
 				foreach(f; 0 .. n) {
 					cutoff += delta;
 					if(cutoff < 0) cutoff = 0;
@@ -377,12 +670,10 @@ class SoundEditor : Window {
 		return s;
 	}
 
-	// Walk the wave/arp program starting at row `startRow`, collecting one cell
-	// per step until a marker or a revisit. wave1 markers: $7F jump (target in
-	// wave2), $7E loop-to-previous/end.
+	// Walk the wave/arp program starting at row `startRow`.
 	private WaveSim simWave(int startRow) {
 		WaveSim w;
-		enum int MAXR = 64;
+		enum int MAXR = VISIBLE_FRAMES;
 		if(startRow < 0 || startRow > 0xff) return w;
 		int row = startRow & 0xff;
 		bool[256] visited;
@@ -401,192 +692,24 @@ class SoundEditor : Window {
 		return w;
 	}
 
-	// ---- P3 timeline drawing ----
-
-	// Shared area/line graph for a sweep program, plus loop marker + a playhead
-	// that outlines the active table row's frame span.
-	private void drawSweepGraph(ref SweepSim s, int maxVal,
-			int px0, int py0, int pw, int ph, int fillCol, int lineCol, int activeRow) {
-		immutable int ix0 = (px0 + 1) * FONT_X;
-		immutable int iw  = (pw - 2) * FONT_X;
-		immutable int iyTop = (py0 + 2) * FONT_Y;
-		immutable int iyBot = (py0 + ph - 1) * FONT_Y - 2;
-		if(iw < 4 || iyBot <= iyTop || maxVal <= 0) return;
-		video.olHLine(ix0, ix0 + iw - 1, iyBot, COL_AXIS);
-		int N = cast(int)s.val.length;
-		if(N <= 0) return;
-		foreach(px; 0 .. iw) {
-			int f = px * N / iw;
-			if(f >= N) f = N - 1;
-			int v = s.val[f];
-			if(v < 0) v = 0; if(v > maxVal) v = maxVal;
-			int y = iyBot - v * (iyBot - iyTop) / maxVal;
-			video.olVLine(ix0 + px, iyBot, y, fillCol);
-			video.olPoint(ix0 + px, y, lineCol);
-		}
-		if(s.loopFrame >= 0 && s.loopFrame < N) {
-			int lx = ix0 + s.loopFrame * iw / N;
-			video.olVLine(lx, iyTop, iyBot, COL_LOOP);
-		}
-		if(activeRow >= 0) {
-			int fa = -1, fb = -1;
-			foreach(i; 0 .. N) if(s.rowOf[i] == activeRow) { if(fa < 0) fa = i; fb = i; }
-			if(fa >= 0) {
-				int xa = ix0 + fa * iw / N;
-				int xb = ix0 + (fb + 1) * iw / N;
-				if(xb <= xa) xb = xa + 1;
-				video.olRect(xa, iyTop, xb - xa, iyBot - iyTop, COL_HEAD);
-			}
-		}
-	}
-
-	private void drawPulseTimeline(int ins, int px0, int py0, int pw, int ph) {
-		drawFrame(Rectangle(px0, py0, ph, pw));
-		screen.cprint(px0 + 2, py0, COL_TITLE, 0, " Pulse Width (0-4095) ");
-		int ptr = song.instrumentTable[ins + 5 * 48];
-		if(ptr >= 0x80) {
-			screen.cprint(px0 + 2, py0 + 1, COL_LABEL, 0,
-				format("direct fixed pulse $%03X - no pulse program", (ptr & 0x0f) << 8));
-			return;
-		}
-		SweepSim s = simPulse(ptr);
-		screen.cprint(px0 + 2, py0 + 1, COL_LABEL, 0,
-			format("start row $%02X   %d frames   %s", ptr, cast(int)s.val.length,
-				   s.loopFrame >= 0 ? "loops" : (s.stops ? "stops" : "runs")));
-		int v = findVoiceFor(ins);
-		int actRow = v >= 0 ? audio.visualizer.getActivePulseRow(v) : -1;
-		drawSweepGraph(s, 4095, px0, py0, pw, ph, COL_PULSE_FILL, COL_PULSE_LINE, actRow);
-	}
-
-	private void drawFilterTimeline(int ins, int px0, int py0, int pw, int ph) {
-		drawFrame(Rectangle(px0, py0, ph, pw));
-		screen.cprint(px0 + 2, py0, COL_TITLE, 0, " Filter Cutoff (0-2047, global) ");
-		int ptr = song.instrumentTable[ins + 4 * 48];
-
-		// Live filter routing/resonance/mode annotation from the SID regs.
-		ubyte r17 = audio.audio.sidreg[0x17];
-		ubyte r18 = audio.audio.sidreg[0x18];
-		int res = r17 >> 4;
-		int route = r17 & 0x0f;
-		string routeStr;
-		if(route & 1) routeStr ~= "1";
-		if(route & 2) routeStr ~= "2";
-		if(route & 4) routeStr ~= "3";
-		if(route & 8) routeStr ~= "X";
-		if(routeStr.length == 0) routeStr = "-";
-		string modeStr;
-		if(r18 & 0x10) modeStr ~= "LP";
-		if(r18 & 0x20) modeStr ~= "BP";
-		if(r18 & 0x40) modeStr ~= "HP";
-		if(modeStr.length == 0) modeStr = "off";
-
-		if(ptr <= 0) {
-			screen.cprint(px0 + 2, py0 + 1, COL_LABEL, 0,
-				format("instrument sets no filter program   live: Res%X Route:%s Mode:%s",
-					   res, routeStr, modeStr));
-			return;
-		}
-		SweepSim s = simFilter(ptr);
-		screen.cprint(px0 + 2, py0 + 1, COL_LABEL, 0,
-			format("start $%02X  %d frames  %s   live: Res%X Route:%s Mode:%s (shared)",
-				   ptr, cast(int)s.val.length,
-				   s.loopFrame >= 0 ? "loops" : (s.stops ? "stops" : "runs"),
-				   res, routeStr, modeStr));
-		int actRow = audio.visualizer.getActiveFilterRow();
-		drawSweepGraph(s, 2047, px0, py0, pw, ph, COL_FILT_FILL, COL_FILT_LINE, actRow);
-	}
-
-	// Map a wave1 transpose byte to a note-lane offset (relative semitones or
-	// absolute note number) for the step graph.
-	private static int waveNoteOffset(int transpose) {
-		if(transpose <= 0x5f) return transpose;              // relative +semitones
-		if(transpose >= 0x80 && transpose <= 0xdf) return transpose & 0x7f; // absolute note
-		return 0;
-	}
-
-	// Colour a wave/arp cell by its control byte's waveform bits.
-	private int waveformColor(int ctrl) {
-		if(ctrl == 0) return COL_HEADSTEM;          // leave waveform unchanged (dim)
-		if(ctrl <= 0x0f) return 12;                 // wave-delay override (grey)
-		if(ctrl >= 0xe0 && ctrl <= 0xef) return COL_HEADSTEM; // raw control, no waveform
-		if(ctrl & 0x80) return 11;                  // noise (grey)
-		if(ctrl & 0x40) return 7;                   // pulse (yellow)
-		if(ctrl & 0x20) return 5;                   // saw (green)
-		if(ctrl & 0x10) return 3;                   // triangle (cyan)
-		return COL_HEADSTEM;
-	}
-
-	private void drawWaveLane(int ins, int px0, int py0, int pw, int ph) {
-		drawFrame(Rectangle(px0, py0, ph, pw));
-		screen.cprint(px0 + 2, py0, COL_TITLE, 0, " Wave / Arp Lane (waveform + note step) ");
-		int ptr = song.instrumentTable[ins + 7 * 48];
-		WaveSim w = simWave(ptr);
-		string loopInfo = w.loopIndex < 0 ? "no loop"
-			: (w.loopTargetRow == -2 ? "loop prev" : format("jump $%02X", w.loopTargetRow));
-		screen.cprint(px0 + 2, py0 + 1, COL_LABEL, 0,
-			format("start row $%02X   %d steps   %s", ptr, cast(int)w.cells.length, loopInfo));
-
-		immutable int ix0 = (px0 + 1) * FONT_X;
-		immutable int iw  = (pw - 2) * FONT_X;
-		immutable int iyTop = (py0 + 2) * FONT_Y;
-		immutable int iyBot = (py0 + ph - 1) * FONT_Y - 2;
-		int N = cast(int)w.cells.length;
-		if(N <= 0 || iw < 4 || iyBot <= iyTop) return;
-
-		int waveBandBot = iyTop + (iyBot - iyTop) * 55 / 100;
-		int noteBandTop = waveBandBot + 2;
-
-		// Scale the note step graph to the largest offset present.
-		int maxNote = 12;
-		foreach(c; w.cells) {
-			int off = waveNoteOffset(c.transpose);
-			if(off > maxNote) maxNote = off;
-		}
-
-		int vph = findVoiceFor(ins);
-		int actRow = vph >= 0 ? audio.visualizer.getActiveWaveRow(vph) : -1;
-
-		foreach(i; 0 .. N) {
-			WaveCell c = w.cells[i];
-			int xa = ix0 + i * iw / N;
-			int xb = ix0 + (i + 1) * iw / N;
-			int cw = max(1, xb - xa);
-			// Waveform colour block.
-			int col = waveformColor(c.ctrl);
-			video.olFillRect(xa + 1, iyTop + 3, max(1, cw - 1), waveBandBot - iyTop - 3, col);
-			// Control-bit markers along the very top (gate/sync/ring).
-			if(c.ctrl & 0x01) video.olHLine(xa + 1, xb - 1, iyTop,     13); // gate (green)
-			if(c.ctrl & 0x02) video.olHLine(xa + 1, xb - 1, iyTop + 1, 14); // sync
-			if(c.ctrl & 0x04) video.olHLine(xa + 1, xb - 1, iyTop + 2, 10); // ring
-			// Note step: relative in light-blue, absolute in yellow.
-			int off = waveNoteOffset(c.transpose);
-			int ny = iyBot - off * (iyBot - noteBandTop) / max(1, maxNote);
-			video.olHLine(xa, xb - 1, ny, c.transpose >= 0x80 ? 7 : 14);
-			// Playhead: outline the active wave row's cell.
-			if(actRow >= 0 && c.row == actRow)
-				video.olRect(xa, iyTop, cw, iyBot - iyTop, COL_HEAD);
-		}
-
-		if(w.loopIndex >= 0) {
-			int lx = ix0 + w.loopIndex * iw / N;
-			if(lx >= ix0 + iw) lx = ix0 + iw - 1;
-			video.olVLine(lx, iyTop, iyBot, COL_LOOP);
-		}
-	}
-
 	override int keypress(Keyinfo key) {
-		// Octave nudges stay usable inside the screen (mirrors the classic
-		// editor's keypad octave keys) so jamming spans the whole range.
 		switch(key.raw) {
+		// Move the parameter cursor (display-only this pass; no byte writes).
+		case SDLK_UP:
+			if(paramCursor > 0) paramCursor--;
+			return OK;
+		case SDLK_DOWN:
+			if(paramCursor < PARAM_ROWS - 1) paramCursor++;
+			return OK;
+		// Octave nudges (mirrors the classic keypad octave keys).
 		case SDLK_KP_DIVIDE:
 			if(state.octave > 0) state.octave--;
 			return OK;
 		case SDLK_KP_MULTIPLY:
 			if(state.octave < 6) state.octave++;
 			return OK;
-		// Switch the instrument under view inline (mirrors the classic editor's
-		// instrument-table +/-). Routes through the shared activateInstrument so
-		// the classic screen stays in sync when we leave.
+		// Switch the instrument under view inline (shared activateInstrument keeps
+		// the classic screen in sync when we leave).
 		case SDLK_PLUS:
 		case SDLK_KP_PLUS:
 			UI.activateInstrument(state.activeInstrument + 1);

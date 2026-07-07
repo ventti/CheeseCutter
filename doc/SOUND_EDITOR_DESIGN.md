@@ -228,3 +228,85 @@ tracking, so vtable order matters — keep additions trailing).
   markers. *Verify*: driver click/drag → expected bytes.
 - **P6 — Polish + docs.** Octave/instrument HUD, color language, `make docs`,
   README/guide, ADR for the design decision.
+
+---
+
+## 7. Layout redesign v2 (2026-07-07 — user feedback)
+
+Supersedes the P3 panel arrangement (§5.4 panel list stays valid; only the
+on-screen layout changes). Still **read-only** this pass (left panel displays +
+has a cursor but does not write; write-back is P4).
+
+### 7.1 Requirements (verbatim intent)
+1. **No separate keyjam background.** The Sound Editor must use the *same*
+   background as non-keyjam mode — drop the whole-screen dark-blue keyjam tint.
+   Notes still play (keyjam functionally on); only the cosmetic tint goes.
+2. **Time-aligned stacked graphs, shared X-axis.** The keyjam/output waveform,
+   ADSR, Pulse and Filter graphs are drawn *on top of each other* as horizontal
+   bands with the **same left edge, same width, same X scale**, so a single
+   vertical **playhead** crosses all of them at the same instant.
+3. **Parameter editing UI on the LEFT** of the graphs (a vertical column).
+4. **Raw table data** for the instrument along the **bottom**.
+
+### 7.2 The shared X-axis = frames (PAL ticks) from note-on
+All bands use one common horizontal unit: **frames since the note triggered**
+(the player tick; ~19.95 ms PAL). This is the honest common time base and makes
+the stack physically meaningful:
+- **Output/keyjam waveform** — `captureBuf` stores `captureFrameSamples` samples
+  per frame, so sample index → frame is exact; draw min/max per column mapped to
+  the frame axis (reuse `ui.oscilloscope` capture path). Headless the capture is
+  flat (no audio device) — layout/alignment still fully verifiable.
+- **ADSR** — convert the SID ms tables to frames; draw A→D→(sustain hold)→R
+  across the frame axis. Use a fixed visible window (e.g. ~128 frames ≈ 2.5 s)
+  and a nominal gate-hold so sustain/release are visible.
+- **Pulse / Filter** — step the `SweepTable` program one row per frame (respect
+  instrument speed + jump/loop); plot value per frame on the same axis. Loop
+  back-edge drawn as a marker at its X.
+- **Wave/arp lane** — also per-frame; keep it as a thin band at the bottom of the
+  stack (still shares X), or fold into the raw-data strip. Prefer a thin band so
+  the playhead stays meaningful across it.
+- **Playhead** — one full-height vertical line at `currentFrameSinceTrigger`
+  (from the live player: active table row / a frame counter), spanning every band.
+
+### 7.3 Screen regions (compact 1280×700 / ccdriver layout)
+```
++-- params (left col) --+-- stacked graphs (shared X = frames from note-on) --+
+| Attack   [#]          | Output  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ |
+| Decay    [#]          | ADSR    /\________                                  |
+| Sustain  [#]          | Pulse   .:iI#####                                   |
+| Release  [#]          | Filter  ####iI:.                                    |
+| Waveform [pul]        | Wave/arp [t][s][p] (thin lane)                      |
+| Pulse ptr[..] Filt[..]| ^ single playhead | crosses all bands at cur frame  |
+| HardRst/Vib/...       |                                                     |
++-----------------------+-----------------------------------------------------+
++-- raw table data for this instrument (bottom) -----------------------------+
+| Instr: AD SR .. | Wave: rows | Pulse: rows | Filter: rows  (hex, read-only) |
++----------------------------------------------------------------------------+
+```
+- **Left param column**: labelled rows for the instrument's editable params
+  (AD, SR nibbles; waveform; pulse/filter pointers; hard-restart; vibrato/arp;
+  gate timing) shown as simple visual values (bars/mnemonics), with a movable
+  **cursor** (↑/↓ select a row) — **display-only** this pass; arrows just move
+  the cursor, no byte writes.
+- **Graph stack**: bands share `X0`/`width`; each band a fixed pixel height;
+  labels at each band's left inside the graph area or in the param gutter.
+- **Bottom raw data**: the hex bytes the instrument uses (its 8 instrument bytes
+  + the wave/pulse/filter table rows it points into) as read-only hex — the
+  "escape hatch" tying the picture back to the real bytes.
+
+### 7.4 Keyjam-tint fix
+`com.fb.keyjamBackground` (`fb.d:56`, applied `fb.d:511`) is the whole-screen
+tint, set by `UI.enableKeyjamMode` (`ui.d:802`). In the Sound Editor keep note
+routing/playing (the toplevel guard already routes keys to the editor's own
+`InputKeyjam` when `soundEditorActive`; `playNote` doesn't depend on the tint),
+but ensure `keyjamBackground` stays **false** while the screen is active (don't
+set it on enter; restore prior value on exit). The menu KEYJAM indicator may stay
+(only the background tint was objected to).
+
+### 7.5 Verify (read-only redesign)
+Clean build; enter the screen → screenshot shows: normal (non-blue) background;
+the four+ graphs stacked and left-aligned to a common X with one playhead; the
+left param column present with a cursor; raw hex table data along the bottom.
+Switch instrument → graphs + params + raw data all change together. Drive song
+playback → the single playhead moves across all bands in lockstep. No writes to
+song bytes (still read-only).

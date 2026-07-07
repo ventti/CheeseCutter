@@ -33,8 +33,8 @@ Editing byte-parity is P4+ (out of scope this run) — DO NOT implement editing.
 ## Agent strategy
 - Dedicated agents scaffolded in `.claude/agents/`.
 
-## Status: P1–P3 COMPLETE + independently verified (each PASS). STOPPED for human review at the P1–P3 checkpoint (per user request). P4–P6 (keyboard editing/write-back, mouse editing, docs polish) NOT started.
-Commits on feat/sound-editor: 85ccd8e (P1), e8a0f39 (P2), bee75eb (P3).
+## Status: P1–P3 COMPLETE + independently verified. v2 LAYOUT REDESIGN (§7) implemented (read-only) — awaiting verify. P4–P6 (editing/write-back, mouse, docs polish) NOT started.
+Commits on feat/sound-editor: 85ccd8e (P1), e8a0f39 (P2), bee75eb (P3), 41a8e65 (checkpoint). v2 relayout uncommitted (loop orchestrator commits).
 
 Tech-debt to address in P6 polish (non-blocking, from verifiers):
 - soundedit.d duplicates the SID ms ADSR tables from audio.visualizer (private
@@ -185,3 +185,63 @@ Tech-debt to address in P6 polish (non-blocking, from verifiers):
     getVoice*/getActive*Row path real hardware feeds identically).
   - NOT done: data editing / write-back / undo (P4+). P1-P3 read-only viz complete
     — STOP for human review before editing.
+- (v2 LAYOUT REDESIGN, §7 2026-07-07) Full relayout of `src/ui/soundedit.d`
+  (still READ-ONLY). Reused the P2/P3 sims + com.fb overlay; only the on-screen
+  arrangement + the shared time base changed.
+  - **No keyjam tint** (§7.4): `ui.toplevel.startSoundEditor()` now forces
+    `com.fb.keyjamBackground=false` right after `enableKeyjamMode(true)` and
+    `refresh()`es; `SoundEditor.update()` also re-asserts it false every frame.
+    Note routing/playing unchanged (keyjamStatus stays true; the toplevel guard
+    still routes note keys to the editor's own InputKeyjam). Exit restores the
+    caller's prior keyjam state (and thus tint) via `enableKeyjamMode(prevKeyjamStatus)`.
+    Verified: enter shows the normal dark bg (not blue); exit fully restores the
+    classic editor and drops the KEYJAM indicator (se-v2-exit.png).
+  - **Stacked frame-aligned bands** (§7.2): one shared X axis = frames-since-note-on
+    (VISIBLE_FRAMES=128, FRAME_MS=19.95). Five bands top→bottom sharing the same
+    pixel `plotX0px`/`plotWpx`: Output (min/max per frame from `captureBuf`), ADSR
+    (SID ms tables → frames, nominal gate-hold so A/D/S/R all show), Pulse + Filter
+    (`simPulse`/`simFilter` per-frame val on the frame axis, loop marker vLine),
+    and a thin Wave/arp lane (one waveform-colored step per frame + gate/sync/ring
+    ticks + active-row cell highlight + $7E/$7F loop marker). Band geometry computed
+    from `area` each frame (weights [1,1,1,1,0.55]).
+  - **Single full-height playhead** across every band at the sounding voice's
+    `frameSinceTrigger` (own per-voice counter reset on the SID gate 0→1 edge,
+    voice chosen by `findVoiceFor(ins)`). Drawn as one white vLine spanning the
+    whole stack.
+  - **Left parameter column** (§7.3): 11 display-only rows (A/D/S/R with nibble
+    text-bars; waveform mnemonic; wave/pulse/filter pointers; HardRst mnemonic;
+    HR wave/SR) + a cursor moved with Up/Down (**no byte writes** — arrows only
+    move the cursor). `+/-` still switch instrument, KP `/`,`*` still nudge octave.
+  - **Bottom raw-data strip** (§7.3): the instrument's 8 bytes + the wave/pulse/
+    filter rows it points into as read-only hex, plus the live (shared) filter
+    Res/Route/Mode. Cross-checked against the classic Instruments table
+    (ins04 Flute = FF 33 09 80 00 00 00 0D; ins0A = 05 CA 80 41 01 01 00 1B).
+  - Dropped the standalone `OscilloscopeWindow` (output is now a band drawn via the
+    overlay), so `ui.soundedit` no longer imports `ui.oscilloscope`.
+  - Build: `make -f Makefile.mac clean && make -f Makefile.mac -j4 ccutter ccdriver`
+    → exit 0, both binaries.
+  - Smoke (headless dummy SDL), tune tunes/vent-arkijuusto.ct, ENTER seq
+    `load:... key:ESC key:Ctrl-e`:
+    * se-v2-layout-1-enter.png — normal bg, left param col (>Attack cursor), 5
+      stacked left-aligned bands, bottom raw strip.
+    * se-v2-layout-2-cursor.png — `key:DOWN`×6 moves the cursor to >Pulse ptr.
+    * se-v2-layout-3-instr.png — `key:+`×10 → ins0A "Basari+Bass"; params, all
+      bands and raw data change together.
+    * se-v2-layout-4-playhead.png — viewing ins04 "Flute", `play scopefill:8
+      tick:16`: one white full-height playhead crosses all five bands at frame ~16
+      (auto-detected: 407 px vertical white run at x=370). Playhead advances right
+      with more ticks (x319→341→370 for tick 2/8/16).
+    * se-v2-exit.png — `key:Ctrl-e` exits cleanly; classic editor restored, no tint.
+  - Regenerated `make map` (ARCHITECTURE.md: soundedit synopsis + dropped
+    ui.oscilloscope dep). No shortcut/CLI/flag added (Up/Down + `+/-` are internal
+    keypress handling, not com.shortcuts entries), so no KEYBOARD.md / man-page regen.
+  - KNOWN PRE-EXISTING FLAKY CRASH (not from this change): heavy `scopefill`
+    (headless audio-callback fill) intermittently segfaults in reSID-fp
+    `SIDFP::clock_resample_interpolate` on the SDL audio thread. It reproduces in
+    the CLASSIC editor too (no Sound Editor, no keyjam) — e.g. `key:ESC play ff:0
+    scopefill:12 tick:2` — so it is unrelated to soundedit.d. Screenshots were
+    captured with retry-on-crash. Worth a separate bug for the reSID-fp resampler.
+  - Headless-capture note: the playhead's `frameSinceTrigger` advances per UI
+    `tick` (not per player frame), so headless it sits near the left unless extra
+    ticks are driven; on real hardware update()≈50 fps ≈ player rate so it tracks.
+    NOT done: data editing / write-back / undo (P4+, still read-only).
