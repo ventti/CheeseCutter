@@ -236,17 +236,23 @@ class SoundEditor : Window {
 		g.stackBotPx = stackBotRow * FONT_Y;
 
 		// Six bands (§10.3): output, adsr, frequency, pulse, filter, wave. The wave
-		// band still stacks 8 SID control-bit lanes so it keeps the most height; the
-		// weights are re-apportioned to fit six bands at 1280x700.
-		immutable float[6] wgt = [1.0f, 1.0f, 0.9f, 0.9f, 0.9f, 1.8f];
+		// band stacks 8 SID control-bit lanes, ONE per character row, so its gutter
+		// labels line up with the lane blocks — give it a FIXED height of WAVE_ROWS
+		// character rows at the bottom of the stack (a weight that merely rounds to
+		// ~8 rows is fragile), and share the remaining span among bands 0..4 by weight.
+		enum int WAVE_ROWS = 9;   // 8 lanes + 1 row of slack for the bandBox inset
+		int waveTopPx = g.stackBotPx - WAVE_ROWS * FONT_Y;
+		immutable float[5] wgt = [1.0f, 1.0f, 0.9f, 0.9f, 0.9f];
 		float tot = 0; foreach(w; wgt) tot += w;
 		float acc = 0;
-		int span = g.stackBotPx - g.stackTopPx;
+		int span = waveTopPx - g.stackTopPx;
 		g.bandTopPx[0] = g.stackTopPx;
-		foreach(i; 0 .. 6) {
+		foreach(i; 0 .. 5) {
 			acc += wgt[i];
 			g.bandTopPx[i + 1] = g.stackTopPx + cast(int)lround(acc / tot * span);
 		}
+		g.bandTopPx[5] = waveTopPx;      // wave band: fixed WAVE_ROWS tall
+		g.bandTopPx[6] = g.stackBotPx;
 		return g;
 	}
 
@@ -724,19 +730,24 @@ class SoundEditor : Window {
 	// more than one waveform lane -- honest to the hardware. Loop back-edge marked.
 	private void drawWaveBand(int ins, ref Geo g) {
 		int topPx, botPx; bandBox(g, 5, topPx, botPx);
-		int h = botPx - topPx;
-		if(h < 8) return;
+		// Anchor the 8 bit-lanes to the CHARACTER grid so each lane is exactly one
+		// text row tall. The gutter labels are text (font-row aligned); when the
+		// lanes were pixel-height (h/8) they drifted off the 14px font grid, so the
+		// coloured blocks no longer lined up with their labels (a lane's block would
+		// sit beside the next lane's label, and one label was overwritten/dropped).
+		// One lane == one row makes blocks and labels align 1:1.
+		int topRow = (topPx + FONT_Y - 1) / FONT_Y;   // first full char row in the band
+		int availRows = botPx / FONT_Y - topRow + 1;
+		if(availRows < 8) return;                     // no room for 8 lanes
 		int ptr = song.instrumentTable[ins + 7 * 48];
 		WaveFrameSim s = simWaveFrames(ptr);
 		int n = min(cast(int)s.ctrlOf.length, VISIBLE_FRAMES);
-		int laneH = h / 8;
-		if(laneH < 1) laneH = 1;
 
 		// Lane labels in the left gutter + a faint lane divider per lane.
 		foreach(li; 0 .. 8) {
 			int bit = 7 - li;                       // top lane = bit7 (Noise)
-			int ly = topPx + li * laneH;
-			int lrow = (ly + laneH / 2 - FONT_Y / 2) / FONT_Y;
+			int lrow = topRow + li;
+			int ly = lrow * FONT_Y;
 			screen.cprint(g.labelX, lrow, BITLANE_COL[bit], 0, BITLANE_LBL[bit]);
 			video.olHLine(g.plotX0px, g.plotX0px + g.plotWpx - 1, ly, COL_AXIS);
 		}
@@ -749,8 +760,8 @@ class SoundEditor : Window {
 			foreach(li; 0 .. 8) {
 				int bit = 7 - li;
 				if(!(ctrl & (1 << bit))) continue;
-				int ly = topPx + li * laneH;
-				video.olFillRect(xa, ly + 1, xb - xa, max(1, laneH - 1), BITLANE_COL[bit]);
+				int ly = (topRow + li) * FONT_Y;
+				video.olFillRect(xa, ly + 1, xb - xa, FONT_Y - 2, BITLANE_COL[bit]);
 			}
 		}
 		if(s.loopFrame >= 0 && s.loopFrame < VISIBLE_FRAMES)
