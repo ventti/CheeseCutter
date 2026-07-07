@@ -755,3 +755,70 @@ the actual per-frame value repeats in the wave (and pulse/filter) bands — veri
 loop line sits where the block pattern restarts, in BOTH the recording and idle-sim
 paths. (3) Regression: playhead, zoom, restart marker, auto-gain bands, z-order,
 title, F12 help all intact. (4) Still read-only.
+
+---
+
+## 15. Fit window to the recording + frame-align the Output band (2026-07-07 v10)
+
+Still **read-only**. BUG (triangle AD=FF SR=33): the Output waveform is
+time-MISALIGNED with the other bands and "not updated correctly."
+
+### 15.1 Root cause
+1. `computeVisFrames` uses `max(ADSR-derived, recorded extent)`. For a slow
+   attack (AD=FF → attack ~8s + decay ~24s) the ADSR estimate is ~1043 frames
+   (~20.8s), which dominates — so the window is huge while the actual recording
+   fills only the left part.
+2. `drawOutputBand` sets `span = min(visFrames*fs, total)` and spreads `span`
+   samples across the FULL `noteWpx`. When the recording is shorter than the
+   window (`total < visFrames*fs`), `span=total` → the short recording is
+   STRETCHED across the whole width, while the ADSR/Freq/etc. bands map frame→X
+   via `xForFrame` (recording occupies only the left `recLen/visFrames`). Result:
+   the Output waveform's time base disagrees with every other band.
+
+### 15.2 Fix
+1. **Fit the window to the recording when one exists.** In `computeVisFrames`,
+   when `useRec` (the viewed voice has a recording), set `visFrames` = the
+   recorded length (clamped to `[MIN_VIS, MAX_VIS]`) — do NOT max it against the
+   large ADSR estimate. So the axis fits the ACTUAL played audio (grows while the
+   note sounds, settles at its true end). The ADSR-derived estimate remains the
+   basis only for the idle/sim preview (no recording).
+2. **Frame-align the Output band (no stretch).** In `drawOutputBand`, map each
+   pixel to its FRAME first, then to samples, exactly like the other bands: for
+   pixel column `i` (0..noteWpx), `f0 = i*visFrames/noteWpx`,
+   `f1 = (i+1)*visFrames/noteWpx`; sample window `[f0*fs, f1*fs)` clamped to
+   `total`. Where `f0*fs >= total` (frames past the recording), draw the flat
+   baseline (no samples). This puts the waveform at the SAME frames as the ADSR/
+   Freq/Pulse/Filter/Wave bands and the playhead. (Keep the peak auto-gain from
+   the prior fix.)
+
+With (1) the window equals the recording so the waveform fills the width AND is
+frame-aligned; (2) keeps it correct even if the window is slightly longer than the
+recording.
+
+### 15.3 Verify (v10)
+Clean build. Play the triangle ins04 (AD FF SR 33): (1) the scale label fits the
+ACTUAL recorded duration (not ~20.8s), (2) the Output waveform is time-aligned
+with the ADSR envelope and the playhead — a vertical probe/playhead at frame N
+hits the same instant in the Output waveform and the ADSR ramp (the growing
+triangle amplitude tracks the rising ADSR envelope), (3) no stretched/compressed
+waveform. Cross-check with the hover probe: at a hovered frame, the Output
+oscillation amplitude corresponds to that frame's Env%. Regression: other
+instruments, zoom for idle-sim (no recording) still uses the ADSR estimate, loop
+lines, restart marker, z-order, F12 all intact. Still read-only.
+
+### 15.4 ADSR band: fixed 0..1 scale (NOT auto-gained)
+BUG: the ADSR curve appears to jump to full immediately in the live update
+instead of rising steadily over the attack. Cause: the earlier amplitude fix
+auto-gained the ADSR band to the window's peak, so the current max always maps to
+the band top — the envelope reads as "full" even early in a slow attack. But the
+envelope amplitude is an ABSOLUTE quantity (0..1, sustain 0..15) governed by the
+SID's CONSTANT attack/decay/release times — it must be drawn on a FIXED 0..1
+scale so the attack ramp shows the real, steady progress.
+Fix: REVERT the auto-gain on the ADSR band (both the recording and sim paths) —
+draw envelope amplitude on the fixed 0..1 band scale. Keep the peak auto-gain ONLY
+on the Output WAVEFORM band (raw audio samples, whose absolute level is arbitrary/
+quiet). With §15.2 fit-to-recording, the fixed-scale ADSR ramp fills the width and
+rises steadily (a note that only reaches 37% shows a ramp to 37%, not to the top).
+Verify: play the triangle (AD FF) — the ADSR curve rises gradually across the
+attack (not an instant jump to full); a shorter/faster-attack note rises faster;
+the curve height reflects the true envelope level (cross-check the hover Env%).

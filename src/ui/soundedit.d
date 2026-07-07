@@ -305,14 +305,19 @@ class SoundEditor : Window {
 		int rF = cast(int)lround(DECAY_RELEASE_TIME_MS[release] / FRAME_MS);
 		int vf = aF + dF + NOMINAL_GATE_FRAMES + rF;
 
-		// Recorded extent overrides the estimate when we have real audio.
+		// §15.2(1) Recorded extent FITS the window when we have real audio — the axis
+		// tracks the ACTUAL recording, NOT the (often huge) ADSR estimate. Do NOT max()
+		// against `vf`: a slow AD=FF attack estimates ~20s while the real recording is
+		// much shorter, and maxing would cram the waveform into the left edge,
+		// time-misaligned with the other bands. The ADSR estimate is the basis ONLY for
+		// the idle/sim preview (no recording).
 		if(useRec) {
 			int rl = audio.visualizer.getRecordingLength(viewVoice);
 			int ampEnd = audio.visualizer.getRecordedAmpEnd(viewVoice, AMP_EPS);
 			if(ampEnd > 0 && ampEnd < rl)
-				vf = ampEnd;            // note ENDED: the actual end wins over the table
+				vf = ampEnd;            // note ENDED: fit to the actual last-sounding frame
 			else
-				vf = max(vf, rl);       // still sounding: grow the window to fit
+				vf = rl;                // still sounding: fit to the growing record head
 		}
 
 		if(vf < MIN_VIS) vf = MIN_VIS;
@@ -665,11 +670,12 @@ class SoundEditor : Window {
 		short* buf = audio.audio.captureBuf.ptr;
 		int total = audio.audio.captureLen;
 		int fs = audio.audio.captureFrameSamples;
-		// Spread the visible note span (visFrames frames) across noteWpx, clamped
-		// to what was actually recorded.
+		// §15.2(2) The recorded extent in samples that falls inside the window. This is the
+		// range the columns read AND the peak is measured over; the FRAME→sample mapping
+		// below (not a stretched span) keeps the waveform time-aligned with every other band.
 		int span = fs > 0 ? visFrames * fs : total;
 		if(span > total) span = total;
-		if(buf is null || span < 2) {
+		if(buf is null || fs < 1 || span < 2) {
 			// Flat baseline when nothing has been recorded (headless / song playback).
 			video.olHLine(noteX0px, plotEndPx - 1, mid, COL_AXIS);
 			return;
@@ -681,6 +687,8 @@ class SoundEditor : Window {
 		// fills the band instead of rendering as a near-flat line with tiny wiggles.
 		// Peak==0 means nothing audible was captured, so keep a flat baseline (and it
 		// avoids a divide-by-zero). Computed over the same [0,span) the columns read.
+		// This auto-gain is CORRECT here (raw-sample level is arbitrary) — see §15.4; the
+		// ADSR/Freq/Pulse/Filter bands, being absolute quantities, are NOT auto-gained.
 		int peak = 0;
 		foreach(s; 0 .. span) {
 			int a = buf[s]; if(a < 0) a = -a;
@@ -691,20 +699,30 @@ class SoundEditor : Window {
 			return;
 		}
 
-		// Per-pixel min/max: column px covers samples [s0,s1). This is exactly the
-		// classic oscilloscope's per-pixel approach, but mapped onto the note region.
+		// §15.2(2) Per-pixel min/max, mapped FRAME-first (exactly like the other bands):
+		// pixel i covers frames [f0,f1) → samples [f0*fs, f1*fs) clamped to `total`. Where
+		// the frame window lies past the recording (f0*fs >= total) draw the flat baseline.
+		// This puts the waveform at the SAME frames as the ADSR/Freq/Pulse/Filter/Wave bands
+		// and the playhead/probe — no stretching when the recording is shorter than window.
 		foreach(i; 0 .. noteWpx) {
-			int s0 = cast(int)(cast(long)i * span / noteWpx);
-			int s1 = cast(int)(cast(long)(i + 1) * span / noteWpx);
+			int x = noteX0px + i;
+			int f0 = cast(int)(cast(long)i * visFrames / noteWpx);
+			int f1 = cast(int)(cast(long)(i + 1) * visFrames / noteWpx);
+			if(f1 <= f0) f1 = f0 + 1;
+			int s0 = f0 * fs;
+			int s1 = f1 * fs;
+			if(s0 >= total) {           // past the recording → flat baseline
+				video.olPoint(x, mid, COL_AXIS);
+				continue;
+			}
+			if(s1 > total) s1 = total;
 			if(s1 <= s0) s1 = s0 + 1;
-			if(s1 > span) s1 = span;
 			int mn = short.max, mx = short.min;
 			for(int s = s0; s < s1; s++) {
 				int v = buf[s];
 				if(v < mn) mn = v;
 				if(v > mx) mx = v;
 			}
-			int x = noteX0px + i;
 			int yhi = mid - normOff(mx, half, peak);   // max -> up
 			int ylo = mid - normOff(mn, half, peak);   // min -> down
 			if(ylo < yhi) { int t = ylo; ylo = yhi; yhi = t; }
@@ -733,19 +751,17 @@ class SoundEditor : Window {
 		if(useRec) {
 			auto amp = audio.visualizer.getRecordedAmp(viewVoice);
 			int n = min(cast(int)amp.length, visFrames);
-			// AUTO-GAIN to the window's PEAK amplitude: a note that only reaches a
-			// fraction of full envelope (e.g. a briefly-held 8s-attack triangle whose
-			// recorded amp peaks well below 1.0) otherwise draws as a shallow line
-			// hugging the baseline that reads as empty/flat — inconsistent with the
-			// (also peak-normalised) Output band, which visibly grows. Normalising the
-			// peak to full band height makes the RISING shape clear and keeps the two
-			// amplitude bands consistent. Below AMP_EPS the note is silent -> no gain.
-			float peak = 0;
-			foreach(f; 0 .. n) if(amp[f] > peak) peak = amp[f];
-			float gain = peak > AMP_EPS ? 1.0f / peak : 1.0f;
+			// §15.4 FIXED 0..1 scale — NOT auto-gained. The envelope amplitude is an
+			// ABSOLUTE quantity (0..1, sustain 0..15) governed by the SID's CONSTANT
+			// attack/decay/release times, so it must plot on the fixed band scale: a slow
+			// AD=FF attack then reads as a steady RAMP over the attack (a note reaching only
+			// 37% draws a ramp to 37%), not an instant jump to the top that peak-normalising
+			// produced. The peak auto-gain stays ONLY on the Output waveform band (raw
+			// samples, whose absolute level is arbitrary). With §15.2 fit-to-recording the
+			// fixed-scale ramp already fills the width.
 			int prevY = -1;
 			foreach(f; 0 .. n) {
-				int y = botPx - cast(int)lround(clamp01(amp[f] * gain) * h);
+				int y = botPx - cast(int)lround(clamp01(amp[f]) * h);
 				int xa = xForFrame(g, f);
 				int xb = xForFrame(g, f + 1);
 				if(xb <= xa) xb = xa + 1;
