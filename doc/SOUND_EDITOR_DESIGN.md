@@ -702,3 +702,56 @@ title row and doesn't run off-screen even for a long name; no stale separate lin
 (4) A vertical restart marker appears ~2-3 frames left of the trigger divider,
 distinct colour, across the bands. (5) Regression: z-order, zoom, recording bands,
 loop lines, clean exit all intact. (6) Still read-only.
+
+---
+
+## 14. Hover probe + loop-line sync (2026-07-07 v9)
+
+Still **read-only**.
+
+### 14.1 Mouse-hover probe: white vertical line + numeric readout
+On mouse hover over the graph stack, draw a **white vertical line** at the cursor
+X (snapped to the nearest frame) across all bands, and show a **readout** of the
+numeric values at that frame:
+- cursor X as **frame number + approximate milliseconds** (`frame * FRAME_MS`,
+  note the multiplier caveat — label it approximate);
+- the per-frame register values at that frame (from the RECORDING when playing,
+  else the sim preview): frequency (raw + note if easy), pulse width, filter
+  cutoff / resonance / mode, control byte + decoded waveform/gate/ring/sync/test,
+  and the envelope amplitude. For a quantity with no explicit change at that exact
+  frame (e.g. a continuous ADSR value), show the **interpolated** value.
+Plumbing already exists: `main.d:226` SDL_MOUSEMOTION → `UI.hoverAt(x/FONT_X,
+y/FONT_Y)` (ui.d:514, today only feeds the menubar); the driver has a `hover:`
+command. Extend: add a no-op `Window.hoverAt(x,y)`; `UI.hoverAt` forwards to the
+active window (and returns true to trigger a redraw) when the Sound Editor is
+active; `SoundEditor.hoverAt` records the hovered cell/frame; `update()` draws the
+probe line + readout while hovering over the plot region (clear it when the cursor
+leaves). The probe is distinct from the white PLAYHEAD (e.g. different style, or
+only shown on hover) and the red trigger/subtle loop lines.
+
+### 14.2 Loop lines must sync with the actual value updates
+BUG: the subtle loop-boundary lines (e.g. in the wave bit-lanes) are drawn from
+the SIM's `loopFrame`/`loopPeriod` (which assume the program starts at frame 0 and
+steps 1 row/frame), but the RECORDING path draws the actual played values, which
+include the real gate-on/arp delay and timing — so the lines drift out of phase
+with where the values actually repeat. Fix so a loop line sits EXACTLY on each
+frame where the per-frame value pattern restarts:
+- **Recording path**: derive the loop boundaries from the ACTUAL recorded
+  per-frame values (detect the repeat period / the frames where the value pattern
+  cycles), OR align the sim's loop-start to the recording's real program-start
+  offset (gate-on/arp delay). Prefer deriving from the recording so it's honest.
+- **Sim path**: confirm `loopFrame`/`loopPeriod` land exactly on value-repeat
+  frames (fix any off-by-one so the line coincides with the row where the value
+  first repeats). Cross-check: overlay a loop line on the wave lanes and confirm
+  the control-byte block pattern to its right is identical to the pattern to its
+  left starting at the line.
+
+### 14.3 Verify (v9)
+Clean build. (1) Hovering the graphs (driver `hover:CX,CY`) draws a white vertical
+probe line at that X across the bands and a readout showing frame #, ~ms, and the
+register values at that frame (interpolated where continuous); moving the cursor
+moves the line/readout; leaving the plot clears it. (2) Loop lines coincide with
+the actual per-frame value repeats in the wave (and pulse/filter) bands — verify a
+loop line sits where the block pattern restarts, in BOTH the recording and idle-sim
+paths. (3) Regression: playhead, zoom, restart marker, auto-gain bands, z-order,
+title, F12 help all intact. (4) Still read-only.

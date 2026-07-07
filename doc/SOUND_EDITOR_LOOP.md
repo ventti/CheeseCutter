@@ -559,3 +559,63 @@ Tech-debt to address in P6 polish (non-blocking, from verifiers):
     ARCHITECTURE.md is unchanged). No shortcut/CLI/flag/help-registry change -> no KEYBOARD.md /
     man-page regen needed.
     NOT done: data editing / write-back / undo (P4+, still read-only).
+- (v9 MOUSE-HOVER PROBE + READOUT + LOOP-LINE SYNC, §14 2026-07-07) Still READ-ONLY. Files:
+  `src/ui/window.d` (trailing `Window.hoverAt` no-op + `WindowSwitcher.hoverAt` forward),
+  `src/ui/ui.d` (`UI.hoverAt` forwards to the active window when the Sound Editor is active),
+  `src/ui/soundedit.d` (§14.1 probe + readout; §14.2 recording-derived loop detection),
+  `.claude/skills/run-cheesecutter/driver.d` (new read-only `recdump:<voice>` oracle).
+  - **§14.1 mouse-hover probe + numeric readout.** SDL plain mouse-motion (no button) already
+    routes main.d -> `UI.hoverAt(x/FONT_X,y/FONT_Y)`; it now forwards to the active window and
+    returns true (redraw) when `toplevel.soundEditorActive`, else keeps the menu-bar behaviour.
+    `Window.hoverAt(scrx,scry)` is a TRAILING no-op virtual (vtable-safe); `WindowSwitcher`
+    forwards to the active child. `SoundEditor.hoverAt` just records the hovered cell; `update()`
+    maps it to a frame on the FRESH geometry (inverse of `xForFrame`, snapped + clamped to the
+    note) and, only while the cursor is over the plot region, draws a DASHED white probe line
+    (COL_PROBE=1) across all bands — distinct from the SOLID white playhead — plus a compact
+    readout in the left param gutter: "frame N ~X.X ms" (N*FRAME_MS, labelled approximate), then
+    Freq (raw + note via a reg->Hz->MIDI `noteName`) / Pulse / Filter cutoff+Res+Mode+Route /
+    Ctrl byte + decoded bit words (Noise/Pulse/Saw/Tri/Test/Ring/Sync/Gate) / Env %. Values come
+    from the RECORDING when a note has played (per-frame arrays) else the read-only sims; the ADSR
+    Env is the INTERPOLATED continuous envelope (`adsrAmpAt`) on the sim path. Leaving the plot
+    (or a dialog/menu via `chromeActive`) clears it (probe drawn last, after the early return).
+  - **§14.2 loop lines sync with actual value repeats.** BUG: loop lines were drawn from the
+    SIM's frame-0 `loopFrame`/`loopPeriod` in BOTH paths, so on the RECORDING path they drifted
+    left of where the played values actually repeat (the recording includes the real gate-on/arp
+    delay). FIX: new `loopFromRecording(v,n)` derives the loop DIRECTLY from the recorded per-frame
+    array — the smallest period P>=2 for which the tail is exactly P-periodic and the earliest
+    frame L where that begins (a constant one-cycle "hold" is rejected; needs >=2 full cycles).
+    Wave/Pulse/Filter/Freq bands use it in the recording path (on control/pulse/cutoff/freq resp.);
+    the idle-sim path keeps the sim `loopFrame`/`loopPeriod` (confirmed on the value-repeat frame,
+    no off-by-one: the line at loopFrame sits where value[loopFrame]==value[loopFrame+period]).
+  - Build: `make -f Makefile.mac clean && make -f Makefile.mac -j4 ccutter ccdriver` -> exit 0,
+    both binaries (ccutter 7514344, ccdriver 7569944). Touched the widely-imported `Window` base
+    (trailing virtual) -> full clean build, as required.
+  - Smoke (headless dummy SDL), 160x50 screen; plot region cells x=39..156, band rows 7..36.
+    * /tmp/.../se-v9-hover-A.png — vent ins03 idle, `hover:90,20` -> dashed white probe at frame 31
+      + readout "frame 31 ~618.5 ms / Note abs 64 / Pulse $800 / Filter n/a / Ctrl $81 / Noi Gat /
+      Env 18%" (sim path, interpolated envelope).
+    * /tmp/.../se-v9-hover-B.png — `hover:120,25` -> probe MOVED to frame 55, readout now
+      "frame 55 ~1097.2 ms ... Env 0%" (changed with the cursor).
+    * /tmp/.../se-v9-hover-outside.png — `hover:90,20` then `hover:90,45` (below the stack) ->
+      probe line AND readout CLEARED.
+    * /tmp/.../se-v9-hover-rec-ins07.png — play (`key:F2 ff:24`), view ins07 (voice1 recording,
+      recLen 116): RECORDING readout "frame 34 ~678.3 ms / Freq $0E82 A-3 / Pulse $230 /
+      Cut $0300 Res F / Mode LPHP Rt1 / Ctrl $61 / Pul Saw Gat / Env 73%" — real reg values.
+    * /tmp/.../se-v9-loop-rec-scarzix.png — scarzix ins03 "Chords" while playing (voice2 recLen 96,
+      a period-18 6-note chord arp): loop lines coincident with the recorded arp repeat. PIL scan
+      of the Freq band found loop-line columns x=340,388,435,482,530,577 == xForFrame(1,19,37,55,
+      73,91); the `recdump:2` freq array through the same detection = LOOP L=1 P=18. So the lines
+      sit EXACTLY on value[L]==value[L+P] — including the 1-frame gate-on offset the old sim
+      frame-0 line missed (§14.2 fix confirmed).
+    * /tmp/.../se-v9-loop-sim-ins03.png — vent ins03 idle (wave $07 = 2-frame arp): PIL scan found
+      loop lines every 2 frames (x=441=xForFrame(3), 461,481,... period 2) coincident with the sim
+      freq staircase repeat (value[f]==value[f+2]); no off-by-one.
+    * /tmp/.../se-v9-f12-zorder.png — hover then `key:F12`: the Sound Editor help dialog renders
+      clean over the editor, ZERO probe/graph pixel bleed (chromeActive suppresses the probe).
+    * /tmp/.../se-v9-exit.png — `key:Ctrl-e` exits: "Sound Editor closed.", classic tracker fully
+      restored (Instruments/Wave/Pulse/Filter/Command/Tracks), no lingering probe/graph pixels.
+  - READ-ONLY CONFIRMED: grep finds NO writes to song.{instrumentTable/waveTable/pulseTable/
+    filterTable/superTable/insLabels} in the changed files.
+  - Ran `make map` — idempotent (ARCHITECTURE.md unchanged; no synopsis/dep-edge change). No
+    shortcut/CLI/flag/help-registry change -> no KEYBOARD.md / man-page regen needed.
+    NOT done: data editing / write-back / undo (P4+, still read-only).

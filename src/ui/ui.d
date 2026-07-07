@@ -509,9 +509,16 @@ final class UI {
 		toplevel.releasedAt(x, y);
 	}
 
-	// Mouse moved with no button held. Only the focused menu bar reacts: its
-	// highlight cursor follows the pointer. Returns true if a redraw is needed.
+	// Mouse moved with no button held. When the Sound Editor is active it owns the
+	// hover probe: forward the cell to the active window and always request a redraw
+	// so the white probe line + numeric readout track the cursor. Otherwise only the
+	// focused menu bar reacts (its highlight cursor follows the pointer). Returns
+	// true if a redraw is needed.
 	bool hoverAt(int x, int y) {
+		if(toplevel !is null && toplevel.soundEditorActive) {
+			toplevel.activeWindow.hoverAt(x, y);
+			return true;
+		}
 		if(!menubar.active) return false;
 		return menubar.hoverAt(x, y, false);
 	}

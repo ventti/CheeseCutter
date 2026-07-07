@@ -159,6 +159,7 @@ private void usage(File f) {
 "  tracks           dump each voice's tracklist entries (trans,number)\n" ~
 "  voices           per-voice visualizer: instrument, brightness, recording len\n" ~
 "  wavedump:<row>   dump 24 wave-table rows (w1/w2) from row (Sound Editor oracle)\n" ~
+"  recdump:<voice>  dump a voice's recorded per-frame control/freq/pulse arrays\n" ~
 "\n" ~
 "Remote backend (--vice/--ultimate) testing:\n" ~
 "  vice:[target]    enable the VICE backend: empty = launch x64sc from PATH,\n" ~
@@ -383,6 +384,27 @@ private bool processCommand(string arg) {
 					audio.visualizer.getVoiceBrightness(v),
 					audio.visualizer.voiceHasRecording(v),
 					audio.visualizer.getRecordingLength(v));
+			break;
+		}
+		case "recdump": {
+			// recdump:<voice> — print the recorded per-frame CONTROL, FREQ and PULSE
+			// arrays for a voice. A read-only oracle for verifying that the Sound
+			// Editor's §14.2 loop lines land on the frame where the recorded value
+			// pattern actually repeats (value[L] == value[L+P]).
+			static import audio.visualizer;
+			int v = val.length ? to!int(val) : 0;
+			auto ctrl = audio.visualizer.getRecordedControl(v);
+			auto freq = audio.visualizer.getRecordedFreq(v);
+			auto pw   = audio.visualizer.getRecordedPulse(v);
+			stderr.writef("rec v%d ctrl:", v);
+			foreach(x; ctrl) stderr.writef(" %02X", x & 0xff);
+			stderr.writeln();
+			stderr.writef("rec v%d freq:", v);
+			foreach(x; freq) stderr.writef(" %d", x);
+			stderr.writeln();
+			stderr.writef("rec v%d pulse:", v);
+			foreach(x; pw) stderr.writef(" %d", x);
+			stderr.writeln();
 			break;
 		}
 		case "insdump": {

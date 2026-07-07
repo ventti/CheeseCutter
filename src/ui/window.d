@@ -62,6 +62,10 @@ abstract class Window {
 	/// Coords are screen char-cells, as for clickedAt. No-op by default.
 	void draggedTo(int scrx, int scry) {}
 	void releasedAt(int scrx, int scry) {}
+	/// Mouse moved with NO button held (hover). Coords are screen char-cells, as
+	/// for clickedAt. No-op by default; windows that show a hover probe (e.g. the
+	/// Sound Editor) override it. Trailing member for vtable safety.
+	void hoverAt(int scrx, int scry) {}
 
 	/// Identifies the keyboard-shortcut context this window provides. The active
 	/// window's contextId is pushed into the ShortcutManager so context-specific
@@ -223,5 +227,12 @@ class WindowSwitcher : Window {
 
 	override void clickedAt(int scrx, int scry, int button, int clicks = 1) {
 		//	activateAt(scrx - activeWindow.area.x, scry - activeWindow.area.y);
+	}
+
+	// Forward a plain hover to the active child window (e.g. the Sound Editor's
+	// probe). Base Window.hoverAt is a no-op, so this is harmless for windows that
+	// do not use it.
+	override void hoverAt(int scrx, int scry) {
+		if(activeWindow !is null) activeWindow.hoverAt(scrx, scry);
 	}
 }

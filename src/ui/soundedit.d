@@ -204,6 +204,14 @@ class SoundEditor : Window {
 	private int viewVoice = -1;
 	private bool useRec = false;
 
+	// §14.1 mouse-hover probe: the last cell the pointer hovered (screen char-cells),
+	// and whether we have a hover position to consider. update() maps it to a frame
+	// on the fresh geometry, draws a white vertical probe line + a numeric readout of
+	// the register values at that frame, and skips the probe when the cursor is
+	// outside the plot region (so leaving the plot clears it).
+	private int hoverCellX = -1, hoverCellY = -1;
+	private bool hovering = false;
+
 	// §12 dynamic X window, computed ONCE per draw at the top of update() and threaded
 	// through xForFrame + every band so they all share the exact same zoom. visFrames
 	// = the auto-fitted post-trigger span (frames); totalFrames = pre-roll + visFrames.
@@ -464,6 +472,10 @@ class SoundEditor : Window {
 			if(rh > visFrames) rh = visFrames;
 			video.olVLine(xForFrame(g, rh), g.stackTopPx, g.stackBotPx, COL_HEAD);
 		}
+
+		// §14.1 mouse-hover probe + numeric readout (only while the cursor is over the
+		// plot region). Drawn last so the dashed white probe line sits on top.
+		drawProbe(ins, g);
 	}
 
 	// True while any higher-Z chrome is up (§8.1): a modal dialog/pop-up, an open
@@ -821,14 +833,18 @@ class SoundEditor : Window {
 		int topPx, botPx; bandBox(g, 3, topPx, botPx);
 		int ptr = song.instrumentTable[ins + 5 * 48];
 		SweepSim s = simPulse(ptr);           // loop period + idle-preview values
+		// §14.2 loop lines: in the recording path derive the loop start/period from the
+		// ACTUAL recorded pulse values (honours the real gate-on delay); else use the sim.
+		int lf = s.loopFrame, lp = s.loopPeriod, ln = min(cast(int)s.val.length, visFrames);
 		if(useRec) {
-			drawValueBand(audio.visualizer.getRecordedPulse(viewVoice), 4095,
-				COL_PULSE_FILL, COL_PULSE_LINE, topPx, botPx, g);
+			auto rp = audio.visualizer.getRecordedPulse(viewVoice);
+			drawValueBand(rp, 4095, COL_PULSE_FILL, COL_PULSE_LINE, topPx, botPx, g);
+			ln = min(cast(int)rp.length, visFrames);
+			loopFromRecording(rp, ln, lf, lp);
 		} else if(ptr < 0x80) {               // direct fixed pulse ($80+) = no program
 			drawValueBand(s.val, 4095, COL_DIMFILL, COL_DIM, topPx, botPx, g);
 		}
-		drawLoopLines(g, topPx, botPx, s.loopFrame, s.loopPeriod,
-			min(cast(int)s.val.length, visFrames));
+		drawLoopLines(g, topPx, botPx, lf, lp, ln);
 	}
 
 	// §10.1/§10.2 Filter band: cutoff fill/line coloured PER FRAME by the active
@@ -893,9 +909,12 @@ class SoundEditor : Window {
 			prevY = ry;
 		}
 
-		// §11.3 subtle loop-boundary lines (from the sim's period, in both paths).
-		drawLoopLines(g, topPx, botPx, s.loopFrame, s.loopPeriod,
-			min(cast(int)s.val.length, visFrames));
+		// §14.2 loop lines: recording path derives the loop from the ACTUAL recorded
+		// cutoff (real gate-on delay); sim path uses the sim's loopFrame/period.
+		int lf = s.loopFrame, lp = s.loopPeriod;
+		if(useRec) loopFromRecording(cutoff, n, lf, lp);
+		drawLoopLines(g, topPx, botPx, lf, lp,
+			useRec ? n : min(cast(int)s.val.length, visFrames));
 
 		// Label the resonance overlay in the band's left gutter (row below "Filter").
 		int lrow = g.bandTopPx[4] / FONT_Y + 1;
@@ -939,7 +958,10 @@ class SoundEditor : Window {
 					video.olVLine(xa, min(prevY, y), max(prevY, y), COL_FREQ_ABS);
 				prevY = y;
 			}
-			drawLoopLines(g, topPx, botPx, s.loopFrame, s.loopPeriod, n);
+			// §14.2 derive the loop from the ACTUAL recorded frequency staircase.
+			int lf, lp;
+			loopFromRecording(fr, n, lf, lp);
+			drawLoopLines(g, topPx, botPx, lf, lp, n);
 			return;
 		}
 
@@ -1013,9 +1035,13 @@ class SoundEditor : Window {
 					dim ? COL_DIM : BITLANE_COL[bit]);
 			}
 		}
-		// §11.3 subtle loop-boundary lines (from the sim's period, in both paths).
-		drawLoopLines(g, topPx, botPx, s.loopFrame, s.loopPeriod,
-			min(cast(int)s.ctrlOf.length, visFrames));
+		// §14.2 loop lines: recording path derives the loop from the ACTUAL recorded
+		// control bytes (so a line lands exactly where the bit-lane block pattern
+		// restarts); sim path uses the sim's loopFrame/period.
+		int lf = s.loopFrame, lp = s.loopPeriod;
+		if(useRec) loopFromRecording(ctrlA, n, lf, lp);
+		drawLoopLines(g, topPx, botPx, lf, lp,
+			useRec ? n : min(cast(int)s.ctrlOf.length, visFrames));
 	}
 
 	// ---- raw table data strip (bottom) ----
@@ -1099,6 +1125,208 @@ class SoundEditor : Window {
 		if(modeStr.length == 0) modeStr = "off";
 		screen.cprint(x, y + 5, COL_LABEL, 0,
 			format("Live filter: Res %X  Route %s  Mode %s (shared)", r17 >> 4, routeStr, modeStr));
+	}
+
+	// ---- §14.1 mouse-hover probe + numeric readout ----
+
+	private enum int COL_PROBE = 1;    // hover probe line (white; dashed to distinguish
+	                                   // it from the SOLID white playhead)
+
+	// SDL forwards a plain mouse-motion (no button) here as screen char-cells (see
+	// UI.hoverAt / WindowSwitcher.hoverAt). We only record the cell; update() maps it
+	// to a frame on the fresh geometry and draws / clears the probe. Read-only.
+	override void hoverAt(int scrx, int scry) {
+		hoverCellX = scrx;
+		hoverCellY = scry;
+		hovering = true;
+	}
+
+	// Note name from a raw 16-bit SID frequency register value (PAL). "if easy": a
+	// straight reg->Hz->MIDI conversion. Empty for silence / out-of-range.
+	private static string noteName(int rawFreq) {
+		if(rawFreq <= 0) return "";
+		// PAL SID: Hz = raw * clock / 2^24, clock = 985248.
+		double hz = rawFreq * 985248.0 / 16777216.0;
+		if(hz < 8.0) return "";
+		double midi = 69.0 + 12.0 * log2(hz / 440.0);
+		int m = cast(int)lround(midi);
+		if(m < 0 || m > 127) return "";
+		static immutable string[12] nm =
+			["C-","C#","D-","D#","E-","F-","F#","G-","G#","A-","A#","B-"];
+		return format("%s%d", nm[m % 12], m / 12 - 1);
+	}
+
+	// Interpolated ADSR envelope amplitude 0..1 at absolute frame f (>=0) for the sim
+	// (idle) path — the same continuous A/D/S/R model drawAdsrBand samples, so the
+	// probe readout shows an INTERPOLATED value between the SID ms-table knees.
+	private float adsrAmpAt(int ins, float f) {
+		ubyte ad = song.instrumentTable[ins + 0 * 48];
+		ubyte sr = song.instrumentTable[ins + 1 * 48];
+		int attack = (ad >> 4) & 0x0f, decay = ad & 0x0f;
+		int sustain = (sr >> 4) & 0x0f, release = sr & 0x0f;
+		float sLvl = sustain / 15.0f;
+		float aF = ATTACK_TIME_MS[attack]         / FRAME_MS;
+		float dF = DECAY_RELEASE_TIME_MS[decay]   / FRAME_MS;
+		float rF = DECAY_RELEASE_TIME_MS[release] / FRAME_MS;
+		if(rF < 0.5f) rF = 0.5f;
+		float gateEnd = aF + dF + NOMINAL_GATE_FRAMES;
+		if(f < aF) return aF > 0 ? f / aF : 1.0f;
+		if(f < aF + dF) return dF > 0 ? 1.0f - (1.0f - sLvl) * ((f - aF) / dF) : sLvl;
+		if(f < gateEnd) return sLvl;
+		return clamp01(sLvl * (1.0f - (f - gateEnd) / rF));
+	}
+
+	// §14.1 Draw the hover probe: a dashed WHITE vertical line at the hovered frame
+	// across all bands (distinct from the SOLID white playhead) + a compact numeric
+	// readout of the register values at that frame in the left param gutter. Nothing
+	// is drawn (probe cleared) when the cursor is not over the plot region.
+	private void drawProbe(int ins, ref Geo g) {
+		if(!hovering) return;
+		int hx = hoverCellX * FONT_X + FONT_X / 2;
+		int hy = hoverCellY * FONT_Y + FONT_Y / 2;
+		// Over the plot region? (same pixel box every band shares + the band stack.)
+		if(hx < g.plotX0px || hx >= g.plotX0px + g.plotWpx) return;
+		if(hy < g.stackTopPx || hy >= g.stackBotPx) return;
+
+		// Pixel -> nearest frame (inverse of xForFrame), snapped + clamped to the note.
+		int rel = (hx - g.plotX0px) * totalFrames / g.plotWpx;
+		int f = rel - RESTART_FRAMES;
+		if(f < 0) f = 0;
+		if(f >= visFrames) f = visFrames - 1;
+		if(f < 0) f = 0;
+
+		// Dashed white probe line at that frame across the whole band stack.
+		int px = xForFrame(g, f);
+		for(int yy = g.stackTopPx; yy < g.stackBotPx; yy += 6) {
+			int ye = min(yy + 3, g.stackBotPx);
+			video.olVLine(px, yy, ye, COL_PROBE);
+		}
+
+		// Gather the register values at frame f: from the RECORDING when a note has
+		// played, else from the read-only table sims (interpolated where continuous).
+		int freq = -1, pw = -1, cutoff = -1, res = -1, mode = -1, route = -1, ctrl = 0;
+		float amp = -1;
+		bool haveFreq = false, haveArp = false;
+		int arpVal = 0; bool arpAbs = false;
+		if(useRec) {
+			auto fr = audio.visualizer.getRecordedFreq(viewVoice);
+			auto pu = audio.visualizer.getRecordedPulse(viewVoice);
+			auto cu = audio.visualizer.getRecordedCutoff(viewVoice);
+			auto re = audio.visualizer.getRecordedResonance(viewVoice);
+			auto mo = audio.visualizer.getRecordedMode(viewVoice);
+			auto ro = audio.visualizer.getRecordedRouting(viewVoice);
+			auto ct = audio.visualizer.getRecordedControl(viewVoice);
+			auto am = audio.visualizer.getRecordedAmp(viewVoice);
+			int rf = f < cast(int)fr.length ? f : cast(int)fr.length - 1;
+			if(rf >= 0) {
+				if(rf < fr.length) { freq = fr[rf]; haveFreq = true; }
+				if(rf < pu.length) pw = pu[rf];
+				if(rf < cu.length) cutoff = cu[rf];
+				if(rf < re.length) res = re[rf];
+				if(rf < mo.length) mode = mo[rf];
+				if(rf < ro.length) route = ro[rf];
+				if(rf < ct.length) ctrl = ct[rf];
+				if(rf < am.length) amp = am[rf];
+			}
+		} else {
+			SweepSim ps = simPulse(song.instrumentTable[ins + 5 * 48]);
+			SweepSim fs = simFilter(song.instrumentTable[ins + 4 * 48]);
+			WaveFrameSim ws = simWaveFrames(song.instrumentTable[ins + 7 * 48]);
+			if(f < cast(int)ps.val.length) pw = ps.val[f];
+			if(f < cast(int)fs.val.length) {
+				cutoff = fs.val[f];
+				res = f < fs.resOf.length ? fs.resOf[f] : 0;
+				mode = f < fs.modeOf.length ? fs.modeOf[f] : 0;
+				route = f < fs.routeOf.length ? fs.routeOf[f] : 0;
+			}
+			if(f < cast(int)ws.ctrlOf.length) ctrl = ws.ctrlOf[f];
+			if(f < cast(int)ws.transOf.length) {
+				haveArp = true; arpVal = ws.transOf[f]; arpAbs = ws.absOf[f];
+			}
+			amp = adsrAmpAt(ins, cast(float)f);   // interpolated envelope value
+		}
+
+		// Compact readout box in the left param gutter, below the parameter rows.
+		int rx = g.paramX;
+		int rw = g.sepX - g.paramX - 1;
+		int ry = area.y + 3 + PARAM_ROWS + 1;
+		void put(int r, int col, string s) {
+			if(cast(int)s.length > rw) s = s[0 .. rw];
+			// clear the row first so a shorter line doesn't leave stale chars.
+			foreach(cx; 0 .. rw) screen.setChar(rx + cx, ry + r, 0x0500 | ' ');
+			screen.cprint(rx, ry + r, col, 0, s);
+		}
+		float ms = f * FRAME_MS;
+		put(0, COL_TITLE, "-- Probe (hover) --");
+		put(1, COL_VALUE, format("frame %d  ~%.1f ms", f, ms));
+		if(haveFreq) {
+			string nn = noteName(freq);
+			put(2, COL_LABEL, format("Freq $%04X %s", freq & 0xffff, nn));
+		} else if(haveArp) {
+			put(2, COL_LABEL, arpAbs ? format("Note  abs %d", arpVal)
+				: format("Arp   +%d st", arpVal));
+		} else {
+			put(2, COL_LABEL, "Freq  n/a");
+		}
+		put(3, COL_LABEL, pw >= 0 ? format("Pulse $%03X", pw & 0xfff) : "Pulse n/a");
+		if(cutoff >= 0) {
+			put(4, COL_LABEL, format("Cut $%04X Res %X", cutoff & 0xffff, res & 0xf));
+			put(5, COL_LABEL, format("Mode %s Rt%X", filterModeName(mode), route & 0xf));
+		} else {
+			put(4, COL_LABEL, "Filter n/a");
+			put(5, COL_LABEL, "");
+		}
+		put(6, COL_VALUE, format("Ctrl $%02X", ctrl & 0xff));
+		put(7, COL_LABEL, ctrlBits(ctrl));
+		put(8, COL_VALUE, amp >= 0 ? format("Env %d%%", cast(int)lround(clamp01(amp) * 100))
+			: "Env n/a");
+	}
+
+	// Decode a SID control byte to a short list of the ON bits (Noise/Pulse/Saw/Tri/
+	// Test/Ring/Sync/Gate) for the probe readout.
+	private static string ctrlBits(int ctrl) {
+		string s;
+		if(ctrl & 0x80) s ~= "Noi ";
+		if(ctrl & 0x40) s ~= "Pul ";
+		if(ctrl & 0x20) s ~= "Saw ";
+		if(ctrl & 0x10) s ~= "Tri ";
+		if(ctrl & 0x08) s ~= "Tst ";
+		if(ctrl & 0x04) s ~= "Rng ";
+		if(ctrl & 0x02) s ~= "Snc ";
+		if(ctrl & 0x01) s ~= "Gat ";
+		return s.length ? stripRight(s) : "(silent)";
+	}
+
+	// §14.2 Derive the loop (start frame, period) DIRECTLY from an ACTUAL recorded
+	// per-frame value array — honestly marking the frames where the played value
+	// pattern actually repeats, INCLUDING the real gate-on/arp-delay start offset that
+	// the frame-0 sim ignores (the old bug: loop lines were drawn from the sim's
+	// frame-0 loopFrame, so they drifted left of where the recorded values repeat).
+	// We find the SMALLEST period P>=2 for which the recording's tail is exactly
+	// P-periodic, and the EARLIEST frame L at which that periodicity begins. A period
+	// whose one cycle is constant (a steady hold, e.g. a sustained waveform) is NOT a
+	// repeating pattern and is skipped. loopStart<0 (=> no line) when nothing repeats
+	// (too short a recording, or a non-repeating sweep) — an honest "no loop here".
+	private enum int LOOP_MAX_PERIOD = 256;   // instrument loops are short; cap the scan
+	private void loopFromRecording(const(int)[] v, int n, out int loopStart, out int period) {
+		loopStart = -1; period = 0;
+		if(n > cast(int)v.length) n = cast(int)v.length;
+		if(n < 4) return;
+		int pmax = min(n / 2, LOOP_MAX_PERIOD);
+		for(int p = 2; p <= pmax; p++) {
+			// Earliest L such that v[i]==v[i+p] for ALL i in [L, n-p): one past the last
+			// index that breaks the period.
+			int L = 0;
+			for(int i = n - p - 1; i >= 0; i--)
+				if(v[i] != v[i + p]) { L = i + 1; break; }
+			if(n - L < 2 * p) continue;          // need >=2 full cycles to call it a loop
+			// Reject a constant cycle (a hold, not a repeating pattern).
+			bool constant = true;
+			for(int i = L + 1; i < L + p; i++)
+				if(v[i] != v[L]) { constant = false; break; }
+			if(constant) continue;
+			loopStart = L; period = p; return;    // smallest meaningful period wins
+		}
 	}
 
 	// ---- timeline simulators (read-only; mirror src/c64/player_v4.acme) ----
