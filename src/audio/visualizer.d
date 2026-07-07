@@ -374,6 +374,40 @@ void clearPersistentBrightness() nothrow {
 }
 
 /**
+ * Get the player's current wave-table row for a voice (-1 if none).
+ * Read-only accessor used by the Sound Editor to place the wave-lane playhead.
+ */
+int getActiveWaveRow(int voiceNum) nothrow {
+	if(voiceNum < 0 || voiceNum >= 3) return -1;
+	return activeWaveRows[voiceNum];
+}
+
+/**
+ * Get the player's current pulse-table row for a voice (-1 if none).
+ * Read-only accessor used by the Sound Editor to place the pulse-timeline playhead.
+ */
+int getActivePulseRow(int voiceNum) nothrow {
+	if(voiceNum < 0 || voiceNum >= 3) return -1;
+	return activePulseRows[voiceNum];
+}
+
+/**
+ * Get the player's current chord/arp-table row for a voice (-1 if none).
+ */
+int getActiveChordRow(int voiceNum) nothrow {
+	if(voiceNum < 0 || voiceNum >= 3) return -1;
+	return activeChordRows[voiceNum];
+}
+
+/**
+ * Get the player's current filter-table row (filter is global, one row; -1 if none).
+ * Read-only accessor used by the Sound Editor to place the filter-timeline playhead.
+ */
+int getActiveFilterRow() nothrow {
+	return activeFilterRow;
+}
+
+/**
  * Reset all visualization state
  */
 void resetVisualizer() nothrow {
