@@ -21,6 +21,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Alt-H` | Toggle help texts |
 | `Shift-F12` | Toggle the oscilloscope overlay (combined synthesized audio waveform, live during playback and keyjam) |
 | `Ctrl-Shift-F` | Toggle the read-only filter track column |
+| `Ctrl-E` | Toggle the visual Sound Editor (live instrument view with keyjam) |
 
 ### Edit
 

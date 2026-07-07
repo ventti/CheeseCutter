@@ -329,6 +329,10 @@ final class UI {
 	// (dialogs stay visually authoritative). Not gated on isPlaying: when idle it
 	// draws a flat line so the overlay clearly reads as "on".
 	private void drawScope() {
+		// The Sound Editor owns the scope trace while it is open (it sets its own
+		// via ui.oscilloscope during toplevel.update); leave it untouched here so
+		// this end-of-frame pass doesn't clear it, and don't draw the overlay.
+		if(toplevel !is null && toplevel.soundEditorActive) return;
 		if(!scopeVisible || dialog !is null || scopeWindow is null) {
 			video.clearScopeTrace();   // drop any pixel trace overlay
 			return;

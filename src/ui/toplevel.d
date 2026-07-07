@@ -19,6 +19,7 @@ import ui.tables;
 import ui.window;
 import ui.statusbar;
 import ui.ui;
+import ui.soundedit;
 import seq.fplay;
 import com.fb;
 import com.util;
@@ -45,6 +46,14 @@ final package class Toplevel : WindowSwitcher, Undoable {
 	UI ui;
 	Hotspot[] hotspots;
 	bool followplay;
+	// Visual Sound Editor screen (P1). It swaps in over the whole editor like
+	// startFp() swaps the sequencer for fplay; `windows` and the active-window
+	// index are saved on entry and restored on exit.
+	SoundEditor soundEditor;
+	bool soundEditorActive;
+	private Window[] savedWindows;
+	private int savedActiveWindowNum;
+	private bool prevKeyjamStatus;
 
  	this(UI ui) {
 		this.ui = ui;
@@ -214,6 +223,12 @@ final package class Toplevel : WindowSwitcher, Undoable {
 					})
 				];
 		}
+		// Full-screen Sound Editor, sized to the editor content area (below the
+		// menu/status rows, above the info/status footer). Constructed here so
+		// `screen` is already available (the classic tables use it above).
+		soundEditor = new SoundEditor(Rectangle(1, zone1y,
+										  screen.height - zone1y - 5,
+										  screen.width - 3));
 		refresh();
 	}
 
@@ -253,6 +268,15 @@ final package class Toplevel : WindowSwitcher, Undoable {
 	}
 
 	override int keypress(Keyinfo key) {
+		// The Sound Editor runs its own keyjam AND panel navigation, so when it
+		// is the active screen every key goes straight to it instead of the
+		// global inputKeyjam (which would swallow navigation while keyjam is on).
+		// The song-play/toggle shortcuts (F1..F4, Ctrl-E, ...) never reach here:
+		// UI.keypress resolves them via the shortcut registry first.
+		if(soundEditorActive) {
+			activeWindow.keypress(key);
+			return OK;
+		}
 		switch(key.unicode) {
 		case ']':
 			if(song.speed < 32)
@@ -341,6 +365,9 @@ final package class Toplevel : WindowSwitcher, Undoable {
 	}
 
 	override int keyrelease(Keyinfo key) {
+		if(soundEditorActive) {
+			return activeWindow.keyrelease(key);
+		}
 		if(state.keyjamStatus == true) {
 			inputKeyjam.keyrelease(key);
 		}
@@ -506,6 +533,38 @@ final package class Toplevel : WindowSwitcher, Undoable {
 		followplay = false;
 		windows[0] = sequencer;
 		activateWindow(activeWindowNum);
+	}
+
+	// Enter/leave the visual Sound Editor. Like startFp()/stopFp() this swaps the
+	// window set: the whole `windows` array is replaced by the single full-screen
+	// SoundEditor and restored on exit. Entering forces keyjam ON so notes play
+	// immediately; leaving restores the caller's prior keyjam state and screen.
+	void toggleSoundEditor() {
+		soundEditorActive ? stopSoundEditor() : startSoundEditor();
+	}
+
+	void startSoundEditor() {
+		if(soundEditorActive) return;
+		savedWindows = windows;
+		savedActiveWindowNum = activeWindowNum;
+		prevKeyjamStatus = state.keyjamStatus;
+		windows = [cast(Window)soundEditor];
+		soundEditorActive = true;
+		activateWindow(0);
+		// Force keyjam on so the piano keys sound the moment the screen opens.
+		state.keyjamStatus = true;
+		ui.enableKeyjamMode(true);
+	}
+
+	void stopSoundEditor() {
+		if(!soundEditorActive) return;
+		soundEditorActive = false;
+		windows = savedWindows;
+		int n = savedActiveWindowNum;
+		if(n < 0 || n >= cast(int)windows.length) n = 0;
+		// Restore the caller's prior keyjam state and the classic screen.
+		ui.enableKeyjamMode(prevKeyjamStatus);
+		activateWindow(n);
 	}
 
 	void stopPlayback() {

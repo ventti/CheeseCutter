@@ -477,6 +477,16 @@ void registerShortcuts(UI ui) {
 		scopeZoom(-1);
 	});
 
+	// Visual Sound Editor: a full-screen, keyjam-on view of the selected
+	// instrument (P1: chrome + keyjam + live output scope). Ctrl-E toggles
+	// in/out; the same key resolves here before toplevel.keypress, so it still
+	// leaves the screen even while its keyjam is on.
+	sm.register("toggle_sound_editor", Ctx.global, "Display",
+				"Toggle the visual Sound Editor (live instrument view with keyjam)", SDLK_e, KMOD_CTRL, {
+		toplevel.toggleSoundEditor();
+		statusline.display("Sound Editor " ~ (toplevel.soundEditorActive ? "opened." : "closed."));
+	});
+
 	// Dialogs
 	sm.register("about_dialog", Ctx.global, "Help",
 				"Show the splash / about screen", SDLK_F11, 0, {
@@ -794,6 +804,7 @@ void applyMenuLabels(UI ui) {
 		setMenuLabel("toggle_help_text", "Help texts");
 		setMenuLabel("toggle_filter_track", "Filter track");
 		setMenuLabel("toggle_oscilloscope", "Oscilloscope");
+		setMenuLabel("toggle_sound_editor", "Sound Editor");
 		setMenuLabel("scope_zoom_in", "Oscilloscope zoom in");
 		setMenuLabel("scope_zoom_out", "Oscilloscope zoom out");
 		setMenuLabel("screenshot", "Screenshot");

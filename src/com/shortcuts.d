@@ -97,6 +97,7 @@ enum Ctx {
 	instrumentTable= "instrument_table",
 	subtable       = "subtable",        // wave/pulse/filter/cmd/chord
 	songInfo       = "song_info",
+	soundEditor    = "sound_editor",    // visual Sound Editor screen (Ctrl-E)
 }
 
 /**
