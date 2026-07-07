@@ -33,6 +33,19 @@ Editing byte-parity is P4+ (out of scope this run) — DO NOT implement editing.
 ## Agent strategy
 - Dedicated agents scaffolded in `.claude/agents/`.
 
+## Status: P1–P3 COMPLETE + independently verified (each PASS). STOPPED for human review at the P1–P3 checkpoint (per user request). P4–P6 (keyboard editing/write-back, mouse editing, docs polish) NOT started.
+Commits on feat/sound-editor: 85ccd8e (P1), e8a0f39 (P2), bee75eb (P3).
+
+Tech-debt to address in P6 polish (non-blocking, from verifiers):
+- soundedit.d duplicates the SID ms ADSR tables from audio.visualizer (private
+  there) — expose a shared const to avoid drift.
+- soundedit.d: COL_AXIS duplicates COL_LABEL value; amplitude clamping done 3
+  ways (reuse clamp01).
+- Pulse active-row playhead highlight is a wide region box; could be a slimmer
+  cursor (correct, just cosmetic).
+- Non-English man pages fall back to English for the new "Sound Editor" string —
+  flag native review.
+
 ## Iteration log
 - (P0) Design doc + code map done; baseline build green. Next: P1.
 - (P1) Skeleton + enter/exit + keyjam + live output scope DONE.
