@@ -186,6 +186,13 @@ class SoundEditor : Window {
 		// §17.3 zoom-control buttons: dim by default, brighter for the label glyphs.
 		private enum int COL_CTRL      = 11; // button frame/gap (dim grey)
 		private enum int COL_CTRL_LBL  = 3;  // button label (cyan)
+		// §17.4 horizontal scrollbar: a dim darkgray TRACK (the whole Fit range) with a
+		// brighter lightgray THUMB (the current viewport). Both are the full-block glyph
+		// (197 = the only fully-solid cell in font.psf); the colour is what distinguishes
+		// them, so it reads as one subtle scrollbar (track under, thumb over).
+		private enum int COL_SCROLL_TRACK = 11;  // darkgray (dim track)
+		private enum int COL_SCROLL_THUMB = 15;  // lightgray (brighter thumb)
+		private enum int GLYPH_BLOCK = 197;      // fully-solid cell in font.psf
 
 	// §10.1 filter cutoff fill/line colour per active mode (b0 & 0x70), C64 palette
 	// indices in the standard order. -1 = no mode (filter off -> empty band).
@@ -278,6 +285,14 @@ class SoundEditor : Window {
 	// A left-press that landed on a zoom-control button (so the paired release neither
 	// finalises nor clears a selection).
 	private bool clickWasButton = false;
+
+	// §17.4 horizontal-scrollbar drag state. A left-press ON the scrollbar row grabs
+	// the thumb; while dragging, the viewport start follows the pointer so the thumb
+	// stays under the grab point (span kept constant, clamped). scrollGrabOffset = the
+	// tick (on the FULL/Fit axis) under the initial press minus viewStartTick, so the
+	// grab point on the thumb is preserved across the drag.
+	private bool scrollDragging = false;
+	private double scrollGrabOffset = 0;
 
 	// The screen owns its own keyjam so note keys play while the panel is
 	// focused and navigating (the classic editor's global inputKeyjam is
@@ -630,6 +645,11 @@ class SoundEditor : Window {
 
 		// §17.3 subtle zoom-control button row + the current selection readout.
 		drawZoomControls(g);
+
+		// §17.4 horizontal scrollbar (row just below the control row): track = the whole
+		// Fit range, thumb = the current viewport. Text cells, so it composites with the
+		// rest of the chrome (drawTextChrome already wiped this row this frame).
+		drawScrollbar(g);
 
 		// §14.1 mouse-hover probe + numeric readout (only while the cursor is over the
 		// plot region). Drawn last so the dashed white probe line sits on top.
@@ -1815,6 +1835,63 @@ class SoundEditor : Window {
 		clampViewport();
 	}
 
+	// ---- §17.4 horizontal scrollbar ----
+
+	// The scrollbar TRACK's inclusive-exclusive cell X span on the scroll row = the plot
+	// width (same columns the bands span), so the track represents the whole Fit range.
+	private void scrollTrackCells(ref Geo g, out int x0, out int w) {
+		x0 = g.plotX0px / FONT_X;
+		w  = g.plotWpx / FONT_X;
+		if(w < 1) w = 1;
+	}
+
+	// The THUMB's inclusive-exclusive cell X span = the current viewport as a fraction of
+	// the whole Fit range [-RESTART_FRAMES, visFrames]. At Fit the thumb fills the track;
+	// zoomed in it's a shorter run you can slide. Recomputed identically in the drawer and
+	// the hit-test so they always agree.
+	private void scrollThumbCells(ref Geo g, out int x0, out int x1) {
+		int trackX0, trackW;
+		scrollTrackCells(g, trackX0, trackW);
+		double full = cast(double)visFrames - (-RESTART_FRAMES);
+		if(full < 1e-6) full = 1;
+		double f0 = (viewStartTick - (-RESTART_FRAMES)) / full;
+		double f1 = (viewEndTick   - (-RESTART_FRAMES)) / full;
+		if(f0 < 0) f0 = 0;
+		if(f1 > 1) f1 = 1;
+		x0 = trackX0 + cast(int)lround(f0 * trackW);
+		x1 = trackX0 + cast(int)lround(f1 * trackW);
+		if(x0 < trackX0) x0 = trackX0;
+		if(x1 > trackX0 + trackW) x1 = trackX0 + trackW;
+		if(x1 <= x0) x1 = x0 + 1;              // always at least one cell wide
+		if(x1 > trackX0 + trackW) { x1 = trackX0 + trackW; x0 = x1 - 1; }
+	}
+
+	// Map a scrollbar cell column to a tick on the whole/Fit axis (the track spans the
+	// entire Fit range across trackW cells), clamped to the note extent.
+	private double scrollTickForCell(ref Geo g, int cellX) {
+		int trackX0, trackW;
+		scrollTrackCells(g, trackX0, trackW);
+		double frac = (cellX + 0.5 - trackX0) / trackW;
+		if(frac < 0) frac = 0;
+		if(frac > 1) frac = 1;
+		return -RESTART_FRAMES + frac * (cast(double)visFrames - (-RESTART_FRAMES));
+	}
+
+	// §17.4 Draw the scrollbar: a dim darkgray track across the whole plot width, with the
+	// brighter lightgray thumb over the viewport's fraction of the Fit range. All TEXT
+	// cells (full-block glyph), so it composites like the rest of the chrome.
+	private void drawScrollbar(ref Geo g) {
+		int trackX0, trackW;
+		scrollTrackCells(g, trackX0, trackW);
+		if(trackW < 2) return;
+		foreach(cx; trackX0 .. trackX0 + trackW)
+			screen.setChar(cx, g.scrollRow, (COL_SCROLL_TRACK << 8) | GLYPH_BLOCK);
+		int tx0, tx1;
+		scrollThumbCells(g, tx0, tx1);
+		foreach(cx; tx0 .. tx1)
+			screen.setChar(cx, g.scrollRow, (COL_SCROLL_THUMB << 8) | GLYPH_BLOCK);
+	}
+
 	// ---- §17.2/§17.3 mouse: drag-select + control-button clicks ----
 
 	// Snap an absolute pixel column to the nearest integer tick on the viewport axis,
@@ -1840,6 +1917,22 @@ class SoundEditor : Window {
 		if(button != 1) return;
 		Geo g = layout();
 		clickWasButton = false;
+		scrollDragging = false;
+		// §17.4 scrollbar row: grab the thumb to pan, or click the track to page. Hit-test
+		// by ROW so a press here never starts a plot selection (and vice versa).
+		if(y == g.scrollRow) {
+			clickWasButton = true;   // consume the paired release (no sel change)
+			int tx0, tx1;
+			scrollThumbCells(g, tx0, tx1);
+			if(x >= tx0 && x < tx1) {                 // on the thumb -> drag to pan
+				scrollDragging = true;
+				scrollGrabOffset = scrollTickForCell(g, x) - viewStartTick;
+			} else {                                  // on the track -> page one view width
+				double span = viewEndTick - viewStartTick;
+				panBy(x < tx0 ? -span : span);
+			}
+			return;
+		}
 		// §17.3 control-button hit test first (like the menu bar).
 		if(y == g.controlRow) {
 			foreach(i, b; zoomButtons(g)) {
@@ -1867,6 +1960,19 @@ class SoundEditor : Window {
 	}
 
 	override void draggedTo(int x, int y) {
+		// §17.4 dragging the scrollbar thumb pans the viewport (span kept, thumb follows
+		// the grab point). Takes priority over plot selection; they never overlap (the
+		// scrollbar drag only starts on the scroll row).
+		if(scrollDragging) {
+			Geo g = layout();
+			double span = viewEndTick - viewStartTick;
+			double ns = scrollTickForCell(g, x) - scrollGrabOffset;
+			viewStartTick = ns;
+			viewEndTick = ns + span;
+			userZoomed = true;
+			clampViewport();
+			return;
+		}
 		if(!selecting) return;
 		Geo g = layout();
 		dragMoved = true;
@@ -1878,7 +1984,9 @@ class SoundEditor : Window {
 	}
 
 	override void releasedAt(int x, int y) {
-		// A press on a control button consumes its paired release (no sel change).
+		// §17.4 end any scrollbar-thumb drag.
+		scrollDragging = false;
+		// A press on a control button / the scrollbar consumes its paired release.
 		if(clickWasButton) { clickWasButton = false; return; }
 		if(!selecting) return;
 		selecting = false;

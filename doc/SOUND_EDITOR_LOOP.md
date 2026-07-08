@@ -791,3 +791,59 @@ Tech-debt to address in P6 polish (non-blocking, from verifiers):
     CLI flag was added).
   - NOT done this phase: §17.4 horizontal scrollbar (blank row reserved); data editing / write-back
     / undo (P4+, still read-only).
+
+- (v12b HORIZONTAL SCROLLBAR, §17.4 2026-07-08) Still READ-ONLY. Builds on the v12a viewport.
+  Files: `src/ui/soundedit.d` (scrollbar draw + pan/page mouse handling), `src/ui/help.d`
+  (one F12 line). Fills the blank row v12a reserved below the `[-][+][Fit][Sel]` control row.
+  - **§17.4 scrollbar on the reserved row.** Drawn on `g.scrollRow` (= `rawTopRow-1`, one row
+    below `controlRow`), spanning the SAME cells the plot bands span (`plotX0px/FONT_X` ..
+    `+plotWpx/FONT_X`). The TRACK = the whole Fit range `[-RESTART_FRAMES, visFrames]`; the THUMB
+    = the current viewport `[viewStartTick, viewEndTick]` as a fraction of that. Both are the
+    full-block glyph (197 — the only fully-solid cell in font.psf, found by scanning glyph bit
+    counts); the COLOUR distinguishes them — dim darkgray track (11) under, brighter lightgray
+    thumb (15) over. At Fit the thumb fills the track (all lightgray); zoomed in it's a shorter
+    lightgray run with darkgray track on either side. All TEXT cells (`screen.setChar`), so it
+    composites like the rest of the chrome; drawn in `update()` right after `drawZoomControls`,
+    and only in the non-`chromeActive` path (drawTextChrome wipes the row each frame, so it's
+    blank under a dialog/menu — matches the control row).
+  - **Interaction, hit-tested by ROW.** `clickedAt`: a left-press on `g.scrollRow` grabs the thumb
+    if it lands within the thumb cells (records `scrollGrabOffset` = tick-on-full-axis under the
+    press minus `viewStartTick`), else PAGES by one viewport width toward the click
+    (`panBy(±span)`). A scroll-row press sets `clickWasButton` so its paired release neither
+    finalises nor clears a selection. `draggedTo`: while `scrollDragging`, sets
+    `viewStart = scrollTickForCell(x) - scrollGrabOffset`, keeps the span, `clampViewport()` — a
+    pan that keeps the thumb under the grab point. `releasedAt` ends the drag. A press on the
+    scroll row NEVER starts a plot selection and a plot drag never pans the scrollbar (rows are
+    disjoint), satisfying the §17.4 hit-test-by-row rule. Reuses v12a `panBy`/`clampViewport`/
+    `MIN_VIEW_SPAN`, so the scrollbar shares the exact viewport clamping/min-span.
+  - **F12 help:** added one line under the "View / zoom" section — "Scrollbar...............Drag
+    the thumb to pan; click the track to page". Still ONE page (1/1).
+  - Build: `make -f Makefile.mac clean && make -f Makefile.mac -j4 ccutter ccdriver` -> exit 0,
+    both binaries (ccutter 7536728, ccdriver 7593448).
+  - VERIFIED by SEEING (headless dummy SDL), tunes/vent-arkijuusto.ct, ins04 "Flute" (triangle),
+    ENTER seq `load:... key:ESC key:Ctrl-e key:+ key:+ key:+ key:+ mult:2 jamrender:q,200`
+    (capLen=95995). Scroll row = cell row 36; track = plot cells 39..155 (x 312..1247).
+    * /tmp/se-v12b-1-fit.png — Fit: the thumb FILLS the track (a single lightgray run, 936px =
+      all 117 cells; PIL: light run x312..1247, no darkgray). Readout "view -10-198 t".
+    * /tmp/se-v12b-2-zoomin.png — `click:44,35`x2 ([+][+]): thumb now SHORTER than the track,
+      cells 83..111 (232px) with darkgray track filling 39..82 + 112..155. Readout "view 68-120
+      t"; Output resolves wider individual triangle cycles (pixel-accurate).
+    * /tmp/se-v12b-3-pan.png — `drag:97,36,55,36` (grab thumb, drag left along the scroll row):
+      thumb SLID to cells 41..69 (width kept 29); readout PANNED "view 68-120 t" -> "view -7-45
+      t"; the red trigger divider + restart marker + Freq staircase + Tri/Gate lanes all shifted
+      into view together (bands + waveform + playhead follow the pan). Output waveform starts
+      partway (silent pre-roll left of the trigger).
+    * /tmp/se-v12b-4-page.png — `click:145,36` (track, right of the thumb): PAGED right by one
+      view width; thumb moved 41..69 -> 70..98; readout "view -7-45 t" -> "view 45-97 t".
+    * /tmp/se-v12b-5-f12.png — `key:F12`: "Sound Editor help 1/1" WITH the new "Scrollbar ... Drag
+      the thumb to pan; click the track to page" line under View / zoom; renders clean over the
+      editor, ZERO graph-pixel bleed (z-order intact).
+    * /tmp/se-v12b-6-exit.png — `key:Ctrl-e` exits: "Sound Editor closed.", classic tracker fully
+      restored (Instruments/Wave/Pulse/Filter/Command/Tracks), no lingering scrollbar/graph pixels.
+  - READ-ONLY CONFIRMED: grep finds NO writes to song.{instrumentTable/waveTable/pulseTable/
+    filterTable/superTable/insLabels} in soundedit.d or help.d (all song.* refs are reads into
+    locals / sims); git status shows only those two code files changed.
+  - Ran `make map` + `make docs` — both idempotent (no synopsis/dep-edge change; F12 help is a
+    ContextHelp page, not a com.shortcuts registry entry or CLI flag, so KEYBOARD.md/man pages/
+    ARCHITECTURE.md are unchanged).
+  - NOT done: §17.5 remaining polish / data editing / write-back / undo (P4+, still read-only).

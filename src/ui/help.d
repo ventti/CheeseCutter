@@ -195,6 +195,7 @@ Ctrl-E..................Exit back to the classic editor
 
 Drag on the plot........Mark a tick-snapped selection
 [-] [+] [Fit] [Sel].....Zoom out / in / whole note / to selection
+Scrollbar...............Drag the thumb to pan; click the track to page
 Left / Right............Pan the view (~1/4 window)
 Home....................Fit (show the whole note)
 End.....................Zoom to the current selection
