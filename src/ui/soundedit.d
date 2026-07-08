@@ -963,17 +963,23 @@ class SoundEditor : Window {
 			// produced. The peak auto-gain stays ONLY on the Output waveform band (raw
 			// samples, whose absolute level is arbitrary). With §15.2 fit-to-recording the
 			// fixed-scale ramp already fills the width.
-			int prevY = -1;
+			// Draw the envelope as a connected DIAGONAL polyline (one line segment between
+			// consecutive per-frame samples), NOT a sample-and-hold staircase. The old
+			// flat-tread (olHLine) + vertical-riser (olVLine) style quantised a gentle
+			// slope into wide flat steps: the envelope FSM advances once per SCREEN frame
+			// but the axis is in finer player ticks, so each level spanned several pixels
+			// horizontally while dropping ~1px vertically -> visible treads. A polyline
+			// interpolates between samples so the slope reads as a slope (matches the
+			// smooth idle-sim path below). The envelope is a continuous quantity, so this
+			// is honest; genuinely discrete lanes (wave bits, arp notes) stay stepped.
+			int prevX = -1, prevY = -1;
 			int lo, hi; visRange(n, lo, hi);       // §17.1 only emit on-screen frames
 			foreach(f; lo .. hi) {
 				int y = botPx - cast(int)lround(clamp01(amp[f]) * h);
-				int xa = xForFrame(g, f);
-				int xb = xForFrame(g, f + 1);
-				if(xb <= xa) xb = xa + 1;
-				video.olHLine(xa, xb - 1, y, COL_CURVE);
-				if(prevY >= 0 && prevY != y)
-					video.olVLine(xa, min(prevY, y), max(prevY, y), COL_CURVE);
-				prevY = y;
+				int x = xForFrame(g, f);
+				if(prevX >= 0) video.olLine(prevX, prevY, x, y, COL_CURVE);
+				else video.olPoint(x, y, COL_CURVE);
+				prevX = x; prevY = y;
 			}
 			return;
 		}
