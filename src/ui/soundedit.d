@@ -36,7 +36,7 @@ import derelict.sdl2.sdl;
 import com.fb : FONT_X, FONT_Y, keyjamBackground;
 import com.session : screen, video, state, song, mainui;
 import com.shortcuts : Ctx;
-import com.palette : idx, Role;
+import com.palette : idx, Role, BaseColor;
 import ui.window;
 import ui.input;
 import ui.ui : UI;
@@ -149,63 +149,51 @@ private struct WaveFrameSim {
 /// column + stacked frame-aligned graph bands with one shared playhead + raw
 /// table-data strip. All read-only.
 class SoundEditor : Window {
-	// Palette indices (mirroring ui.oscilloscope's language): white title,
-	// yellow values, dim grey labels.
-	private enum int COL_TITLE = 1;
-	private enum int COL_VALUE = 7;
-	private enum int COL_LABEL = 11;
-	private enum int COL_SEP   = 11;    // separators / band frames (dim grey)
-	private enum int COL_CURVE = 13;    // ADSR curve (green)
-	private enum int COL_AXIS  = 11;    // baseline axis (dim grey)
-	private enum int COL_HEAD  = 1;     // playhead (white)
-	private enum int COL_LOOP  = 8;     // loop/jump marker (orange)
-	private enum int COL_TRACE = 13;    // output waveform (green)
-	private enum int COL_PULSE_FILL = 6;  // blue area
-	private enum int COL_PULSE_LINE = 14; // light-blue top edge
-	private enum int COL_FILT_FILL  = 4;  // purple area
-	private enum int COL_FILT_LINE  = 10; // light-red top edge
-	private enum int COL_TRIGGER = 2;   // note-trigger divider (red)
-	private enum int COL_RESTART = 3;   // §13.4 restart-phase marker (cyan; distinct
-	                                    // from the red trigger + white playhead)
-	private enum int COL_RSTFILL = 9;   // restart pre-roll shading (brown, dim)
-	private enum int COL_RSTCURVE = 10; // restart envelope ramp (light-red)
-	private enum int COL_RES = 7;       // §10.2 resonance-over-time overlay (yellow)
-	private enum int COL_FREQ_REL = 13; // §10.3 relative transpose step (light-green)
-	private enum int COL_FREQ_ABS = 3;  // §10.3 absolute-tuning step (cyan)
-		// §11 recording view: dim colours for the idle table-sim preview + loop lines.
-		private enum int COL_LOOPLINE = 11; // §11.3 subtle loop-boundary line (darkgray)
-		// §11.2 dimmed idle-preview: line + fill both use the darkest gradient (navy) so
-		// they read as a muted preview AND sit *below* the darkgray loop lines, which
-		// therefore stay visible over the dimmed sim too.
-		private enum int COL_DIM      = 16;
-		private enum int COL_DIMFILL  = 16;
-		// §17.2 selection: a subtle blue hatch wash behind the bands + brighter light-
-		// blue edges on top. Blue-family so it reads as one "selection" and stays
-		// distinct from the red trigger (2), cyan restart (3) and white playhead/probe (1).
-		private enum int COL_SEL_WASH = 6;   // blue (drawn sparse => translucent look)
-		private enum int COL_SEL_EDGE = 14;  // light-blue (solid edges)
-		// §17.3 zoom-control buttons: dim by default, brighter for the label glyphs.
-		private enum int COL_CTRL      = 11; // button frame/gap (dim grey)
-		private enum int COL_CTRL_LBL  = 3;  // button label (cyan)
-		// §17.4 horizontal scrollbar: a dim darkgray TRACK (the whole Fit range) with a
-		// brighter lightgray THUMB (the current viewport). Both are the full-block glyph
-		// (197 = the only fully-solid cell in font.psf); the colour is what distinguishes
-		// them, so it reads as one subtle scrollbar (track under, thumb over).
-		private enum int COL_SCROLL_TRACK = 11;  // darkgray (dim track)
-		private enum int COL_SCROLL_THUMB = 15;  // lightgray (brighter thumb)
-		private enum int GLYPH_BLOCK = 197;      // fully-solid cell in font.psf
+	// All colours go through the semantic palette (com.palette): UI chrome via Role.*
+	// (idx), graph colours via named BaseColor.* — no magic indices anywhere.
+	private @property int COL_TITLE() { return idx(Role.cursor); }
+	private @property int COL_LABEL() { return idx(Role.text); }
+	private @property int COL_VALUE() { return idx(Role.soundeditValue); }
+	private @property int COL_HEAD()  { return idx(Role.cursor); }
+	private @property int COL_CTRL()  { return idx(Role.text); }
+	private @property int COL_CTRL_LBL() { return idx(Role.soundeditButtonLabel); }
+	private @property int COL_CTRL_BG()  { return idx(Role.soundeditButtonBg); }
+	private @property int COL_SCROLL_TRACK() { return idx(Role.soundeditScrollTrack); }
+	private @property int COL_SCROLL_THUMB() { return idx(Role.soundeditScrollThumb); }
+	private @property int COL_SEL_WASH() { return idx(Role.soundeditSelection); }
+	private @property int COL_SEL_EDGE() { return idx(Role.soundeditSelEdge); }
+	private @property int COL_DIM()      { return idx(Role.soundeditDim); }
+	private @property int COL_DIMFILL()  { return idx(Role.soundeditDim); }
+	private enum int COL_SEP      = BaseColor.darkgray;
+	private enum int COL_AXIS     = BaseColor.darkgray;
+	private enum int COL_CURVE    = BaseColor.lightgreen;
+	private enum int COL_TRACE    = BaseColor.lightgreen;
+	private enum int COL_LOOP     = BaseColor.orange;
+	private enum int COL_LOOPLINE = BaseColor.gray;
+	private enum int COL_PULSE_FILL = BaseColor.blue;
+	private enum int COL_PULSE_LINE = BaseColor.lightblue;
+	private enum int COL_FILT_LINE  = BaseColor.lightred;
+	private enum int COL_TRIGGER  = BaseColor.red;
+	private enum int COL_RESTART  = BaseColor.cyan;
+	private enum int COL_RSTFILL  = BaseColor.brown;
+	private enum int COL_RSTCURVE = BaseColor.lightred;
+	private enum int COL_RES      = BaseColor.yellow;
+	private enum int COL_FREQ_REL = BaseColor.lightgreen;
+	private enum int COL_FREQ_ABS = BaseColor.cyan;
+	private enum int GLYPH_BLOCK  = 197;
+	private enum int GLYPH_DOTS   = 176;   // CP437 light-shade "sparse dots" (scroll track)
 
 	// §10.1 filter cutoff fill/line colour per active mode (b0 & 0x70), C64 palette
 	// indices in the standard order. -1 = no mode (filter off -> empty band).
 	private static int filterModeColor(int mode) {
 		switch(mode & 0x70) {
-			case 0x10: return 2;   // LP        -> red
-			case 0x20: return 5;   // BP        -> green
-			case 0x40: return 14;  // HP        -> light-blue
-			case 0x30: return 8;   // LP+BP     -> orange
-			case 0x60: return 3;   // BP+HP     -> cyan
-			case 0x50: return 4;   // LP+HP     -> purple
-			case 0x70: return 12;  // LP+HP+BP  -> gray
+			case 0x10: return BaseColor.red;        // LP
+			case 0x20: return BaseColor.green;      // BP
+			case 0x40: return BaseColor.lightblue;  // HP
+			case 0x30: return BaseColor.orange;     // LP+BP
+			case 0x60: return BaseColor.cyan;       // BP+HP
+			case 0x50: return BaseColor.purple;     // LP+HP
+			case 0x70: return BaseColor.gray;       // LP+HP+BP
 			default:   return -1;  // none      -> filter off
 		}
 	}
@@ -220,7 +208,9 @@ class SoundEditor : Window {
 	// §9.3 Wave band = 8 stacked SID control-bit lanes. Indexed by BIT NUMBER 0..7
 	// (b0 Gate .. b7 Noise); the lanes are stacked b7 at the TOP down to b0 at the
 	// bottom. Distinct palette colour + 3-char label per bit.
-	private static immutable int[8]    BITLANE_COL = [13, 14, 8, 4, 3, 5, 7, 15];
+	private static immutable int[8]    BITLANE_COL = [
+		BaseColor.lightgreen, BaseColor.lightblue, BaseColor.orange, BaseColor.purple,
+		BaseColor.cyan, BaseColor.green, BaseColor.yellow, BaseColor.lightgray];
 	private static immutable string[8] BITLANE_LBL = ["Gate","Sync","Ring","Test","Tri","Saw","Pulse","Noise"];
 
 	// Left parameter column: fixed set of rows, cursor moved with Up/Down.
@@ -1374,8 +1364,8 @@ class SoundEditor : Window {
 
 	// ---- §14.1 mouse-hover probe + numeric readout ----
 
-	private enum int COL_PROBE = 1;    // hover probe line (white; dashed to distinguish
-	                                   // it from the SOLID white playhead)
+	private @property int COL_PROBE() { return idx(Role.cursor); }  // hover probe line
+	                                   // (white; dashed to distinguish it from the SOLID white playhead)
 
 	// SDL forwards a plain mouse-motion (no button) here as screen char-cells (see
 	// UI.hoverAt / WindowSwitcher.hoverAt). We only record the cell; update() maps it
@@ -1830,7 +1820,7 @@ class SoundEditor : Window {
 	private void drawZoomControls(ref Geo g) {
 		auto btns = zoomButtons(g);
 		foreach(b; btns)
-			screen.cprint(b.x0, g.controlRow, COL_CTRL_LBL, 0, b.label);
+			screen.cprint(b.x0, g.controlRow, COL_CTRL_LBL, COL_CTRL_BG, b.label);
 		int rx = btns[3].x1 + 2;
 		int rw = (g.plotX0px + g.plotWpx) / FONT_X - rx;
 		if(rw < 4) return;
@@ -1926,7 +1916,7 @@ class SoundEditor : Window {
 		scrollTrackCells(g, trackX0, trackW);
 		if(trackW < 2) return;
 		foreach(cx; trackX0 .. trackX0 + trackW)
-			screen.setChar(cx, g.scrollRow, (COL_SCROLL_TRACK << 8) | GLYPH_BLOCK);
+			screen.setChar(cx, g.scrollRow, (COL_SCROLL_TRACK << 8) | GLYPH_DOTS);
 		int tx0, tx1;
 		scrollThumbCells(g, tx0, tx1);
 		foreach(cx; tx0 .. tx1)

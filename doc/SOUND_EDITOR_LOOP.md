@@ -847,3 +847,60 @@ Tech-debt to address in P6 polish (non-blocking, from verifiers):
     ContextHelp page, not a com.shortcuts registry entry or CLI flag, so KEYBOARD.md/man pages/
     ARCHITECTURE.md are unchanged).
   - NOT done: §17.5 remaining polish / data editing / write-back / undo (P4+, still read-only).
+
+- (v13 SEMANTIC COLOURS EVERYWHERE + BUTTON BG + DOTTED SCROLLBAR, §18 2026-07-08) Still
+  READ-ONLY. Mechanical colour refactor: the Sound Editor now goes through the semantic palette
+  (com.palette) like the rest of ccutter — no magic colour indices. UI chrome -> `Role.*` (via
+  `idx()`), graph colours -> named `BaseColor.*` (tier-1 configurable).
+  - `src/com/palette.d`: 7 new roles after `soundeditSelection` — `soundeditValue`(yellow),
+    `soundeditButtonBg`(darkgray), `soundeditButtonLabel`(white), `soundeditScrollTrack`(darkgray),
+    `soundeditScrollThumb`(gray), `soundeditSelEdge`(lightblue), `soundeditDim`(darkgray). Added to
+    the `Role` enum, `defaultRoleBase`, and the `roleByName` JSON map (key == role name). Existing
+    defaults untouched, so the classic editor renders identically.
+  - `src/ui/soundedit.d`:
+    * import now pulls `BaseColor` too.
+    * Replaced the whole `enum int COL_*` block: Role-backed chrome became `@property int` getters
+      (COL_TITLE/HEAD=cursor, COL_LABEL=text [was darkgray -> now readable light], COL_VALUE=
+      soundeditValue, COL_CTRL=text, COL_CTRL_LBL=soundeditButtonLabel, NEW COL_CTRL_BG=
+      soundeditButtonBg, COL_SCROLL_TRACK/THUMB, COL_SEL_WASH=soundeditSelection, COL_SEL_EDGE=
+      soundeditSelEdge, COL_DIM/DIMFILL=soundeditDim); graph colours stay compile-time enums using
+      named `BaseColor.*` (COL_SEP/AXIS=darkgray, CURVE/TRACE/FREQ_REL=lightgreen, LOOP=orange,
+      LOOPLINE=gray, PULSE_FILL=blue, PULSE_LINE=lightblue, FILT_LINE/RSTCURVE=lightred, TRIGGER=
+      red, RESTART/FREQ_ABS=cyan, RSTFILL=brown, RES=yellow). Dropped unused COL_FILT_FILL. Added
+      GLYPH_DOTS=176 (CP437 light-shade) next to GLYPH_BLOCK=197.
+    * `filterModeColor` returns named BaseColor.* per filter mode (was numeric).
+    * `BITLANE_COL` = named BaseColor.* array (lightgreen/lightblue/orange/purple/cyan/green/
+      yellow/lightgray).
+    * `drawZoomControls`: buttons now drawn with `COL_CTRL_BG` background (was bg 0), so
+      `[-][+][Fit][Sel]` read as buttons; info readout still COL_CTRL on bg 0.
+    * `drawScrollbar`: track glyph changed BLOCK->GLYPH_DOTS in COL_SCROLL_TRACK (dotted darkgray);
+      thumb stays solid GLYPH_BLOCK in COL_SCROLL_THUMB (mid-gray).
+    * NOTE: `COL_PROBE = 1` (hover-probe, line ~1377) is a separate local enum OUTSIDE the spec's
+      COL_* block; left unchanged per "apply exactly" — it is the one remaining bare FG index
+      (semantically == Role.cursor/white). Flagged for the verifier.
+  - Build: `make -f Makefile.mac clean && make -f Makefile.mac -j4 ccutter ccdriver` -> exit 0,
+    both binaries (ccutter 7555272, ccdriver 7598232).
+  - VERIFIED by SEEING (headless dummy SDL), tunes/vent-arkijuusto.ct, ins05 "Arppi":
+    * /tmp/se-v13.png — spec ENTER seq (`key:ESC key:Ctrl-e key:+*5 mult:1 jamrender:q,60
+      drag:70,15,110,25`): (a) param labels Octave/Attack/Decay/... and band labels Output/ADSR/
+      Freq/Pulse/Filter-res + "scale 0-58 f" + raw-data labels are LIGHT/readable (not darkgray);
+      (b) values (yellow) readable; (c) `[-] [+] [Fit] [Sel]` sit on a visible darkgray background;
+      (d) scrollbar present (thumb fills track at this near-fit zoom); (e) graph colours correct —
+      envelope/ADSR green, output trace green, selection blue wash, bit-lanes coloured (Gate
+      lightgreen, Pulse yellow, Saw green, Tri cyan, etc.).
+    * /tmp/se-v13-sel.png (+ crop /tmp/se-v13-sel-scroll.png) — `drag:70,15,110,25 key:END`
+      (zoom-to-selection shrinks the viewport): scrollbar TRACK now clearly a row of sparse
+      darkgray DOTS (glyph 176) on both sides of a solid MID-GRAY thumb. Glyph 176 renders fine as
+      sparse dots — no need to fall back to 177.
+    * /tmp/se-v13-classic.png — `key:ESC tick:2` classic tracker: frames/text/instrument list/
+      Wave/Pulse/Filter/Command/Tracks all render with normal colours; the new palette roles did
+      NOT disturb the classic editor (they only ADD roles; existing defaults unchanged).
+  - READ-ONLY CONFIRMED: no writes to song.* table slices in soundedit.d (only local buffers +
+    `screen.data` framebuffer). NO MAGIC COLOUR INDICES in the refactored surfaces: all colour
+    args are Role/BaseColor-backed constants or variables; remaining bare integers are bg `0`
+    (black backdrop, conventional) and glyph codes (197/176), plus the flagged COL_PROBE=1.
+  - Files touched: `src/com/palette.d` (7 roles), `src/ui/soundedit.d` (COL_* block + filterMode/
+    BITLANE + button bg + dotted scrollbar), `doc/SOUND_EDITOR_LOOP.md` (this entry).
+  - Ran neither `make map`/`make docs` change — no synopsis/dep-edge/CLI-flag/shortcut change (the
+    palette JSON roles are documented in doc/palette.json schema, not the generated man pages).
+  - NOT done: data editing / write-back / undo (P4+, still read-only). Did not commit/grade.

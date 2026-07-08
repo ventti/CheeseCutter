@@ -963,3 +963,27 @@ it to pan; the view follows; at Fit the thumb fills the track. (5) Zoomed in, th
 Output is still pixel-accurate over the (now wider-per-tick) view. (6) Regression:
 hover probe, loop lines, z-order, F12, clean exit intact. Read-only. Screenshot
 each step (before/after zoom, mid-pan) and confirm by SEEING.
+
+---
+
+## 18. Semantic colours everywhere + button bg + dotted scrollbar (2026-07-08 v13)
+
+The Sound Editor must use the semantic palette (com.palette) like the rest of
+ccutter — no magic colour indices. UI-chrome → `Role.*` (via `idx()`); graph
+colours → named `BaseColor.*` (tier-1 configurable). Plus: readable labels (not
+darkgray), buttons with a background, and a dotted scrollbar with a mid-gray thumb.
+
+- **Labels/values follow the tracker's semantics**: labels → `Role.text`
+  (light, readable — was darkgray); title/playhead → `Role.cursor` (white);
+  values → new `Role.soundeditValue`.
+- **Buttons** `[-] [+] [Fit] [Sel]` get a background (`Role.soundeditButtonBg`)
+  with the label in `Role.soundeditButtonLabel`, so they read as buttons.
+- **Scrollbar**: track uses the light-shade "sparse dots" glyph (CP437 176) in
+  `Role.soundeditScrollTrack` (darkgray); thumb is solid in
+  `Role.soundeditScrollThumb` (mid-gray).
+- **New roles**: soundeditValue, soundeditButtonBg, soundeditButtonLabel,
+  soundeditScrollTrack, soundeditScrollThumb, soundeditSelEdge, soundeditDim
+  (+ soundeditSelection already added).
+- **Graph colours** (envelope, output trace, pulse fill/edge, filter edge +
+  per-mode colours, trigger, restart, resonance, freq, loop marker/line,
+  bit-lanes) → named `BaseColor.*` (no integer literals).

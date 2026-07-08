@@ -63,6 +63,13 @@ enum Role : int {
 	keyjamBg,          // whole-screen background tint while keyjam mode is active
 	keyjamTag,         // "KEYJAM" mode badge text in the top bar
 	soundeditSelection, // Sound Editor time-range selection overlay (translucent)
+	soundeditValue,       // Sound Editor parameter values (yellow)
+	soundeditButtonBg,    // Sound Editor zoom-button background (darkgray)
+	soundeditButtonLabel, // Sound Editor zoom-button label (white)
+	soundeditScrollTrack, // Sound Editor scrollbar track (darkgray, dotted)
+	soundeditScrollThumb, // Sound Editor scrollbar thumb (mid-gray)
+	soundeditSelEdge,     // Sound Editor selection edges (lightblue)
+	soundeditDim,         // Sound Editor dimmed idle-preview / dim fills (darkgray)
 }
 
 // JSON key <-> Role. Same rationale as baseColorByName.
@@ -86,6 +93,13 @@ private immutable int[Role.max + 1] defaultRoleBase = [
 	Role.keyjamBg:         BaseColor.blue,
 	Role.keyjamTag:        BaseColor.yellow,
 	Role.soundeditSelection: BaseColor.blue,
+	Role.soundeditValue:       BaseColor.yellow,
+	Role.soundeditButtonBg:    BaseColor.darkgray,
+	Role.soundeditButtonLabel: BaseColor.white,
+	Role.soundeditScrollTrack: BaseColor.darkgray,
+	Role.soundeditScrollThumb: BaseColor.gray,
+	Role.soundeditSelEdge:     BaseColor.lightblue,
+	Role.soundeditDim:         BaseColor.darkgray,
 ];
 
 // Built-in RGB values: 0..15 classic C64, 16..31 the mid-blue->black gradient
@@ -143,6 +157,13 @@ shared static this() {
 		"filterEmpty": Role.filterEmpty, "filterHeader": Role.filterHeader,
 		"keyjamBg": Role.keyjamBg, "keyjamTag": Role.keyjamTag,
 		"soundeditSelection": Role.soundeditSelection,
+		"soundeditValue": Role.soundeditValue,
+		"soundeditButtonBg": Role.soundeditButtonBg,
+		"soundeditButtonLabel": Role.soundeditButtonLabel,
+		"soundeditScrollTrack": Role.soundeditScrollTrack,
+		"soundeditScrollThumb": Role.soundeditScrollThumb,
+		"soundeditSelEdge": Role.soundeditSelEdge,
+		"soundeditDim": Role.soundeditDim,
 	];
 	resetToDefaults();
 }
