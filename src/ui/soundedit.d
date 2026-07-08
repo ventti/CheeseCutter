@@ -499,6 +499,16 @@ class SoundEditor : Window {
 	private void drawTextChrome(int ins, ref Geo g) {
 		drawFrame(area);
 
+		// drawFrame clears the interior to char 0x00. That glyph is NOT blank in this
+		// font — it only looks invisible because it's drawn black-on-black (fg 0). When
+		// a pop-up's drop-shadow later tints these plot cells via setColor(fg=11), the
+		// char-0 glyph shows up as an opaque gray hatch (the classic editor has real
+		// text there, so its shadow just dims the text). Fill our interior with SPACE
+		// (a truly blank glyph) so a shadow over the empty plot area is invisible, as it
+		// is over empty cells in the classic editor. Labels/params/bands are drawn after.
+		foreach(yy; area.y + 1 .. area.y + area.height - 1)
+			screen.data[area.x + 1 + yy * screen.width .. area.x + area.width - 1 + yy * screen.width] = 0x20;
+
 		// §13.3 instrument NN + name now live in the wide title row (the old separate
 		// "Instrument NN Name" line could run off-screen for a long name). Truncate a
 		// long name to whatever fits between the fixed prefix and the "(F12 help)" tail.
