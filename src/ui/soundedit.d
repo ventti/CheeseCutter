@@ -181,7 +181,7 @@ class SoundEditor : Window {
 	private enum int COL_FREQ_REL = BaseColor.lightgreen;
 	private enum int COL_FREQ_ABS = BaseColor.cyan;
 	private enum int GLYPH_BLOCK  = 197;
-	private enum int GLYPH_DOTS   = 176;   // CP437 light-shade "sparse dots" (scroll track)
+	private enum int GLYPH_DOTS   = 6 * 32 + 16;   // font glyph 208 — sparse dots (scroll track)
 
 	// §10.1 filter cutoff fill/line colour per active mode (b0 & 0x70), C64 palette
 	// indices in the standard order. -1 = no mode (filter off -> empty band).
@@ -1802,7 +1802,7 @@ class SoundEditor : Window {
 	// the plot's left edge, 1 cell of gap between them. Recomputed identically in the
 	// drawer and the click hit-test so they always agree.
 	private ZoomBtn[4] zoomButtons(ref Geo g) {
-		static immutable string[4] labels = ["[-]", "[+]", "[Fit]", "[Sel]"];
+		static immutable string[4] labels = ["[-]", "[+]", "[Fit]", "[Selection]"];
 		ZoomBtn[4] b;
 		int cx = g.plotX0px / FONT_X;
 		foreach(i; 0 .. 4) {
