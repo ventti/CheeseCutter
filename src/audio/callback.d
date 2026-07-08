@@ -97,7 +97,7 @@ extern(C) __gshared void audio_frame() nothrow {
 
 	// Update visualizer with current SID register state and player memory.
 	int playerStateOffset = (song.offsets.length > Offsets.SHTRANS) ? song.offsets[Offsets.SHTRANS] : 0;
-	audio.visualizer.updateSidRegisters(cast(ubyte[])sidreg[0..0x19], song.memspace, playerStateOffset);
+	audio.visualizer.updateSidRegisters(cast(ubyte[])sidreg[0..0x19], song.memspace, playerStateOffset, audio.audio.multiplier);
 
 	// if(com.session.debugMode) {
 	// 	dumpctr++;

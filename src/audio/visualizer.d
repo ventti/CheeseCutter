@@ -178,8 +178,12 @@ private void recordVoiceFrame(int v, const ubyte[] sidreg) nothrow {
  * Monitors control registers (0x04, 0x0b, 0x12) for gate changes.
  * Also reads current instrument numbers from player memory.
  */
-void updateSidRegisters(const ubyte[] sidreg, const ubyte[] playerMem, int playerStateOffset) nothrow {
+void updateSidRegisters(const ubyte[] sidreg, const ubyte[] playerMem, int playerStateOffset, int multiplier = 1) nothrow {
 	if(sidreg.length < 0x19) return;
+	// Player ticks per screen frame (multispeed). Phase lengths below are converted
+	// from the ms tables into TICKS (× mult) so the per-tick envelope advance covers
+	// the correct real time at any multiplier.
+	immutable int mult = max(1, multiplier);
 
 	// Store offset for debug
 	lastShinstOffset = playerStateOffset + 6;
@@ -239,8 +243,8 @@ void updateSidRegisters(const ubyte[] sidreg, const ubyte[] playerMem, int playe
 
 			// Calculate frame counts from actual SID timings
 			// Convert milliseconds to frames (at 50.125 Hz PAL)
-			voice.attackFrames = max(1, cast(int)(ATTACK_TIME_MS[attack] / MS_PER_FRAME));
-			voice.decayFrames = max(1, cast(int)(DECAY_RELEASE_TIME_MS[decay] / MS_PER_FRAME));
+			voice.attackFrames = max(1, cast(int)(ATTACK_TIME_MS[attack] / MS_PER_FRAME * mult));
+			voice.decayFrames = max(1, cast(int)(DECAY_RELEASE_TIME_MS[decay] / MS_PER_FRAME * mult));
 			voice.sustainLevel = sustain;
 			voice.deltaPerFrame = 1.0f / max(1, voice.attackFrames);
 		}
@@ -250,7 +254,7 @@ void updateSidRegisters(const ubyte[] sidreg, const ubyte[] playerMem, int playe
 			voice.state = EnvelopeState.Release;
 			voice.gateOn = false;
 			voice.targetBrightness = 0.0f;
-			voice.releaseFrames = max(1, cast(int)(DECAY_RELEASE_TIME_MS[release] / MS_PER_FRAME));
+			voice.releaseFrames = max(1, cast(int)(DECAY_RELEASE_TIME_MS[release] / MS_PER_FRAME * mult));
 			// Exponential release (reSID): start on the curve where the current level
 			// sits, so a release from a low level is proportionally faster.
 			voice.envElapsed = 0;
@@ -271,20 +275,27 @@ void updateSidRegisters(const ubyte[] sidreg, const ubyte[] playerMem, int playe
 		activeFilterRow = playerMem[playerStateOffset + 45] >> 2;
 	}
 
-	// §11.1: append this frame's real SID state to each voice's recording log.
-	for(int v = 0; v < 3; v++)
+	// Advance each voice's envelope ONE PLAYER TICK, then append this tick's real SID
+	// state to its recording log (§11.1). Advancing per tick (not per screen frame)
+	// with tick-scaled phase lengths keeps the recorded envelope a SMOOTH curve at any
+	// multiplier — sampling a per-screen-frame envelope per tick made a staircase.
+	for(int v = 0; v < 3; v++) {
+		advanceEnvelope(v);
 		recordVoiceFrame(v, sidreg);
+	}
 }
 
 /**
  * Call this each frame to update envelope states.
  */
-void updateVisualizerFrame() nothrow {
-	// Update each voice envelope
-	for(int v = 0; v < 3; v++) {
-		VoiceActivity* voice = &voices[v];
-
-		final switch(voice.state) {
+// Advance one voice's envelope by ONE player TICK along its current phase. Attack is
+// linear; decay/release follow the smooth exponential (expLevel). Phase lengths are in
+// TICKS (updateSidRegisters scales the ms tables by the multiplier), so calling this
+// once per player tick yields a smooth curve at any multiplier — the old per-screen-
+// frame advance, sampled per tick by the recording, drew a staircase at multispeed.
+private void advanceEnvelope(int v) nothrow {
+	VoiceActivity* voice = &voices[v];
+	final switch(voice.state) {
 		case EnvelopeState.Silent:
 			voice.brightness = 0.0f;
 			break;
@@ -340,10 +351,14 @@ void updateVisualizerFrame() nothrow {
 		}
 		}
 
-		// Clamp brightness
-		voice.brightness = max(0.0f, min(1.0f, voice.brightness));
-	}
+	// Clamp brightness
+	voice.brightness = max(0.0f, min(1.0f, voice.brightness));
+}
 
+// Called each SCREEN frame (frameDone). The per-tick envelope advance now lives in
+// updateSidRegisters, so this only aggregates the instrument/persistent brightness
+// from the already-advanced voice envelopes.
+void updateVisualizerFrame() nothrow {
 	// Update instrument brightness array (max brightness of all voices playing that instrument)
 	foreach(ref b; instrumentBrightness) {
 		b = 0.0f;
