@@ -55,6 +55,56 @@ private struct VoiceActivity {
 	int attackFrames = 2;
 	int decayFrames = 6;
 	int releaseFrames = 6;
+
+	// Decay/Release are EXPONENTIAL (reSID envelope.h:119-178): the envelope
+	// counter's decrement clock is divided by 1,2,4,8,16,30 as it falls through
+	// levels 255,93,54,26,14,6 — a piece-wise-linear approximation of an
+	// exponential. (Attack is strictly LINEAR.) We replay that curve over the
+	// per-nibble decay/release time: envElapsed = frames into the phase; envFrac0 =
+	// the curve fraction the phase STARTED at (0 for decay-from-peak; for release
+	// it's where the current level sits on the curve, so releasing from a low level
+	// is proportionally faster, as on the real chip).
+	int envElapsed = 0;
+	float envFrac0 = 0.0f;
+}
+
+// reSID decay/release envelope curve (envelope.h:119-178, envelope.cpp:146). The
+// counter decrements at 1/period the rate, period = 1,2,4,8,16,30 at counter levels
+// 255,93,54,26,14,6. Cumulative rate-periods to reach each level: 0,162,240,352,448,
+// 576,756. Normalising both axes gives the piece-wise curve level(fracOfFullTime):
+private immutable float[7] EXP_FRAC  = [
+	0.0f, 162.0f/756, 240.0f/756, 352.0f/756, 448.0f/756, 576.0f/756, 1.0f
+];
+private immutable float[7] EXP_LEVEL = [
+	1.0f, 93.0f/255, 54.0f/255, 26.0f/255, 14.0f/255, 6.0f/255, 0.0f
+];
+
+// Normalised envelope level (1..0) at fraction `frac` (0..1) of a full 255->0
+// decay/release, per the reSID curve above (piece-wise linear).
+private float expLevel(float frac) nothrow {
+	if(frac <= 0.0f) return 1.0f;
+	if(frac >= 1.0f) return 0.0f;
+	foreach(i; 0 .. 6) {
+		if(frac <= EXP_FRAC[i + 1]) {
+			float t = (frac - EXP_FRAC[i]) / (EXP_FRAC[i + 1] - EXP_FRAC[i]);
+			return EXP_LEVEL[i] + t * (EXP_LEVEL[i + 1] - EXP_LEVEL[i]);
+		}
+	}
+	return 0.0f;
+}
+
+// Inverse: the curve fraction at which the level equals `lvl` — where on the
+// exponential a release starting from a mid level begins.
+private float expLevelInv(float lvl) nothrow {
+	if(lvl >= 1.0f) return 0.0f;
+	if(lvl <= 0.0f) return 1.0f;
+	foreach(i; 0 .. 6) {
+		if(lvl >= EXP_LEVEL[i + 1]) {   // levels descend across the table
+			float t = (EXP_LEVEL[i] - lvl) / (EXP_LEVEL[i] - EXP_LEVEL[i + 1]);
+			return EXP_FRAC[i] + t * (EXP_FRAC[i + 1] - EXP_FRAC[i]);
+		}
+	}
+	return 1.0f;
 }
 
 private __gshared VoiceActivity[3] voices;
@@ -212,7 +262,10 @@ void updateSidRegisters(const ubyte[] sidreg, const ubyte[] playerMem, int playe
 			voice.gateOn = false;
 			voice.targetBrightness = 0.0f;
 			voice.releaseFrames = max(1, cast(int)(DECAY_RELEASE_TIME_MS[release] / MS_PER_FRAME));
-			voice.deltaPerFrame = -voice.brightness / max(1, voice.releaseFrames);
+			// Exponential release (reSID): start on the curve where the current level
+			// sits, so a release from a low level is proportionally faster.
+			voice.envElapsed = 0;
+			voice.envFrac0 = expLevelInv(voice.brightness);
 		}
 		// If gate is on and we're in sustain or other states, keep updating instrument
 		else if(gateOn && voice.state != EnvelopeState.Attack && voice.state != EnvelopeState.Decay) {
@@ -248,45 +301,54 @@ void updateVisualizerFrame() nothrow {
 			break;
 
 		case EnvelopeState.Attack:
+			// Attack is strictly LINEAR (reSID: the counter increments by 1 every
+			// rate period, no exponential division).
 			voice.brightness += voice.deltaPerFrame;
 			if(voice.brightness >= voice.targetBrightness) {
 				voice.brightness = voice.targetBrightness;
-				// Transition to decay
+				// Transition to (exponential) decay, starting at the top of the curve.
 				voice.state = EnvelopeState.Decay;
-				float sustainBrightness = voice.sustainLevel / 15.0f;
-				voice.targetBrightness = sustainBrightness;
-				if(voice.brightness > sustainBrightness) {
-					voice.deltaPerFrame = -(voice.brightness - sustainBrightness) / max(1, voice.decayFrames);
-				}
-				else {
-					// Already below sustain (shouldn't happen)
-					voice.state = EnvelopeState.Sustain;
-				}
+				voice.targetBrightness = voice.sustainLevel / 15.0f;
+				voice.envElapsed = 0;
+				voice.envFrac0 = 0.0f;
+				if(voice.brightness <= voice.targetBrightness)
+					voice.state = EnvelopeState.Sustain;   // sustain >= peak: nothing to decay
 			}
 			break;
 
-		case EnvelopeState.Decay:
-			voice.brightness += voice.deltaPerFrame;
-			if(voice.brightness <= voice.targetBrightness) {
-				voice.brightness = voice.targetBrightness;
+		case EnvelopeState.Decay: {
+			// Exponential decay toward the sustain level along the reSID curve;
+			// halt at sustain (the decay-to-sustain time is the matching portion).
+			voice.envElapsed++;
+			float sLvl = voice.sustainLevel / 15.0f;
+			float lvl = expLevel(cast(float)voice.envElapsed / max(1, voice.decayFrames));
+			if(lvl <= sLvl) {
+				voice.brightness = sLvl;
 				voice.state = EnvelopeState.Sustain;
-				voice.deltaPerFrame = 0.0f;
 			}
+			else voice.brightness = lvl;
 			break;
+		}
 
 		case EnvelopeState.Sustain:
 			// Hold at sustain level
 			voice.brightness = voice.sustainLevel / 15.0f;
 			break;
 
-		case EnvelopeState.Release:
-			voice.brightness += voice.deltaPerFrame;
-			if(voice.brightness <= 0.0f) {
+		case EnvelopeState.Release: {
+			// Exponential release along the reSID curve, continuing from the fraction
+			// the current level sat at (envFrac0). Advancing 1/releaseFrames per frame
+			// makes a release from a low level proportionally faster (as on the chip).
+			voice.envElapsed++;
+			float frac = voice.envFrac0 + cast(float)voice.envElapsed / max(1, voice.releaseFrames);
+			float lvl = expLevel(frac);
+			voice.brightness = lvl;
+			if(frac >= 1.0f || lvl <= 0.0f) {
 				voice.brightness = 0.0f;
 				voice.state = EnvelopeState.Silent;
-				voice.deltaPerFrame = 0.0f;
 			}
 			break;
+		}
 		}
 
 		// Clamp brightness
