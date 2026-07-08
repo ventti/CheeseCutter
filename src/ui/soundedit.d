@@ -246,6 +246,13 @@ class SoundEditor : Window {
 	// = the auto-fitted post-trigger span (frames); totalFrames = pre-roll + visFrames.
 	private int visFrames = MIN_VIS;
 	private int totalFrames = RESTART_FRAMES + MIN_VIS;
+	// §17/left-edge fix: the restart pre-roll is only as wide as the ACTUAL restart
+	// phase for this instrument (restartFramesFor(ins), ~2-3 ticks) — NOT a fixed
+	// RESTART_FRAMES=10. So the note data begins right at the plot's left edge with
+	// just a thin restart strip before the trigger, instead of ~19% of the width.
+	// Recomputed per draw in update() (where ins is known) and used as the axis lower
+	// bound everywhere (fit / clamp / total / ADSR restart wash / scrollbar).
+	private int prerollTicks = 2;
 
 	// §16.2 real-time axis, refreshed at the top of update() from the live player
 	// multiplier: tickMs = the real duration of one axis index (one player tick), and
@@ -450,14 +457,14 @@ class SoundEditor : Window {
 	// v12 default, and what [Fit]/Home restore. Recomputed whenever !userZoomed so the
 	// axis keeps auto-fitting as the instrument/recording changes.
 	private void fitViewport() {
-		viewStartTick = -RESTART_FRAMES;
+		viewStartTick = -prerollTicks;
 		viewEndTick = visFrames;
 	}
 
 	// §17.1 Clamp the (user) viewport within [-RESTART_FRAMES, visFrames] and enforce
 	// the MIN_VIEW_SPAN floor, keeping the view centre where possible.
 	private void clampViewport() {
-		double lo = -RESTART_FRAMES;
+		double lo = -prerollTicks;
 		double hi = visFrames;
 		double full = hi - lo;
 		if(full <= MIN_VIEW_SPAN) { viewStartTick = lo; viewEndTick = hi; return; }
@@ -563,7 +570,8 @@ class SoundEditor : Window {
 		// then thread visFrames/totalFrames through xForFrame + every band so they all
 		// share the exact same zoom (they'd misalign if recomputed per band).
 		visFrames = computeVisFrames(ins);
-		totalFrames = RESTART_FRAMES + visFrames;
+		prerollTicks = restartFramesFor(ins);   // thin restart strip -> graphs start at the left edge
+		totalFrames = prerollTicks + visFrames;
 
 		// §17.1 refresh the viewport over the (possibly changed) note extent: keep the
 		// user's zoom until they hit Fit, else auto-fit to the whole note. Then derive
@@ -991,7 +999,7 @@ class SoundEditor : Window {
 		// when the user has panned/zoomed past the trigger).
 		ubyte rst = song.instrumentTable[ins + 2 * 48];
 		int plotEndPx = g.plotX0px + g.plotWpx;
-		int preX0 = xForFrame(g, -RESTART_FRAMES);
+		int preX0 = xForFrame(g, -prerollTicks);
 		int preX1 = xForFrame(g, 0);
 		if(preX1 > preX0 && preX0 < plotEndPx && preX1 > g.plotX0px) {
 			video.olFillRect(preX0, topPx, preX1 - preX0, h, 16); // dim gradient wash
@@ -1852,10 +1860,10 @@ class SoundEditor : Window {
 	private void scrollThumbCells(ref Geo g, out int x0, out int x1) {
 		int trackX0, trackW;
 		scrollTrackCells(g, trackX0, trackW);
-		double full = cast(double)visFrames - (-RESTART_FRAMES);
+		double full = cast(double)visFrames - (-prerollTicks);
 		if(full < 1e-6) full = 1;
-		double f0 = (viewStartTick - (-RESTART_FRAMES)) / full;
-		double f1 = (viewEndTick   - (-RESTART_FRAMES)) / full;
+		double f0 = (viewStartTick - (-prerollTicks)) / full;
+		double f1 = (viewEndTick   - (-prerollTicks)) / full;
 		if(f0 < 0) f0 = 0;
 		if(f1 > 1) f1 = 1;
 		x0 = trackX0 + cast(int)lround(f0 * trackW);
@@ -1874,7 +1882,7 @@ class SoundEditor : Window {
 		double frac = (cellX + 0.5 - trackX0) / trackW;
 		if(frac < 0) frac = 0;
 		if(frac > 1) frac = 1;
-		return -RESTART_FRAMES + frac * (cast(double)visFrames - (-RESTART_FRAMES));
+		return -prerollTicks + frac * (cast(double)visFrames - (-prerollTicks));
 	}
 
 	// §17.4 Draw the scrollbar: a dim darkgray track across the whole plot width, with the
@@ -1900,7 +1908,7 @@ class SoundEditor : Window {
 	private int snapPixelToTick(ref Geo g, int cellX) {
 		int px = cellX * FONT_X + FONT_X / 2;
 		int t = cast(int)lround(tickForPixel(g, px));
-		if(t < -RESTART_FRAMES) t = -RESTART_FRAMES;
+		if(t < -prerollTicks) t = -prerollTicks;
 		if(t > visFrames) t = visFrames;
 		return t;
 	}
