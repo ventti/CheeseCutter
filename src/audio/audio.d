@@ -10,6 +10,7 @@ import audio.resid.filter;
 import audio.player;
 import audio.callback;
 static import audio.remote;
+static import audio.visualizer;
 import std.stdio;
 import core.stdc.stdlib;
 import core.stdc.string;
@@ -31,12 +32,18 @@ __gshared short* mixbuf = null;
 // per-frame gate-bit timeline of the played voice. Written by the audio callback
 // (audio_callback_2), read by the UI scope draw. No lock — like sidreg, minor
 // tearing between the two threads is visually harmless.
-enum CAPTURE_SECONDS = 3;
+// §16 START-alignment: reserve a few extra blocks so the pre-gate hard/soft-restart
+// phase (captured before the note's gate goes high) fits ahead of the audible onset.
+enum int CAPTURE_LEAD_FRAMES = 16;
 __gshared short[] captureBuf;      // recorded samples
 __gshared ubyte[] captureGate;     // gate bit (0/1), one per captureFrameSamples block
 __gshared int captureCap;          // buffer capacity in samples
 __gshared int captureLen;          // samples recorded so far
 __gshared int captureGateLen;      // gate entries recorded so far
+__gshared int captureOnsetSample;  // §16 sample offset in captureBuf of the FIRST
+                                   // gate-high block = the audible onset. Maps to
+                                   // axis tick 0 (== rec* frame 0, reset on the same
+                                   // gate 0->1 edge). -1 until the gate first opens.
 __gshared bool capturing;
 __gshared int captureVoice;        // SID voice (0..2) whose gate we track
 __gshared int captureFrameSamples; // samples per gate entry (= callbackInterval)
@@ -48,18 +55,26 @@ __gshared bool captureWasLoud;     // §16.3: seen an audibly-loud block yet? Th
 
 // Begin recording the given voice's keyjam note from scratch.
 void captureStart(int voice) {
-	int cap = freq * CAPTURE_SECONDS;
+	captureVoice = (voice < 0 || voice > 2) ? 0 : voice;
+	captureFrameSamples = callbackInterval > 0 ? callbackInterval : (freq / framerate);
+	// §16 END-alignment: size the capture to the SAME window (in player ticks) the
+	// rec* visualizer arrays hold (RECORD_FRAMES), so the Output waveform spans the
+	// note's full recorded extent at ANY multiplier — instead of a fixed
+	// CAPTURE_SECONDS that truncated long/held notes (a 12 s note stopped at 3 s).
+	// Sizing by ticks (not seconds) keeps it mult-correct: captureFrameSamples already
+	// scales with the multiplier, so the same tick count covers the same rec window.
+	int capFrames = audio.visualizer.RECORD_FRAMES + CAPTURE_LEAD_FRAMES;
+	int cap = captureFrameSamples * capFrames;
 	if(cast(int)captureBuf.length != cap) {
 		captureBuf.length = cap;
-		captureGate.length = cap / (freq / 50) + 4;   // one per frame block
+		captureGate.length = capFrames + 4;   // one gate entry per captured block
 	}
 	captureCap = cap;
 	captureLen = 0;
 	captureGateLen = 0;
 	captureSilenceRun = 0;
 	captureWasLoud = false;
-	captureVoice = (voice < 0 || voice > 2) ? 0 : voice;
-	captureFrameSamples = callbackInterval > 0 ? callbackInterval : (freq / framerate);
+	captureOnsetSample = -1;
 	capturing = true;
 }
 void captureStop() nothrow { capturing = false; }
@@ -73,8 +88,16 @@ private void captureBlock(short* block, int n) nothrow {
 	if(captureLen + n > captureCap) n = captureCap - captureLen;
 	memcpy(captureBuf.ptr + captureLen, block, n * short.sizeof);
 	captureLen += n;
+	int gbit = sidreg[4 + captureVoice*7] & 1;
 	if(captureGateLen < cast(int)captureGate.length)
-		captureGate[captureGateLen++] = cast(ubyte)(sidreg[4 + captureVoice*7] & 1);
+		captureGate[captureGateLen++] = cast(ubyte)gbit;
+	// §16 START-alignment: the FIRST gate-high block is the note's audible onset — the
+	// audio rendered from the tick that opened the gate, the same tick rec* frame 0 is
+	// recorded on. Everything before it is the hard/soft-restart pre-roll (gate low).
+	// Remember its sample offset so the Output band can put it at axis tick 0, aligned
+	// with the ADSR/Freq/Pulse/Filter/Gate bands (which begin at that gate 0->1 edge).
+	if(gbit && captureOnsetSample < 0)
+		captureOnsetSample = captureLen - n;
 	// Stop once the note has decayed to silence (after a minimum record length):
 	// the recording ends at the release tail instead of padding to CAPTURE_SECONDS.
 	int peak = 0;

@@ -856,15 +856,24 @@ class SoundEditor : Window {
 		short* buf = audio.audio.captureBuf.ptr;
 		int total = audio.audio.captureLen;
 		int fs = audio.audio.captureFrameSamples;
-		// §16.2/§16.3 samples-per-second of the capture and samples-per-tick on the
-		// SHARED real-time axis: one axis tick spans `spTick` samples (== fs, the
-		// recorded stride, but derived from real time so it is robust to any tick/
-		// multiplier). visFrames ticks therefore cover `span` samples of the window.
+		// §16 START-alignment: captureBuf begins at note-trigger, but its first frames are
+		// the pre-gate hard/soft-restart phase (gate low). The rec* bands reset at the gate
+		// 0->1 edge, so their frame 0 == the audible ONSET. `onset` is that onset's sample
+		// offset in captureBuf; mapping axis tick 0 -> sample `onset` puts the Output
+		// waveform's start at the SAME x as the other bands (was shifted right by the
+		// restart pre-roll, ~3 frames / 60 ms).
+		int onset = audio.audio.captureOnsetSample;
+		if(onset < 0) onset = 0;
+		// §16.2/§16.3 samples-per-tick on the SHARED real-time axis: one axis tick spans
+		// `spTick` samples (== fs, the recorded stride, but derived from real time so it is
+		// robust to any tick/multiplier). The window of interest is the visFrames ticks
+		// AFTER the onset, clamped to what was actually recorded.
 		int sfreq = audio.audio.freq;
 		double spTick = sfreq * (tickMs / 1000.0);   // samples per axis tick (== fs)
-		int span = spTick > 0 ? cast(int)(visFrames * spTick) : total;
-		if(span > total) span = total;
-		if(buf is null || fs < 1 || spTick < 1.0 || span < 2) {
+		int winSamples = spTick > 0 ? cast(int)(visFrames * spTick) : (total - onset);
+		int spanEnd = onset + winSamples;
+		if(spanEnd > total) spanEnd = total;
+		if(buf is null || fs < 1 || spTick < 1.0 || onset >= total || spanEnd - onset < 2) {
 			// Flat baseline when nothing has been recorded (headless / song playback).
 			video.olHLine(noteX0px, plotEndPx - 1, mid, COL_AXIS);
 			return;
@@ -879,7 +888,7 @@ class SoundEditor : Window {
 		// This auto-gain is CORRECT here (raw-sample level is arbitrary) — see §15.4; the
 		// ADSR/Freq/Pulse/Filter bands, being absolute quantities, are NOT auto-gained.
 		int peak = 0;
-		foreach(s; 0 .. span) {
+		foreach(s; onset .. spanEnd) {
 			int a = buf[s]; if(a < 0) a = -a;
 			if(a > peak) peak = a;
 		}
@@ -902,8 +911,10 @@ class SoundEditor : Window {
 			double t1 = tickForPixel(g, x + 1);
 			if(t0 < 0) t0 = 0;
 			if(t1 <= t0) t1 = t0 + (viewEndTick - viewStartTick) / g.plotWpx;
-			int s0 = cast(int)(t0 * spTick);
-			int s1 = cast(int)(t1 * spTick);
+			// §16 map axis time -> captureBuf, shifted past the pre-gate restart phase so
+			// tick 0 == the audible onset (== rec* frame 0).
+			int s0 = onset + cast(int)(t0 * spTick);
+			int s1 = onset + cast(int)(t1 * spTick);
 			if(s0 >= total) {           // past the recording → flat baseline
 				video.olPoint(x, mid, COL_AXIS);
 				continue;

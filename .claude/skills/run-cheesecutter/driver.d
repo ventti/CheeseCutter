@@ -314,9 +314,16 @@ private bool processCommand(string arg) {
 			int ticks = p[2].length ? to!int(p[2]) : 120;
 			press(keySpec);                              // arm keyjam note + capture
 			audio.audio.renderKeyjamCapture(ticks);
-			stderr.writefln("jamrender key=%s ticks=%d capLen=%d gateLen=%d",
+			// Count leading gate=0 frames (hard-restart pre-gate) + first gate-high.
+			int lead = 0;
+			foreach(gi; 0 .. audio.audio.captureGateLen) {
+				if(audio.audio.captureGate[gi] != 0) break;
+				lead++;
+			}
+			stderr.writefln("jamrender key=%s ticks=%d capLen=%d gateLen=%d fs=%d leadGate0=%d gateHighSample=%d",
 							keySpec, ticks, audio.audio.captureLen,
-							audio.audio.captureGateLen);
+							audio.audio.captureGateLen, audio.audio.captureFrameSamples,
+							lead, lead * audio.audio.captureFrameSamples);
 			break;
 		}
 		case "scopefill":
@@ -434,7 +441,11 @@ private bool processCommand(string arg) {
 			foreach(i; 0 .. 48) {
 				ubyte ad = song.instrumentTable[i];
 				ubyte sr = song.instrumentTable[i + 48];
-				stderr.writefln("ins%02X: AD=%02x SR=%02x R=%X", i, ad, sr, sr & 0x0f);
+				ubyte rst = song.instrumentTable[i + 2 * 48];
+				string rstkind = (rst & 0xc0) == 0x80 ? "HARD"
+					: (rst & 0xc0) == 0x40 ? "soft" : "3fr";
+				stderr.writefln("ins%02X: AD=%02x SR=%02x R=%X rst=%02x(%s)",
+					i, ad, sr, sr & 0x0f, rst, rstkind);
 			}
 			break;
 		}

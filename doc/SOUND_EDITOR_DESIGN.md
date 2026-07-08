@@ -887,6 +887,28 @@ waveform shape, not a blocky/aliased line) and begins at the trigger, running
 forward, zoomed to fit; (4) mult=1 tunes still correct (no regression); (5) restart
 pre-roll kept and aligned. Cross-check at mult=1 and mult=2. Read-only.
 
+### 16.6 Output-band time-origin + extent alignment fix (2026-07-08)
+Two residual Output-vs-bands desyncs found by measuring (recdump + captureGate +
+jamrender), both now fixed. Still read-only.
+
+- **START (waveform began too far RIGHT).** `captureBuf` is armed at note-trigger
+  in `playNote`, so `captureBuf[0]` is the *hard/soft-restart pre-roll* (gate low),
+  ~3 frames of near-silence before the gate opens. But the `rec*` bands reset on the
+  gate 0→1 edge, so *their* frame 0 is the audible onset. Mapping both index-0 to
+  axis tick 0 drew the Output's onset ~3 frames (~60 ms) right of the bands.
+  Fix: `audio.audio.captureBlock` records `captureOnsetSample` = the sample offset of
+  the FIRST gate-high block; the Output band maps axis tick 0 → that onset sample, so
+  the waveform starts at the trigger, aligned with ADSR/Freq/Pulse/Gate.
+- **END (waveform stopped ~⅓ across on a long note).** The capture was capped at a
+  fixed `CAPTURE_SECONDS`(=3 s), so a 12 s held note truncated at 3 s while the bands
+  and view continued. Fix: `captureStart` sizes the buffer to the SAME window (in
+  player ticks) the `rec*` arrays hold (`visualizer.RECORD_FRAMES`), so it spans the
+  note's full recorded extent at ANY multiplier (tick-based, not seconds → mult-
+  correct). The self-stop-at-silence (§16.3) still trims decaying notes to their true
+  audible end, matching `getRecordedAmpEnd`-fitted view. Also fixed a latent
+  `captureGate` under-allocation at multiplier>1 (sized by `freq/50`, not the actual
+  per-block stride).
+
 ---
 
 ## 17. Zoomable/pannable viewport: selection, scrollbar, zoom controls (2026-07-08 v12)
