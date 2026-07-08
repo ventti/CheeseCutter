@@ -239,6 +239,14 @@ final package class Toplevel : WindowSwitcher, Undoable {
 				activeWindow.clickedAt(x, y, b, clicks);
 			}
 		}
+		// While the Sound Editor owns the screen it is the ONLY window in `windows`;
+		// the classic tracker's bottom tables (bottomTabSwitcher, a direct field NOT
+		// in `windows`) and the header hotspots are hidden behind it. They must not
+		// receive clicks — otherwise a click over a hidden hex table's saved area
+		// still hits it (its full-screen area overlaps), firing showByteDescription
+		// ("Byte N: ...") and hotspot actions over the Sound Editor. Same root cause
+		// as the §13.1 refresh() leak: these targets weren't gated on soundEditorActive.
+		if(soundEditorActive) return;
 		foreach(idx, win; bottomTabSwitcher.windows) {
 			if(win.area.overlaps(x, y)) {
 				bottomTabSwitcher.activateWindow(idx);
