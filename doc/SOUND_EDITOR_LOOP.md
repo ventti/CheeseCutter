@@ -619,3 +619,31 @@ Tech-debt to address in P6 polish (non-blocking, from verifiers):
   - Ran `make map` — idempotent (ARCHITECTURE.md unchanged; no synopsis/dep-edge change). No
     shortcut/CLI/flag/help-registry change -> no KEYBOARD.md / man-page regen needed.
     NOT done: data editing / write-back / undo (P4+, still read-only).
+
+- (v11 PHASE A — HEADLESS WAVEFORM CAPTURE, §16.4 2026-07-08) Still READ-ONLY. Makes the Output
+  band's `captureBuf` fillable with NO audio device so the waveform is screenshottable headless
+  (prior Output fixes were blind: the `ff:`/dummy-driver path never runs `sid_fillbuffer` + the
+  capture-copy, so `captureBuf` stayed flat). NO Sound Editor axis/band/render code touched (that
+  is Phase B/C). Files:
+  - `src/audio/audio.d` — factored the capture-copy block (samples + gate bit + decay-to-silence
+    stop) out of `audio_callback_2` into a shared `private void captureBlock(short*, int) nothrow`
+    (callback behavior identical); added `void renderKeyjamCapture(int ticks)` — the offline
+    capture path. With `SDL_LockAudio` held (mirrors `renderPcm`/`fastForward` device handling),
+    it runs `ticks` iterations of the SAME per-tick loop the live callback uses:
+    `sid_fillbuffer(mixbuf, callbackInterval, cyclesPerFrame)` -> `captureBlock` -> `audio_frame()`,
+    filling BOTH `captureBuf` (Output) and the `rec*` visualizer arrays deterministically. No song
+    writes.
+  - `.claude/skills/run-cheesecutter/driver.d` — added `jamrender:<key>,<ticks>` (default 120):
+    presses the keyjam piano key via the normal `press()`/keypress -> `playNote` path (arms the
+    note + `captureStart`), then calls `audio.audio.renderKeyjamCapture(ticks)`; prints capLen/
+    gateLen. Added its `--help` line. Read-only.
+  - Build: `make -f Makefile.mac clean && make -f Makefile.mac -j4 ccutter ccdriver` -> exit 0,
+    both binaries (ccutter 7531032, ccdriver 7571128).
+  - VERIFIED headless (dummy SDL): `load:tunes/vent-arkijuusto.ct key:ESC key:Ctrl-e key:+ key:+
+    key:+ key:+ jamrender:q,120 tick:2 shot:/tmp/se-phaseA.png` -> capLen=12479 gateLen=26; the
+    Output band shows a NON-FLAT triangle envelope (ins 04 Flute, wave=tri): ramps from the
+    trigger, peaks, decays. A second shot (`key:+ key:+ jamrender:e,200` -> /tmp/se-phaseA-2.png,
+    capLen=15839 gateLen=33) shows a DIFFERENT Output shape (ins 02 Basari, note e): fast attack,
+    longer sustained decay — confirms the waveform is real and varies with instrument/note.
+    The whole point (SEE the waveform, not reason about it) is achieved.
+  - NOT done: §16.2/16.3 shared-axis + pixel-accurate Output re-alignment (Phase B/C); editing (P4+).

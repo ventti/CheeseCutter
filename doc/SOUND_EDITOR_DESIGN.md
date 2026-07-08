@@ -822,3 +822,67 @@ rises steadily (a note that only reaches 37% shows a ramp to 37%, not to the top
 Verify: play the triangle (AD FF) — the ADSR curve rises gradually across the
 attack (not an instant jump to full); a shorter/faster-attack note rises faster;
 the curve height reflects the true envelope level (cross-check the hover Env%).
+
+---
+
+## 16. Proper fix: real-time shared axis + headless waveform verification (2026-07-08 v11)
+
+Root-caused the "graphs not synchronized" / triangle failure. Still read-only re:
+song data. This REPLACES the ad-hoc frame handling with one consistent time axis
+and — critically — makes the Output waveform VERIFIABLE headless (prior fixes were
+blind: the fast-forward path never fills `captureBuf`).
+
+### 16.1 Root cause (why it desyncs, esp. at multiplier>1)
+Two different "frame" clocks are conflated:
+- **Player tick**: one `audio_frame()` call; runs `multiplier`× per screen frame
+  (`callback.d:85-90`).
+- **Screen frame**: 50 Hz (`FRAME_MS=19.95ms`).
+Indexing by data source: the recorded bands (`recAmp/recFreq/...`, `visualizer.d:
+118-134`), the Output `captureBuf` (`audio.d:183-191`), and the playhead
+(`recLen`) are all per **TICK**; but `FRAME_MS`, the ADSR ms→frames conversion,
+the restart pre-roll, the envelope FSM (`updateVisualizerFrame`, once per screen
+frame) and the "~X s" scale label are per **SCREEN FRAME**. At `multiplier==1`
+they coincide (works); at `multiplier==2` (e.g. tunes/vent-arkijuusto.ct) ticks
+run 2× frames → the scale/ADSR-sim/restart geometry is at half the recorded bands'
+scale and the label reads ~2× long. That is the desync.
+
+### 16.2 Fix: map the shared axis in REAL TIME
+Every band converts its native unit to a common time base (seconds/ms from the
+note trigger), then to pixels; `xForFrame` becomes `xForTime` (or a tick axis with
+the correct tick duration). Conversions:
+- **tick duration** `= 1 / (framerate × multiplier)` s. Recorded bands/playhead:
+  `t = tickIndex × tickDuration`.
+- **Output** samples: `t = sampleIndex / freq`.
+- **ADSR ms tables / restart / label**: already real time.
+Keep the restart pre-roll strip (user choice) but scale it in the SAME time unit
+so it lines up with the bands. Fix the scale label to real seconds (multiplier-
+correct). Zoom = total note time ÷ plot width; zoom out to fit (default).
+
+### 16.3 Output band: pixel-accurate AND time-aligned
+For each horizontal pixel column, compute its time range `[t0,t1)`, map to samples
+`[t0×freq, t1×freq)` in `captureBuf`, draw min/max of those samples (classic
+per-pixel oscilloscope). This is pixel-accurate (shows the real waveform detail)
+AND time-aligned with the per-tick bands (both via real time). Waveform begins at
+the trigger (just inside the pre-roll) and runs forward; flat past the recording.
+Keep the peak auto-gain (raw-sample level is arbitrary).
+
+### 16.4 Headless waveform verification (STOP fixing blind)
+The offline `audio.player.renderPcm` (player.d:278) drives `sid_fillbuffer +
+audio_frame` with the SDL device locked/paused, matching live playback. Add a
+read-only offline capture path reusing that pattern: a helper (in audio.audio /
+player) that, for a keyjam note, runs N ticks of `sid_fillbuffer → capture copy
+(the `capturing` block from audio_callback_2) → audio_frame`, filling BOTH
+`captureBuf` (Output) and the `rec*` arrays deterministically with NO audio
+device. Expose via a ccdriver command (e.g. `jamrender:<key>,<ticks>`). Then
+ccdriver can screenshot the ACTUAL Output waveform headless → the fix is verified
+by SEEING it, not reasoning about it. (Test-support + read-only; no song writes.)
+
+### 16.5 Verify (v11)
+Build the render path first; confirm a keyjam note produces a VISIBLE, detailed
+Output waveform in a headless screenshot. Then: (1) the scale label shows correct
+real seconds at mult=2 (not 2× long); (2) a vertical probe/playhead at time T hits
+the same instant in the Output waveform AND the ADSR/Freq bands (the waveform's
+amplitude envelope tracks the ADSR curve); (3) the Output is pixel-accurate (real
+waveform shape, not a blocky/aliased line) and begins at the trigger, running
+forward, zoomed to fit; (4) mult=1 tunes still correct (no regression); (5) restart
+pre-roll kept and aligned. Cross-check at mult=1 and mult=2. Read-only.

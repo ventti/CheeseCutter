@@ -147,6 +147,8 @@ private void usage(File f) {
 "  play             start playback (player.start)\n" ~
 "  mult:<n>         set the multispeed multiplier (1..16)\n" ~
 "  ff:<n>           advance playback n*16 frames (synchronous; no audio device)\n" ~
+"  jamrender:<k>,<t>  press keyjam key k, then offline-render t player ticks so the\n" ~
+"                   Output waveform (captureBuf) fills headless (default t=120)\n" ~
 "  scopefill:[n]    fill the reSID mix buffer via the real audio callback (n reps,\n" ~
 "                   default 4) so the oscilloscope overlay shows a waveform headless\n" ~
 "  frames:<n>       render n UI frames\n" ~
@@ -300,6 +302,23 @@ private bool processCommand(string arg) {
 		case "ff":
 			audio.player.fastForward(to!int(val));   // val*16 frames
 			break;
+		case "jamrender": {
+			// jamrender:<key>,<ticks> — press a keyjam piano key (arms the note +
+			// capture via the normal keypress -> playNote path), then run the OFFLINE
+			// capture (audio.audio.renderKeyjamCapture) for <ticks> player ticks. Under
+			// dummy audio the SDL callback never fires, so captureBuf/rec* would stay
+			// empty; this fills them deterministically so the Sound Editor's Output
+			// waveform is screenshottable headless. Read-only re: song data.
+			auto p = val.findSplit(",");
+			string keySpec = p[0];
+			int ticks = p[2].length ? to!int(p[2]) : 120;
+			press(keySpec);                              // arm keyjam note + capture
+			audio.audio.renderKeyjamCapture(ticks);
+			stderr.writefln("jamrender key=%s ticks=%d capLen=%d gateLen=%d",
+							keySpec, ticks, audio.audio.captureLen,
+							audio.audio.captureGateLen);
+			break;
+		}
 		case "scopefill":
 			// Fill the reSID mix buffer (audio.audio.mixbuf) by driving the REAL
 			// audio callback path — sid_fillbuffer + audio_frame, exactly as the

@@ -59,6 +59,52 @@ void captureStart(int voice) {
 }
 void captureStop() nothrow { capturing = false; }
 
+// Record one freshly-mixed block (`n` samples at `block`) into the keyjam capture:
+// copy the samples, append the played voice's gate bit, and apply the decay-to-
+// silence stop. Shared by the live callback (audio_callback_2) and the offline
+// renderKeyjamCapture path so both record identically. No-op unless capturing.
+private void captureBlock(short* block, int n) nothrow {
+	if(!capturing || captureLen >= captureCap) return;
+	if(captureLen + n > captureCap) n = captureCap - captureLen;
+	memcpy(captureBuf.ptr + captureLen, block, n * short.sizeof);
+	captureLen += n;
+	if(captureGateLen < cast(int)captureGate.length)
+		captureGate[captureGateLen++] = cast(ubyte)(sidreg[4 + captureVoice*7] & 1);
+	// Stop once the note has decayed to silence (after a minimum record length):
+	// the recording ends at the release tail instead of padding to CAPTURE_SECONDS.
+	int peak = 0;
+	for(int k = 0; k < n; k++) {
+		int a = block[k]; if(a < 0) a = -a;
+		if(a > peak) peak = a;
+	}
+	enum int SILENCE = 200;
+	if(peak < SILENCE) captureSilenceRun += n; else captureSilenceRun = 0;
+	if((captureLen > freq / 4 && captureSilenceRun > freq / 6)
+	   || captureLen >= captureCap) capturing = false;
+}
+
+// Offline (no audio device) keyjam-note capture. With the SDL callback locked out,
+// runs `ticks` player ticks of the SAME per-tick loop audio_callback_2 uses —
+// sid_fillbuffer -> captureBlock (samples+gate) -> audio_frame — filling BOTH
+// captureBuf (the Output scope) and the rec* visualizer arrays deterministically,
+// exactly as a real device would. Requires a keyjam note to have armed capture
+// (via playNote/captureStart) first; otherwise captureBlock is a no-op. This is
+// what makes the Output waveform verifiable headless (the ff:/dummy paths never
+// fill captureBuf). Read-only re: song data — mirrors renderPcm's device handling.
+void renderKeyjamCapture(int ticks) {
+	if(!audioInited || mixbuf is null || ticks < 1) return;
+	int interval = callbackInterval > 0 ? callbackInterval : (freq / framerate);
+	if(interval < 1) return;
+	if(interval > bufferSize * MIXBUF_MUL) interval = bufferSize * MIXBUF_MUL;
+	SDL_LockAudio();   // keep the device callback off the engine during the render
+	for(int i = 0; i < ticks; i++) {   // captureBlock self-stops at the release tail
+		int t = sid_fillbuffer(mixbuf, interval, audio.callback.cyclesPerFrame);
+		captureBlock(mixbuf, t);
+		audio_frame();
+	}
+	SDL_UnlockAudio();
+}
+
 
 extern(C) {
 	extern __gshared char[0x19] sidreg;
@@ -184,26 +230,7 @@ extern(C) {
 			int prevUsed = bufferUsed;
 			t = sid_fillbuffer(mixbuf+bufferUsed, callbackInterval, cyclesPerFrame);
 			// Record the fresh block into the keyjam capture (samples + gate bit).
-			if(capturing && captureLen < captureCap) {
-				int n = t;
-				if(captureLen + n > captureCap) n = captureCap - captureLen;
-				memcpy(captureBuf.ptr + captureLen, mixbuf + prevUsed, n * short.sizeof);
-				captureLen += n;
-				if(captureGateLen < cast(int)captureGate.length)
-					captureGate[captureGateLen++] = cast(ubyte)(sidreg[4 + captureVoice*7] & 1);
-				// Stop once the note has decayed to silence (after a minimum
-				// record length): the recording ends at the release tail instead
-				// of padding to the full CAPTURE_SECONDS.
-				int peak = 0;
-				for(int k = 0; k < n; k++) {
-					int a = mixbuf[prevUsed + k]; if(a < 0) a = -a;
-					if(a > peak) peak = a;
-				}
-				enum int SILENCE = 200;
-				if(peak < SILENCE) captureSilenceRun += n; else captureSilenceRun = 0;
-				if((captureLen > freq / 4 && captureSilenceRun > freq / 6)
-				   || captureLen >= captureCap) capturing = false;
-			}
+			captureBlock(mixbuf + prevUsed, t);
 			bufferUsed += t;
 			(*callback)();
 		}
