@@ -191,6 +191,15 @@ Keypad / *..............Lower / raise the base octave
 Up / Down...............Move the parameter cursor (display-only)
 Ctrl-E..................Exit back to the classic editor
 
+`+dView / zoom (mouse-first; the graphs zoom + pan)
+
+Drag on the plot........Mark a tick-snapped selection
+[-] [+] [Fit] [Sel].....Zoom out / in / whole note / to selection
+Left / Right............Pan the view (~1/4 window)
+Home....................Fit (show the whole note)
+End.....................Zoom to the current selection
+Backspace...............Clear the selection
+
 `+dPlayback
 
 F1 / F2 / F3............Play from mark / start / cursor

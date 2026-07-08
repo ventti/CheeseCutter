@@ -886,3 +886,58 @@ amplitude envelope tracks the ADSR curve); (3) the Output is pixel-accurate (rea
 waveform shape, not a blocky/aliased line) and begins at the trigger, running
 forward, zoomed to fit; (4) mult=1 tunes still correct (no regression); (5) restart
 pre-roll kept and aligned. Cross-check at mult=1 and mult=2. Read-only.
+
+---
+
+## 17. Zoomable/pannable viewport: selection, scrollbar, zoom controls (2026-07-08 v12)
+
+Still read-only. Builds on the v11 real-time axis. Goal: inspect the resulting
+audio at arbitrary zoom — mark a tick-snapped selection and zoom to it, pan with a
+scrollbar, and zoom in/out/fit via subtle controls.
+
+### 17.1 Viewport model
+Introduce a view window `[viewStartTick, viewEndTick]` over the shared tick axis
+(ticks = the v11 unit; tick duration = 1/(framerate×multiplier)). `xForTime`/the
+axis maps the VIEWPORT (not always the whole note) across `plotWpx`. Default view
+= **fit** = the whole note incl. the restart pre-roll (the current auto-fit). Zoom
+in = narrow the viewport; pan = slide it. All bands/playhead/markers/loop lines/
+probe already go through the one axis, so they follow zoom+pan for free. Clamp the
+viewport to `[-restartFrames, totalNoteTicks]`; min view span a few ticks.
+
+### 17.2 Selection (tick-snapped)
+Left-drag on the plot marks a selection `[selStartTick, selEndTick]`, each edge
+**snapped to the tick grid** (one tick per frame at 1×, two at 2×, i.e. the native
+recording rate). Draw it as a subtle translucent highlight band across the whole
+stack, with its tick/ms range shown (reuse the probe readout area). Distinguish
+from hover: no-button motion = hover probe (v9); button-held drag = selection.
+Click without drag (or Esc) clears the selection.
+
+### 17.3 Zoom controls (subtle, mouse-first — keyjam owns the letter keys)
+A compact control row (near the scrollbar) with clickable buttons, drawn subtly:
+`[-]` zoom out, `[+]` zoom in (centered on the view center or the selection),
+`[Fit]` reset to the whole note, `[Sel]` zoom the viewport to the current
+selection (no-op if none). Wire via `clickedAt` (cell hit-testing, like the menu
+bar). Also bind non-keyjam keys for convenience: Left/Right = pan, Home = Fit,
+and (if free) a key to zoom to selection; document all in the F12 help. Zoom
+in/out steps by a factor (e.g. ×0.5 / ×2) clamped to the min/max span.
+
+### 17.4 Horizontal scrollbar
+A horizontal scrollbar spanning the plot width (just below the graph stack, above
+the raw-data strip). Track = the whole note; thumb = the current viewport
+(position + width ∝ viewStart/viewEnd over the total). Left-drag the thumb to pan;
+click the track to page by one viewport width. Subtle styling (dim track, brighter
+thumb). Only meaningful when zoomed in (thumb < full width); at Fit the thumb
+fills the track.
+
+### 17.5 Verify (v12)
+Use the driver `click:`/`drag:`/`hover:` + `jamrender` (Output visible headless).
+(1) Drag-select a range on the plot → a tick-snapped highlight appears with its
+range shown; the edges snap to the tick grid (verify snapping at mult=1 and
+mult=2). (2) Click `[Sel]` (or the key) → the viewport zooms to the selection;
+all bands + waveform + playhead + markers stay aligned at the new zoom and the
+waveform shows more detail. (3) `[+]`/`[-]` zoom in/out about the center; `[Fit]`
+restores the whole-note view. (4) The scrollbar thumb reflects the viewport; drag
+it to pan; the view follows; at Fit the thumb fills the track. (5) Zoomed in, the
+Output is still pixel-accurate over the (now wider-per-tick) view. (6) Regression:
+hover probe, loop lines, z-order, F12, clean exit intact. Read-only. Screenshot
+each step (before/after zoom, mid-pan) and confirm by SEEING.

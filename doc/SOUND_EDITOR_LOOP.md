@@ -712,3 +712,82 @@ Tech-debt to address in P6 polish (non-blocking, from verifiers):
   - Ran `make map` — idempotent (no module synopsis first-sentence changed; ARCHITECTURE.md
     unchanged). No shortcut/CLI/flag/help-registry change -> no KEYBOARD.md / man-page regen.
     NOT done: data editing / write-back / undo (P4+, still read-only).
+
+- (v12a ZOOMABLE/PANNABLE VIEWPORT + TICK-SNAPPED SELECTION + ZOOM CONTROLS, §17.1/§17.2/§17.3
+  2026-07-08) Still READ-ONLY. Builds on the v11 real-time shared tick axis. Files:
+  `src/ui/soundedit.d` (viewport + selection + controls + mouse handlers), `src/ui/help.d`
+  (F12 View/zoom section). The horizontal scrollbar (§17.4) is deliberately NOT built this
+  phase — a blank row is reserved for it below the control row.
+  - **§17.1 viewport model.** Added a view window `[viewStartTick, viewEndTick]` (doubles, in
+    ticks) over the shared axis. `xForFrame` now maps `[viewStartTick,viewEndTick]` across
+    `plotWpx` (was the whole note `[-RESTART_FRAMES, visFrames]`), clamped to the plot box; new
+    `tickForPixel` is its exact inverse. Default = FIT = the whole note incl. the restart pre-roll
+    (`fitViewport`); `clampViewport` keeps the user's zoom within `[-RESTART_FRAMES, visFrames]`
+    with a MIN_VIEW_SPAN=4 floor. `userZoomed` preserves a user zoom across instrument/recording
+    changes until Fit; otherwise every draw re-fits (auto-fit default kept). Because ALL bands/
+    playhead/trigger/restart/loop-lines/probe/Output go through the ONE map, they follow zoom+pan
+    automatically — refactored: Output band + ADSR sim + probe inversions now use `tickForPixel`;
+    single-line markers (trigger/restart/playhead/selection edges/loop lines) are skipped when
+    off-view via `frameInView` instead of clamping to a plot edge; every per-frame band loop is
+    clipped to the visible integer-frame range (`visRange`, from `viewFrameLo/Hi`) so nothing
+    piles up at the clamped edges when zoomed in.
+  - **§17.2 tick-snapped selection.** Left-drag on the plot marks `[selStartTick,selEndTick]`,
+    each edge SNAPPED to the integer tick grid (`snapPixelToTick` = lround(tickForPixel)) — the
+    native per-tick rate (1/frame at 1x, 2/frame at 2x; the axis index IS the tick, so integer
+    snapping matches the rate automatically). Drawn as a subtle translucent-looking wash (a sparse
+    every-3px blue vertical hatch across the whole stack, BEFORE the bands so graphs stay legible)
+    + brighter light-blue solid edges (AFTER the bands). Range shown in the control row readout
+    ("sel A-B t (~ma-me ms, N t)"). Hover probe (no button) kept; button-held drag = selection
+    (routed via new `clickedAt`/`draggedTo`/`releasedAt` overrides — pre-existing base virtuals,
+    no vtable change). A plain click (press+release, no motion) or Backspace clears it.
+  - **§17.3 zoom controls.** A subtle control-button row reserved above the (future) scrollbar row:
+    `[-]` zoom out (x2 about centre), `[+]` zoom in (x0.5), `[Fit]` whole note, `[Sel]` zoom to the
+    selection (no-op if none). Hit-tested in `clickedAt` like the menu bar (cells recomputed
+    identically in the drawer + hit-test via `zoomButtons`). Non-keyjam keys bound (letters/digits
+    are keyjam): Left/Right pan ~1/4 view, Home = Fit, End = zoom-to-selection, Backspace = clear
+    selection. All documented in the F12 HELPSOUNDEDITOR page (new "View / zoom" section; still 1/1).
+  - Build: `make -f Makefile.mac clean && make -f Makefile.mac -j4 ccutter ccdriver` -> exit 0,
+    both binaries (ccutter 7536184, ccdriver 7592920).
+  - VERIFIED by SEEING (headless dummy SDL), tunes/vent-arkijuusto.ct, ins04 "Flute" (triangle),
+    ENTER seq `load:... key:ESC key:Ctrl-e key:+ key:+ key:+ key:+`, Output made visible with
+    `mult:2 jamrender:q,200` (capLen=95995). Plot cells x=[39,156) y=[7,34); control row = cell
+    row 35; buttons [-]@40, [+]@44, [Fit]@49, [Sel]@55.
+    * /tmp/se-v12a-full.png — fit view: all 6 bands + control row "[-] [+] [Fit] [Sel]  view
+      -10-198 t   (drag to select)", scale "0-198 f (~2.0s)".
+    * /tmp/se-v12a-select.png — `drag:60,15,100,25` -> blue translucent hatch across the whole
+      stack + light-blue edges; readout "sel 28-99 t  (~279-988 ms, 71 t)" (28*9.975=279,
+      99*9.975=988). Graphs stay legible through the wash.
+    * /tmp/se-v12a-sel-zoom.png — `click:55,35` ([Sel]) -> viewport zoomed to ticks 28-99; Output
+      now resolves individual TRIANGLE cycles (more detail), Freq staircase spreads out, ALL bands
+      aligned at the new zoom.
+    * /tmp/se-v12a-zoomin.png / -zoomout.png / -fit.png — `click:44,35`([+]) narrows about centre
+      (bigger cycles); `click:40,35`([-]) widens back; `click:49,35`([Fit]) restores view -10-198 t
+      (full envelope; the sel hatch re-maps to ticks 28-99 — selection stored in ticks, survives
+      zoom).
+    * /tmp/se-v12a-key-panleft.png / -panright.png / -home.png — after [+][+] zoom: LEFT -> "view
+      55-107 t", RIGHT RIGHT -> "view 81-133 t", HOME -> "view -10-198 t" (fit). All correct
+      (pan step = 1/4 span).
+    * /tmp/se-v12a-key-end.png / -bksp.png — drag-select then END -> viewport zoomed to sel 28-99
+      (same as [Sel]); BACKSPACE -> hatch cleared, readout back to "view 28-99 t (drag to select)".
+    * SNAPPING mult=1 vs mult=2 (/tmp/se-v12a-mult1-select.png): the SAME pixel drag snaps to the
+      SAME integer ticks 28-99 at both, but ms differ correctly — mult=2 "~279-988 ms" (tickMs
+      9.975, scale ~2.0s) vs mult=1 "~559-1975 ms" (tickMs 19.95, scale ~4.0s). Edges land on
+      integer ticks (native grid) at both rates.
+    * /tmp/se-v12a-hover.png — hover probe (no button) still works: dashed white line + readout
+      "frame 64 ~638.4 ms / Freq $1168 C-4 / ... / Env 8%", coexisting with the control row.
+    * /tmp/se-v12a-f12-help.png — F12 shows "Sound Editor help 1/1" WITH the new "View / zoom"
+      section (drag/[-][+][Fit][Sel]/Left-Right/Home/End/Backspace); renders clean over the editor,
+      ZERO graph-pixel bleed (z-order intact).
+    * /tmp/se-v12a-cleanexit.png + -plainexit.png — `key:Ctrl-e` exits: "Sound Editor closed.",
+      classic tracker fully restored (Instruments/Wave/Pulse/Filter/Command/Tracks), no lingering
+      graph pixels. (KEYJAM indicator shows only after jamrender left a jam note armed; a plain
+      enter/exit exit shows no KEYJAM — not a regression.)
+  - READ-ONLY CONFIRMED: grep finds NO writes to song.{instrumentTable/waveTable/pulseTable/
+    filterTable/superTable/insLabels} in soundedit.d or help.d; git status shows only those two
+    code files (+ the pre-existing §17 design-doc edit) changed.
+  - Ran `make map` (synopsis mentions the zoomable viewport; the map's truncated synopsis + dep
+    edges are unchanged -> ARCHITECTURE.md idempotent) and `make docs` (man pages + KEYBOARD.md
+    unchanged — the F12 help is a ContextHelp page, not a com.shortcuts registry entry, and no
+    CLI flag was added).
+  - NOT done this phase: §17.4 horizontal scrollbar (blank row reserved); data editing / write-back
+    / undo (P4+, still read-only).
