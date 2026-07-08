@@ -36,6 +36,7 @@ import derelict.sdl2.sdl;
 import com.fb : FONT_X, FONT_Y, keyjamBackground;
 import com.session : screen, video, state, song, mainui;
 import com.shortcuts : Ctx;
+import com.palette : idx, Role;
 import ui.window;
 import ui.input;
 import ui.ui : UI;
@@ -1778,14 +1779,19 @@ class SoundEditor : Window {
 	// the selection: a SPARSE vertical hatch (every 3px) in a dim blue, drawn BEFORE the
 	// bands so the graphs paint over it and stay legible while the tint shows through
 	// the gaps. Drawn only when zoomed/relevant; always harmless when there's no sel.
+	private enum int SEL_ALPHA = 72;   // translucency of the selection wash (0..255)
 	private void drawSelectionFill(ref Geo g) {
 		int xa, xb;
 		if(!selectionPixels(g, xa, xb)) return;
 		int pe = g.plotX0px + g.plotWpx;
 		if(xa < g.plotX0px) xa = g.plotX0px;
 		if(xb > pe) xb = pe;
-		for(int x = xa; x < xb; x += 3)
-			video.olVLine(x, g.stackTopPx, g.stackBotPx, COL_SEL_WASH);
+		if(xb <= xa) return;
+		// A single TRANSLUCENT blue wash over the whole stack (semantic colour, not a
+		// magic index), instead of the old opaque striped vertical-line grid. The bands
+		// draw on top and stay fully legible through the light overlay.
+		video.olFillRectA(xa, g.stackTopPx, xb - xa, g.stackBotPx - g.stackTopPx,
+						  idx(Role.soundeditSelection), SEL_ALPHA);
 	}
 
 	// §17.2 the two selection edges, drawn AFTER the bands (bright, solid) so the range

@@ -183,6 +183,10 @@ abstract class Video {
 	void olRect(int x, int y, int w, int h, int col) {}   // outline
 	void olFillRect(int x, int y, int w, int h, int col) {}
 	void olPoint(int x, int y, int col) {}
+	// Alpha-blended filled rect (0=transparent..255=opaque): a real translucent
+	// overlay, e.g. the Sound Editor's time-range selection wash. Trailing no-op
+	// virtual for vtable compatibility; only the SDL subclass blends.
+	void olFillRectA(int x, int y, int w, int h, int col, int alpha) {}
 }
 
 class VideoStandard : Video {
@@ -313,7 +317,7 @@ class VideoStandard : Video {
 	// a per-frame re-render like scopeActive, and the list is kept between frames
 	// so saveScreenshot() re-renders the same overlay. Device-pixel coords.
 	private enum OlKind { line, vline, hline, rect, fillrect, point }
-	private struct OlOp { OlKind kind; int a, b, c, d, col; }
+	private struct OlOp { OlKind kind; int a, b, c, d, col; int alpha = 255; }
 	private OlOp[] olOps;
 	private bool overlayActive;
 
@@ -336,13 +340,19 @@ class VideoStandard : Video {
 	override void olPoint(int x, int y, int col) {
 		olOps ~= OlOp(OlKind.point, x, y, 0, 0, col); overlayActive = true;
 	}
+	override void olFillRectA(int x, int y, int w, int h, int col, int alpha) {
+		olOps ~= OlOp(OlKind.fillrect, x, y, w, h, col, alpha); overlayActive = true;
+	}
 
 	// Flush the overlay draw-list on top of the finished text grid.
 	private void drawOverlay() {
 		if(!overlayActive || olOps.length == 0) return;
+		// Blend mode on so ops with alpha<255 (e.g. the selection wash) composite
+		// translucently over the grid; alpha==255 stays fully opaque. Restored below.
+		SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 		foreach(ref op; olOps) {
 			auto c = PALETTE[op.col & 0xff];
-			SDL_SetRenderDrawColor(renderer, c.r, c.g, c.b, 255);
+			SDL_SetRenderDrawColor(renderer, c.r, c.g, c.b, cast(ubyte)op.alpha);
 			final switch(op.kind) {
 			case OlKind.line:
 				SDL_RenderDrawLine(renderer, op.a, op.b, op.c, op.d);
@@ -366,6 +376,7 @@ class VideoStandard : Video {
 				break;
 			}
 		}
+		SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 	}
 
 	private SDL_Texture* splashTexture;
