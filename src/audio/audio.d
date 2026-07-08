@@ -41,6 +41,10 @@ __gshared bool capturing;
 __gshared int captureVoice;        // SID voice (0..2) whose gate we track
 __gshared int captureFrameSamples; // samples per gate entry (= callbackInterval)
 __gshared int captureSilenceRun;   // consecutive near-silent samples recorded
+__gshared bool captureWasLoud;     // §16.3: seen an audibly-loud block yet? The
+                                   // decay-to-silence stop is gated on this so a
+                                   // quiet (slow/low) attack ONSET can't end the
+                                   // recording before the note is ever heard.
 
 // Begin recording the given voice's keyjam note from scratch.
 void captureStart(int voice) {
@@ -53,6 +57,7 @@ void captureStart(int voice) {
 	captureLen = 0;
 	captureGateLen = 0;
 	captureSilenceRun = 0;
+	captureWasLoud = false;
 	captureVoice = (voice < 0 || voice > 2) ? 0 : voice;
 	captureFrameSamples = callbackInterval > 0 ? callbackInterval : (freq / framerate);
 	capturing = true;
@@ -78,8 +83,14 @@ private void captureBlock(short* block, int n) nothrow {
 		if(a > peak) peak = a;
 	}
 	enum int SILENCE = 200;
+	if(peak >= SILENCE) captureWasLoud = true;   // note has become audible
 	if(peak < SILENCE) captureSilenceRun += n; else captureSilenceRun = 0;
-	if((captureLen > freq / 4 && captureSilenceRun > freq / 6)
+	// §16.3: only allow the decay-to-silence stop AFTER the note has actually been
+	// heard (captureWasLoud). A slow/quiet attack ramps up through near-silence for
+	// many blocks; without this gate the run of quiet onset samples would trip the
+	// stop and cut the Output waveform short of the real note. The hard cap on
+	// captureCap still bounds the recording regardless.
+	if((captureWasLoud && captureLen > freq / 4 && captureSilenceRun > freq / 6)
 	   || captureLen >= captureCap) capturing = false;
 }
 

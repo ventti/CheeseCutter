@@ -647,3 +647,68 @@ Tech-debt to address in P6 polish (non-blocking, from verifiers):
     longer sustained decay — confirms the waveform is real and varies with instrument/note.
     The whole point (SEE the waveform, not reason about it) is achieved.
   - NOT done: §16.2/16.3 shared-axis + pixel-accurate Output re-alignment (Phase B/C); editing (P4+).
+- (v11 PHASE B+C — REAL-TIME SHARED AXIS + CORRECT OUTPUT BAND, §16.2/§16.3 2026-07-08) Still
+  READ-ONLY. Root cause: two conflated clocks. The recorded bands (recAmp/recFreq/..), the Output
+  captureBuf and the playhead (recLen) are indexed per PLAYER TICK (runs `multiplier`x/screen
+  frame), but FRAME_MS=19.95ms, the ADSR ms->frames conversion, the nominal gate and the "~X s"
+  label assumed SCREEN frames. At multiplier==2 (vent-arkijuusto.ct) they desynced (label ~2x
+  long; ADSR/restart geometry at half the recorded bands' scale). Files: `src/ui/soundedit.d`
+  (axis unification), `src/audio/audio.d` (silence-stop gate).
+  - **§16.2 one real-time axis.** Replaced the compile-time `FRAME_MS=19.95` with a per-draw
+    `tickMs = SCREEN_FRAME_MS / multiplier` (multiplier from `audio.audio.multiplier`, clamped
+    >=1), refreshed at the TOP of `update()` before any ms<->tick use. `tickMs` is the REAL
+    duration of one axis index (one player tick), so EVERY ms<->tick conversion now agrees at any
+    multiplier: `computeVisFrames` (ADSR ms tables /tickMs), `drawAdsrBand` + `adsrAmpAt` sim
+    (aF/dF/rF = ms/tickMs), the scale label (`secs = visFrames*tickMs/1000`), and the probe
+    readout (`ms = f*tickMs`). The fixed 46-tick `NOMINAL_GATE_FRAMES` became a real-time
+    `NOMINAL_GATE_MS=918` converted to `nominalGateFrames = round(918/tickMs)` each draw, so the
+    sim gate hold scales with the multiplier too. The recorded bands, playhead (recLen), sims
+    (per-tick), trigger divider, restart marker, loop lines and hover probe were ALREADY per-tick,
+    so they need no change — folding the ms-side onto the tick axis is the whole fix.
+  - **§16.3 Output band pixel-accurate + time-aligned via the SHARED axis.** `drawOutputBand` now
+    maps each horizontal pixel column x through the EXACT inverse of `xForFrame` to a tick range
+    [t0,t1), then to samples [t0*spTick, t1*spTick) where `spTick = freq*(tickMs/1000)` = samples
+    per tick (== captureFrameSamples, but derived from real time), drawing the min/max of that
+    sample range (classic per-pixel oscilloscope). This is pixel-accurate AND lands the waveform
+    at the SAME instant as the ADSR/Freq/Pulse/Filter/Wave bands + playhead/probe (all via the one
+    axis). Peak auto-gain kept (raw level arbitrary). Begins at the trigger, runs forward, flat
+    past the recording.
+  - **§16.3 Output extent no longer cut short.** `src/audio/audio.d`: the decay-to-silence capture
+    stop (`captureBlock`) fired during a quiet/slow ATTACK onset (the onset is near-silent, so the
+    silence run tripped the stop once past the freq/4 minimum), cutting the waveform to ~13 frames.
+    Added a `captureWasLoud` gate: the stop is only allowed AFTER a block >= SILENCE(200) has been
+    seen (reset in `captureStart`, set in `captureBlock`). Slow-attack notes now record their full
+    length; the captureCap hard bound still applies. Live-playback behaviour unchanged (a real note
+    still stops at its release tail once it has been audible).
+  - Build: `make -f Makefile.mac clean && make -f Makefile.mac -j4 ccutter ccdriver` -> exit 0,
+    both binaries (touched shared audio.audio -> full clean build; ccutter 7531096, ccdriver 7571208).
+  - VERIFIED headless (dummy SDL) at BOTH multipliers, tunes/vent-arkijuusto.ct, ins04 "Flute"
+    (triangle, AD=FF slow 8000ms attack). ENTER seq `load:... key:ESC key:Ctrl-e key:+ key:+ key:+
+    key:+`, then `mult:<n> jamrender:q,200 hover:100,20 tick:2 shot:...`:
+    * /tmp/se-v11bc-mult2.png — Rate 2*50hz. Output = a DETAILED triangle waveform spanning the
+      FULL window (no longer cut short: capLen=95995 = the whole 200-tick render), ramping up
+      (slow attack). Scale label "scale 0-198 f (~2.0s)". Probe (frame 99) reads "~987.5 ms /
+      Env 12%" — 99*9.975ms=987ms, and 987/8000=12.3% -> the ADSR envelope tracks the probe.
+    * /tmp/se-v11bc-mult1.png — Rate 1*50hz. SAME 198 recorded ticks, but scale label reads
+      "~4.0s" (200 ticks = 4.0s wall-clock at mult=1 vs 2.0s at mult=2 — real-time correct; the
+      OLD code read ~4.0s at BOTH, i.e. 2x too long at mult=2). Probe (frame 99) reads
+      "~1975.1 ms / Env 25%" (99*19.95=1975ms; 1975/8000=24.7%). The Output wedge is visibly
+      thicker at the probe than mult=2 — amplitude envelope matches Env% at both multipliers.
+    * /tmp/se-v11bc-zoom-crop.png — mult=1 short flute render (jamrender:m,20), Output band cropped
+      + NEAREST-upscaled: a real TRIANGLE waveform with individual cycles resolved, amplitude
+      ramping from the trigger — pixel-accurate, NOT blocky/aliased. Cyan restart marker + red
+      trigger divider visible in the pre-roll; flat baseline before the note and past the recording.
+    * /tmp/se-v11bc-exit.png — `key:Ctrl-e` exits: "Sound Editor closed.", classic tracker fully
+      restored (Instruments/Wave/Pulse/Filter/Command/Tracks), no lingering graph pixels. ins04
+      row cross-checks FF 33 09 80 .. 0D.
+  - ALIGNMENT/SCALE EVIDENCE (core §16 check): at the SAME tick index (frame 99) the probe shows
+    987ms/Env12% at mult=2 vs 1975ms/Env25% at mult=1 — both correct for their real time; the
+    scale label shows 2.0s vs 4.0s for the same tick count; the Output amplitude, ADSR Env% and
+    the probe all agree at both multipliers. Silence-stop fix: capLen went from being cut short to
+    the full render (95995 samples at mult=2).
+  - READ-ONLY CONFIRMED: grep finds NO writes to song.{instrumentTable/waveTable/pulseTable/
+    filterTable/superTable/insLabels} in soundedit.d or audio.d; git status shows only those two
+    code files changed.
+  - Ran `make map` — idempotent (no module synopsis first-sentence changed; ARCHITECTURE.md
+    unchanged). No shortcut/CLI/flag/help-registry change -> no KEYBOARD.md / man-page regen.
+    NOT done: data editing / write-back / undo (P4+, still read-only).

@@ -46,8 +46,22 @@ static import audio.player;
 static import audio.audio;
 static import audio.visualizer;
 
-// PAL player tick period (ms) -- the frame quantum every over-time graph shares.
-private enum float FRAME_MS = 19.95f;
+// §16.2 REAL-TIME shared axis. The recorded bands (recAmp/recFreq/..), the Output
+// captureBuf and the playhead (recLen) are all indexed per PLAYER TICK, and the
+// player runs `multiplier` ticks per PAL screen frame. So the true duration of ONE
+// axis index (one tick) is the screen-frame period divided by the multiplier. The
+// old code hardcoded the SCREEN-frame period as if one index == one screen frame,
+// which is only true at multiplier==1; at multiplier==2 (e.g. vent-arkijuusto.ct)
+// the ADSR ms->frames conversion, the restart geometry and the "~X s" label ran at
+// 2x the recorded bands' scale (the label read ~2x too long). Deriving tickMs from
+// the live multiplier each draw keeps EVERY band on the same real-time axis at any
+// multiplier: t = tickIndex * tickMs (recorded/sim/playhead), t = sampleIndex/freq
+// (Output), and the ADSR ms tables / restart / label are already real time.
+private enum float SCREEN_FRAME_MS = 19.95f;   // PAL screen-frame period (ms)
+// Nominal held-gate duration (ms) used to slope the drawn ADSR sustain->release
+// knee on the sim/idle path. Real time, so it maps to the right number of ticks at
+// any multiplier (was a fixed 46-tick count = ~918 ms only correct at multiplier 1).
+private enum float NOMINAL_GATE_MS = 918.0f;
 // §12.1: the post-trigger X span is no longer a fixed constant -- it AUTO-FITS the
 // note's full duration each frame (see SoundEditor.computeVisFrames). These are the
 // sane clamp bounds: a floor so a tiny sound isn't absurdly zoomed in, and a ceiling
@@ -63,9 +77,6 @@ private enum float AMP_EPS = 0.02f;
 // frame->pixel through xForFrame(), which folds this offset in, so a single
 // vertical probe hits the same frame index in every band.
 private enum int RESTART_FRAMES = 10;
-// Nominal note gate length (frames the gate is held before release) used to slope
-// the drawn ADSR sustain->release knee on the shared frame axis.
-private enum int NOMINAL_GATE_FRAMES = 46;
 
 // SID ADSR timing (ms) per 4-bit nibble value 0..15 -- the real, non-linear MOS
 // tables (mirrors audio.visualizer / doc/ADSR_VISUALIZATION_SPEC.md, duplicated
@@ -218,6 +229,14 @@ class SoundEditor : Window {
 	private int visFrames = MIN_VIS;
 	private int totalFrames = RESTART_FRAMES + MIN_VIS;
 
+	// §16.2 real-time axis, refreshed at the top of update() from the live player
+	// multiplier: tickMs = the real duration of one axis index (one player tick), and
+	// nominalGateFrames = NOMINAL_GATE_MS expressed in those ticks. Every ms<->tick
+	// conversion (ADSR ms tables, the scale label, the probe readout) goes through
+	// tickMs so all bands + label agree at any multiplier.
+	private float tickMs = SCREEN_FRAME_MS;
+	private int nominalGateFrames = 46;
+
 	// The screen owns its own keyjam so note keys play while the panel is
 	// focused and navigating (the classic editor's global inputKeyjam is
 	// bypassed for this window by the Toplevel routing guard).
@@ -300,10 +319,10 @@ class SoundEditor : Window {
 		ubyte ad = song.instrumentTable[ins + 0 * 48];
 		ubyte sr = song.instrumentTable[ins + 1 * 48];
 		int attack  = (ad >> 4) & 0x0f, decay = ad & 0x0f, release = sr & 0x0f;
-		int aF = cast(int)lround(ATTACK_TIME_MS[attack]         / FRAME_MS);
-		int dF = cast(int)lround(DECAY_RELEASE_TIME_MS[decay]   / FRAME_MS);
-		int rF = cast(int)lround(DECAY_RELEASE_TIME_MS[release] / FRAME_MS);
-		int vf = aF + dF + NOMINAL_GATE_FRAMES + rF;
+		int aF = cast(int)lround(ATTACK_TIME_MS[attack]         / tickMs);
+		int dF = cast(int)lround(DECAY_RELEASE_TIME_MS[decay]   / tickMs);
+		int rF = cast(int)lround(DECAY_RELEASE_TIME_MS[release] / tickMs);
+		int vf = aF + dF + nominalGateFrames + rF;
 
 		// §15.2(1) Recorded extent FITS the window when we have real audio — the axis
 		// tracks the ACTUAL recording, NOT the (often huge) ADSR estimate. Do NOT max()
@@ -370,8 +389,10 @@ class SoundEditor : Window {
 		screen.cprint(area.x + 2, area.y + 1, COL_LABEL, 0, "Octave");
 		screen.cprint(area.x + 9, area.y + 1, COL_VALUE, 0, format("%d", state.octave));
 
-		// §12.2 unobtrusive scale label so the current zoom is legible.
-		float secs = visFrames * FRAME_MS / 1000.0f;
+		// §12.2/§16.2 unobtrusive scale label so the current zoom is legible. Seconds
+		// use the REAL tick duration, so the same note reads the SAME seconds at any
+		// multiplier (visFrames doubles at mult=2, tickMs halves -> product constant).
+		float secs = visFrames * tickMs / 1000.0f;
 		screen.cprint(g.labelX, area.y + 2, COL_LABEL, 0,
 					  format("scale 0-%d f (~%.1fs)", visFrames, secs));
 
@@ -402,6 +423,14 @@ class SoundEditor : Window {
 		int ins = state.activeInstrument;
 		if(ins < 0) ins = 0;
 		if(ins > 47) ins = 47;
+
+		// §16.2 refresh the real-time axis unit from the live multiplier BEFORE any
+		// ms<->tick conversion (computeVisFrames, ADSR sim, scale label, probe) so
+		// they all share one axis at the current multiplier.
+		int mult = audio.audio.multiplier;
+		if(mult < 1) mult = 1;
+		tickMs = SCREEN_FRAME_MS / mult;
+		nominalGateFrames = cast(int)lround(NOMINAL_GATE_MS / tickMs);
 
 		Geo g = layout();
 
@@ -670,12 +699,15 @@ class SoundEditor : Window {
 		short* buf = audio.audio.captureBuf.ptr;
 		int total = audio.audio.captureLen;
 		int fs = audio.audio.captureFrameSamples;
-		// §15.2(2) The recorded extent in samples that falls inside the window. This is the
-		// range the columns read AND the peak is measured over; the FRAME→sample mapping
-		// below (not a stretched span) keeps the waveform time-aligned with every other band.
-		int span = fs > 0 ? visFrames * fs : total;
+		// §16.2/§16.3 samples-per-second of the capture and samples-per-tick on the
+		// SHARED real-time axis: one axis tick spans `spTick` samples (== fs, the
+		// recorded stride, but derived from real time so it is robust to any tick/
+		// multiplier). visFrames ticks therefore cover `span` samples of the window.
+		int sfreq = audio.audio.freq;
+		double spTick = sfreq * (tickMs / 1000.0);   // samples per axis tick (== fs)
+		int span = spTick > 0 ? cast(int)(visFrames * spTick) : total;
 		if(span > total) span = total;
-		if(buf is null || fs < 1 || span < 2) {
+		if(buf is null || fs < 1 || spTick < 1.0 || span < 2) {
 			// Flat baseline when nothing has been recorded (headless / song playback).
 			video.olHLine(noteX0px, plotEndPx - 1, mid, COL_AXIS);
 			return;
@@ -699,18 +731,22 @@ class SoundEditor : Window {
 			return;
 		}
 
-		// §15.2(2) Per-pixel min/max, mapped FRAME-first (exactly like the other bands):
-		// pixel i covers frames [f0,f1) → samples [f0*fs, f1*fs) clamped to `total`. Where
-		// the frame window lies past the recording (f0*fs >= total) draw the flat baseline.
-		// This puts the waveform at the SAME frames as the ADSR/Freq/Pulse/Filter/Wave bands
-		// and the playhead/probe — no stretching when the recording is shorter than window.
+		// §16.3 Per-pixel oscilloscope, mapped through the SHARED REAL-TIME axis (the
+		// exact inverse of xForFrame): pixel column x covers axis time [t0,t1) in ticks,
+		// which maps to samples [t0*spTick, t1*spTick) of captureBuf. Drawing the min/max
+		// of that sample range gives the pixel-accurate waveform (real detail, not a
+		// blocky per-frame block) AND places it at the SAME instant as the ADSR/Freq/
+		// Pulse/Filter/Wave bands and the playhead/probe (all via the one axis). Where a
+		// column lies past the recording, draw the flat baseline (note ended / silent).
 		foreach(i; 0 .. noteWpx) {
 			int x = noteX0px + i;
-			int f0 = cast(int)(cast(long)i * visFrames / noteWpx);
-			int f1 = cast(int)(cast(long)(i + 1) * visFrames / noteWpx);
-			if(f1 <= f0) f1 = f0 + 1;
-			int s0 = f0 * fs;
-			int s1 = f1 * fs;
+			// invert xForFrame at x and x+1 -> tick range on the shared axis
+			double t0 = cast(double)(x     - g.plotX0px) * totalFrames / g.plotWpx - RESTART_FRAMES;
+			double t1 = cast(double)(x + 1 - g.plotX0px) * totalFrames / g.plotWpx - RESTART_FRAMES;
+			if(t0 < 0) t0 = 0;
+			if(t1 <= t0) t1 = t0 + cast(double)totalFrames / g.plotWpx;
+			int s0 = cast(int)(t0 * spTick);
+			int s1 = cast(int)(t1 * spTick);
 			if(s0 >= total) {           // past the recording → flat baseline
 				video.olPoint(x, mid, COL_AXIS);
 				continue;
@@ -780,13 +816,13 @@ class SoundEditor : Window {
 		float sLvl = sustain / 15.0f;
 		// SID ms tables -> frames (real, non-linear MOS timing). The knee frames are
 		// absolute frame indices, so they line up in time with pulse/filter/wave.
-		float aF = ATTACK_TIME_MS[attack]         / FRAME_MS;
-		float dF = DECAY_RELEASE_TIME_MS[decay]   / FRAME_MS;
-		float rF = DECAY_RELEASE_TIME_MS[release] / FRAME_MS;
+		float aF = ATTACK_TIME_MS[attack]         / tickMs;
+		float dF = DECAY_RELEASE_TIME_MS[decay]   / tickMs;
+		float rF = DECAY_RELEASE_TIME_MS[release] / tickMs;
 		if(rF < 0.5f) rF = 0.5f;
-		// Nominal gate: release begins NOMINAL_GATE_FRAMES after the trigger (but never
+		// Nominal gate: release begins nominalGateFrames after the trigger (but never
 		// before attack+decay have completed), so all four A/D/S/R phases are visible.
-		float gateEnd = aF + dF + NOMINAL_GATE_FRAMES;
+		float gateEnd = aF + dF + nominalGateFrames;
 
 		// Amplitude 0..1 at absolute frame f (f>=0, i.e. after the trigger).
 		float amp(float f) {
@@ -1181,11 +1217,11 @@ class SoundEditor : Window {
 		int attack = (ad >> 4) & 0x0f, decay = ad & 0x0f;
 		int sustain = (sr >> 4) & 0x0f, release = sr & 0x0f;
 		float sLvl = sustain / 15.0f;
-		float aF = ATTACK_TIME_MS[attack]         / FRAME_MS;
-		float dF = DECAY_RELEASE_TIME_MS[decay]   / FRAME_MS;
-		float rF = DECAY_RELEASE_TIME_MS[release] / FRAME_MS;
+		float aF = ATTACK_TIME_MS[attack]         / tickMs;
+		float dF = DECAY_RELEASE_TIME_MS[decay]   / tickMs;
+		float rF = DECAY_RELEASE_TIME_MS[release] / tickMs;
 		if(rF < 0.5f) rF = 0.5f;
-		float gateEnd = aF + dF + NOMINAL_GATE_FRAMES;
+		float gateEnd = aF + dF + nominalGateFrames;
 		if(f < aF) return aF > 0 ? f / aF : 1.0f;
 		if(f < aF + dF) return dF > 0 ? 1.0f - (1.0f - sLvl) * ((f - aF) / dF) : sLvl;
 		if(f < gateEnd) return sLvl;
@@ -1272,7 +1308,7 @@ class SoundEditor : Window {
 			foreach(cx; 0 .. rw) screen.setChar(rx + cx, ry + r, 0x0500 | ' ');
 			screen.cprint(rx, ry + r, col, 0, s);
 		}
-		float ms = f * FRAME_MS;
+		float ms = f * tickMs;   // §16.2 real time at the current multiplier
 		put(0, COL_TITLE, "-- Probe (hover) --");
 		put(1, COL_VALUE, format("frame %d  ~%.1f ms", f, ms));
 		if(haveFreq) {
