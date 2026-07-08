@@ -68,43 +68,32 @@ private struct VoiceActivity {
 	float envFrac0 = 0.0f;
 }
 
-// reSID decay/release envelope curve (envelope.h:119-178, envelope.cpp:146). The
-// counter decrements at 1/period the rate, period = 1,2,4,8,16,30 at counter levels
-// 255,93,54,26,14,6. Cumulative rate-periods to reach each level: 0,162,240,352,448,
-// 576,756. Normalising both axes gives the piece-wise curve level(fracOfFullTime):
-private immutable float[7] EXP_FRAC  = [
-	0.0f, 162.0f/756, 240.0f/756, 352.0f/756, 448.0f/756, 576.0f/756, 1.0f
-];
-private immutable float[7] EXP_LEVEL = [
-	1.0f, 93.0f/255, 54.0f/255, 26.0f/255, 14.0f/255, 6.0f/255, 0.0f
-];
-
-// Normalised envelope level (1..0) at fraction `frac` (0..1) of a full 255->0
-// decay/release, per the reSID curve above (piece-wise linear).
+// Decay/release envelope shape. reSID (envelope.h:119-178) approximates the SID's
+// exponential decay with a piece-wise-LINEAR curve: the counter clock is divided by
+// 1,2,4,8,16,30 at levels 255,93,54,26,14,6 — i.e. it is *approximating* a true
+// exponential with line segments for cycle efficiency. Its breakpoints
+// (frac,level) = (0,1)(.21,.365)(.32,.212)(.47,.102)(.59,.055)(.76,.024)(1,0) lie
+// almost exactly on level = e^(-5·frac) (e.g. e^-1.05≈0.35 at frac .21). So we draw
+// that SMOOTH exponential instead of the segments: same shape reSID intends, but it
+// renders smooth at ANY note length/zoom (the segments only "kinked" visibly on
+// short notes). EXP_K sets the steepness; normalised so level(0)=1, level(1)=0.
+private enum float EXP_K = 5.0f;
 private float expLevel(float frac) nothrow {
+	import std.math : exp;
 	if(frac <= 0.0f) return 1.0f;
 	if(frac >= 1.0f) return 0.0f;
-	foreach(i; 0 .. 6) {
-		if(frac <= EXP_FRAC[i + 1]) {
-			float t = (frac - EXP_FRAC[i]) / (EXP_FRAC[i + 1] - EXP_FRAC[i]);
-			return EXP_LEVEL[i] + t * (EXP_LEVEL[i + 1] - EXP_LEVEL[i]);
-		}
-	}
-	return 0.0f;
+	immutable float e = exp(-EXP_K);
+	return (exp(-EXP_K * frac) - e) / (1.0f - e);
 }
 
 // Inverse: the curve fraction at which the level equals `lvl` — where on the
 // exponential a release starting from a mid level begins.
 private float expLevelInv(float lvl) nothrow {
+	import std.math : log, exp;
 	if(lvl >= 1.0f) return 0.0f;
 	if(lvl <= 0.0f) return 1.0f;
-	foreach(i; 0 .. 6) {
-		if(lvl >= EXP_LEVEL[i + 1]) {   // levels descend across the table
-			float t = (EXP_LEVEL[i] - lvl) / (EXP_LEVEL[i] - EXP_LEVEL[i + 1]);
-			return EXP_FRAC[i] + t * (EXP_FRAC[i + 1] - EXP_FRAC[i]);
-		}
-	}
-	return 1.0f;
+	immutable float e = exp(-EXP_K);
+	return -log(lvl * (1.0f - e) + e) / EXP_K;
 }
 
 private __gshared VoiceActivity[3] voices;
