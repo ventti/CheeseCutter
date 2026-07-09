@@ -225,6 +225,23 @@ private bool processCommand(string arg) {
 			stderr.writeln();
 			break;
 		}
+		case "sweepdump": {
+			// sweepdump:P|F — dump every instrument's pointer for the pulse (P) or filter
+			// (F) table, then all 64 SweepTable rows (b0 b1 b2 b3). Read-only byte-parity /
+			// no-clobber oracle for the Sound Editor's P4b program editing.
+			bool filt = val.length && (val[0] == 'F' || val[0] == 'f');
+			const(ubyte)[] t = filt ? song.filterTable : song.pulseTable;
+			int col = filt ? 4 : 5;
+			stderr.writef("%s ptrs:", filt ? "filt" : "puls");
+			foreach(i; 0 .. 48) stderr.writef(" %02x", song.instrumentTable[i + col * 48]);
+			stderr.writeln();
+			foreach(r; 0 .. 64) {
+				stderr.writef("%02x:%02x%02x%02x%02x ", r, t[r * 4], t[r * 4 + 1],
+					t[r * 4 + 2], t[r * 4 + 3]);
+				if((r & 7) == 7) stderr.writeln();
+			}
+			break;
+		}
 		case "palette":
 			// palette:<file> — load a JSON palette at runtime, then force a full
 			// repaint so the new colors take effect on the next shot.

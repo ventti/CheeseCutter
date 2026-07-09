@@ -1005,3 +1005,70 @@ Tech-debt to address in P6 polish (non-blocking, from verifiers):
     superTable/insLabels}[...] =` writes.
   - No shortcut/CLI/flag/help-registry change -> no KEYBOARD.md / man-page / ARCHITECTURE.md
     regen needed (module synopsis first-sentence unchanged). Did not commit/grade.
+
+- (P4b-1 PULSE/FILTER PROGRAM LEVEL EDITING + SHARED-PROGRAM WARN/FORK, §20.1/§20.2/§20.4
+  2026-07-09) Second editing pass. The pulse (col5) and filter (col4) SweepTable programs
+  are now editable from their graph bands by dragging a step's LEVEL (init byte b2), with
+  the §19.6 shared-program warn/fork. Writes song data (pulse/filterTable b2 + instrument
+  pointer byte on fork). Add/delete-step + loop-drag are P4b-2 (NOT done). Files:
+  `src/ui/soundedit.d` (drag + fork infra + multi-table undo), `src/ui/help.d` (F12 line),
+  `.claude/skills/run-cheesecutter/driver.d` (read-only `sweepdump:P|F` oracle).
+  - **§20.1 drag a step's LEVEL.** A vertical grab inside the Pulse band (index 3) or Filter
+    band (index 4) plot region begins a "sweep level drag". `sweepBandAt` hit-tests the band
+    AFTER the ADSR handles / scrollbar / zoom buttons and before the plot drag-select (so all
+    those keep working; selection is only preempted inside the two sweep bands). `sweepRowAtPress`
+    maps the press X -> frame (tickForPixel) -> the active SweepTable row via `simPulse/simFilter`'s
+    `rowOf[frame]`. `draggedTo` maps mouse Y -> value on the band's exact pixel scale (inverse of
+    the drawer's `y = botPx - v*h/maxVal`) and rewrites that row's b2: PULSE inverts simPulse's
+    encoding `b2 = ((pw>>8)&0x0f) | (pw & 0xf0)` (pw 0..4095, steps of 16); FILTER `b2 = cutoff>>3`
+    (cutoff 0..2047). Band redraws live from the byte (WYSIWYG).
+  - **§20.2 shared-program warn/fork at PRESS.** `sweepProgramRows` walks the b3 jump chain
+    (same traversal as the sims). `sweepProgramShared` = the instrument's program shares any row
+    with another instrument's program (walk all 48 pointer bytes + chains). If shared and undecided
+    this session, `clickedAt` pops a `ConfirmationDialog` ("This pulse/filter program is shared.
+    Fork a private copy (y/n)?") and does NOT start the drag (modal takes over; the user drags
+    again after choosing). Y -> `forkSweepProgram`: `seekTableEnd`-allocate (`song.tPulse/tFilter.
+    seekTableEnd()`), copy the program's rows ascending (preserves b3==0 fall-through adjacency),
+    relocate internal b3 jump targets to the new base, repoint ONLY this instrument's col5/col4
+    byte; capacity guard `base+count > 0x3f` aborts with a statusline msg (no corruption). N ->
+    edit in place (classic; changes all sharers), remembered per program (`sweepEditShared[table]
+    [startRow]`) so it doesn't re-prompt. Non-shared programs edit directly.
+  - **§20.3 undo.** Level drag: ONE `snapshotAllTables(false)` at the first drag tick (all 6
+    tables in the classic `tableIterator` order). Fork: `snapshotAllTables(true)` (+ insLabels).
+    `undo`/`createRedoState` extended: length==1 = the P4a instrument-only snapshot, length>1 =
+    all-tables restore via `tableIterator` (mirrors the classic HexTable all-tables undo). Ctrl-Z
+    reverts the whole gesture. Retrigger a held keyjam note after the gesture (release / fork).
+  - Build: `make -f Makefile.mac clean && make -f Makefile.mac -j4 ccutter ccdriver` -> exit 0,
+    both binaries (ccutter 7558296, ccdriver 7637208). Did NOT touch a base class (soundedit.d,
+    help.d, driver.d only) but clean-built anyway.
+  - VERIFIED by DRIVING + SEEING (headless dummy SDL), tunes/vent-arkijuusto.ct. Band cell rows:
+    Pulse = 18-21, Filter = 22-24. New `sweepdump:P|F` oracle reads song.pulse/filterTable + every
+    instrument's pointer (byte-parity + no-clobber oracle).
+    * NON-SHARED PULSE (ins07, pul ptr $06 = rows {06,07}, not shared): drags at press y=20 to
+      release y=18/19/20/21 land row07 b2 = 8e/79/54/00 (monotonic top->bottom); EVERY other byte
+      + the pulse pointer unchanged. Two drags at x=70 vs x=120 hit rows 06 vs 07 (per-frame row
+      pick). /tmp/se-p4b1-pulse-edit.png (band curve moved; raw strip 06:40 10 8E 07 / 07:B0 10 00 06).
+    * BYTE-PARITY vs classic: after the pulse edit, Ctrl-E to the classic editor shows the classic
+      Pulse table 06:40 10 8E 07 / 07:B0 10 00 06 -- identical (same song.pulseTable slice).
+      /tmp/se-p4b1-exit.png ("Sound Editor closed.", tracker fully restored).
+    * SHARED PULSE (ins0A pul ptr $01 = rows {01,02}, shared with ins06+ins16): drag -> fork prompt
+      /tmp/se-p4b1-probe.png. Y=fork -> ins0A repoints $01->$08, rows 08/09 = relocated copy
+      (jumps 02->09, 01->08), original rows 01/02 + ins06/ins16 pointers UNCHANGED, the edit (b2=79)
+      lands only in the private row 09 (/tmp/se-p4b1-fork-yes.png). N=edit shared -> ptr stays $01,
+      shared row02 b2 ff->8e, no fork (/tmp/se-p4b1-editshared-no.png) -> ins06/ins16 see it.
+    * FILTER (ins0A flt ptr $01 = row {01} config, shared): fork -> ptr $01->$02, row01 unchanged,
+      row02 = copy with b2 60->be (/tmp/se-p4b1-filter-fork.png); No -> row01 b2 60->be shared.
+    * UNDO: level edit Ctrl-Z reverts row07 b2 8e->ff. Fork+edit = TWO gestures: Ctrl-Z #1 reverts
+      the level edit (ptr stays $08), Ctrl-Z #2 reverts the fork (ptr $08->$01, rows 08/09 zeroed).
+    * RETRIGGER: with note 'q' held, a pulse drag edits + retriggers without crashing
+      (/tmp/se-p4b1-retrig.png). P4a scalar edit + undo still works (13->33->23).
+    * F12 help renders (now 1/2, no crash) with the new "Drag in Pulse/Filter" line
+      (/tmp/se-p4b1-f12.png).
+  - SCOPE CONFIRMED: `git diff --stat 1f0f7ae -- src/ ...driver.d` = soundedit.d (+251) / help.d /
+    driver.d only; the only song.* table writes in soundedit.d are instrumentTable (scalars + the
+    fork pointer), pulseTable/filterTable [row*4+2] (b2 level), and insLabels (undo restore) --
+    NO wave/super/chord writes.
+  - Ran `make map` -> ARCHITECTURE.md regen ADDS soundedit's new dep edges (ct.base, ui.dialogs);
+    no synopsis change. No com.shortcuts/CLI/flag change -> no KEYBOARD.md / man-page regen needed
+    (the drag is internal mouse handling; F12 is a ContextHelp page). Did not commit/grade.
+  - NOT done: P4b-2 (add/delete step + loop-marker drag), P4b-3 (filter res/mode), wave editing (P4c).

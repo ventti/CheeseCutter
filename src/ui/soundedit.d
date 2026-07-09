@@ -50,9 +50,11 @@ import com.fb : FONT_X, FONT_Y, keyjamBackground;
 import com.session : screen, video, state, song, mainui, insertUndo, UndoValue, Undoable;
 import com.shortcuts : Ctx;
 import com.palette : idx, Role, BaseColor;
+import ct.base : Song;
 import ui.window;
 import ui.input;
 import ui.button : Button;
+import ui.dialogs : ConfirmationDialog;
 import ui.ui : UI;
 import ui.menubar : MenuBar;
 import ui.palette : CommandPalette;
@@ -257,6 +259,22 @@ class SoundEditor : Window, Undoable {
 	private bool adsrDragging = false;
 	private int  adsrHandle = -1;
 	private bool adsrMoved = false;    // a byte was actually written this gesture
+
+	// §20 P4b-1 pulse/filter program LEVEL drag: a vertical grab inside the Pulse
+	// (band 3) or Filter (band 4) plot region rewrites the SweepTable row active at
+	// the grabbed frame — its init byte b2 (pulse width 0..4095 nibble-swapped, or
+	// filter cutoff 0..2047 >> 3) — so the sweep starts at the dragged level. sweepTable
+	// 0 = pulse, 1 = filter; sweepRow = the SweepTable row being edited (from the sim's
+	// rowOf[frame]); sweepMoved gates the ONE undo snapshot per gesture (first drag tick).
+	private bool sweepDragging = false;
+	private int  sweepTable = -1;
+	private int  sweepRow = -1;
+	private bool sweepMoved = false;
+	// §20.2 shared-program decision memory (per session): [table][programStartRow] ->
+	// true means the user chose "edit shared in place" for that program, so we don't
+	// re-prompt. A fork changes the pointer (private rows), so a forked program is no
+	// longer shared and never prompts again either.
+	private bool[int][2] sweepEditShared;
 
 	// §11.2 the voice whose real recording feeds the bands this frame (-1 = none),
 	// and whether that voice actually has a recording (else the bands fall back to
@@ -932,14 +950,44 @@ class SoundEditor : Window, Undoable {
 		insertUndo(this, u);
 	}
 
-	override void undo(UndoValue v) {
-		if(v.tableData.length >= 1)
-			song.instrumentTable[] = v.tableData[0];
+	// §20.3 program edits touch a whole SweepTable (level drag) or shift pointers
+	// across several tables (fork), so snapshot ALL tables in the classic
+	// tableIterator order (wave, cmd, instr, chord, pulse, filter) exactly like the
+	// classic HexTable's all-tables undo — a multi-table snapshot (length > 1) is what
+	// undo() restores via the same iterator. withLabels adds insLabels for a fork.
+	private void snapshotAllTables(bool withLabels) {
+		UndoValue u;
+		song.tableIterator((Song.Table t) { u.tableData ~= t.data.dup; });
+		if(withLabels) {
+			u.insLabels = song.insLabels;
+			u.hasInsLabels = true;
+		}
+		insertUndo(this, u);
 	}
 
-	override UndoValue createRedoState(UndoValue) {
+	override void undo(UndoValue v) {
+		// length == 1 = the P4a single instrument-table snapshot; length > 1 = a
+		// program-edit all-tables snapshot restored in the tableIterator order it was
+		// captured in (mirrors the classic HexTable all-tables undo).
+		if(v.tableData.length == 1)
+			song.instrumentTable[] = v.tableData[0];
+		else if(v.tableData.length > 1) {
+			int idx;
+			song.tableIterator((Song.Table t) { t.data[0 .. $] = v.tableData[idx++][0 .. $]; });
+		}
+		if(v.hasInsLabels)
+			song.insLabels[] = v.insLabels[];
+	}
+
+	override UndoValue createRedoState(UndoValue prev) {
 		UndoValue r;
-		r.tableData = [song.instrumentTable.dup];
+		if(prev.tableData.length <= 1)
+			r.tableData = [song.instrumentTable.dup];
+		else {
+			song.tableIterator((Song.Table t) { r.tableData ~= t.data.dup; });
+			r.insLabels = song.insLabels;
+			r.hasInsLabels = true;
+		}
 		return r;
 	}
 
@@ -1117,6 +1165,161 @@ class SoundEditor : Window, Undoable {
 				break;
 			}
 			default: break;
+		}
+	}
+
+	// ---- §20 P4b-1 pulse/filter program LEVEL editing ----
+
+	// The sweep band under a press: 0 = Pulse (band 3), 1 = Filter (band 4), -1 = none
+	// or the instrument has no editable program in that band. Only a press inside the
+	// band's plot pixel region counts (a "vertical grab" of the level). Hit-tested AFTER
+	// the ADSR handles / scrollbar / zoom buttons, so those keep working.
+	private int sweepBandAt(ref Geo g, int x, int y) {
+		int px = x * FONT_X, py = y * FONT_Y;
+		if(px < g.plotX0px || px >= g.plotX0px + g.plotWpx) return -1;
+		int ins = clampedIns();
+		if(py >= g.bandTopPx[3] && py < g.bandTopPx[4]) {
+			int ptr = song.instrumentTable[ins + 5 * 48];
+			if(ptr >= 1 && ptr <= 0x3f) return 0;    // pulse program (not fixed $80+/off)
+		}
+		if(py >= g.bandTopPx[4] && py < g.bandTopPx[5]) {
+			int ptr = song.instrumentTable[ins + 4 * 48];
+			if(ptr >= 1 && ptr <= 0x3f) return 1;    // filter program (not off)
+		}
+		return -1;
+	}
+
+	// The SweepTable row producing the frame under the press x (via the sim's per-frame
+	// rowOf), or -1 if the program is empty. This is the row whose init b2 the drag edits.
+	private int sweepRowAtPress(int table, ref Geo g, int x) {
+		int px = x * FONT_X + FONT_X / 2;
+		int f = cast(int)lround(tickForPixel(g, px));
+		if(f < 0) f = 0;
+		int ins = clampedIns();
+		SweepSim s = (table == 0)
+			? simPulse(song.instrumentTable[ins + 5 * 48])
+			: simFilter(song.instrumentTable[ins + 4 * 48]);
+		if(s.rowOf.length == 0) return -1;
+		if(f >= cast(int)s.rowOf.length) f = cast(int)s.rowOf.length - 1;
+		return s.rowOf[f];
+	}
+
+	// The set of SweepTable rows reachable from startRow via the b3 jump chain (the
+	// program). Empty for a fixed/off pointer (<=0 or >=0x40). Same traversal simPulse/
+	// simFilter use, so it matches exactly what plays.
+	private bool[0x40] sweepProgramRows(int table, int startRow) {
+		bool[0x40] rows;
+		if(startRow <= 0 || startRow >= 0x40) return rows;
+		const(ubyte)[] t = (table == 0) ? song.pulseTable : song.filterTable;
+		int row = startRow;
+		while(row >= 0 && row < 0x40 && !rows[row]) {
+			rows[row] = true;
+			int b3 = t[row * 4 + 3];
+			if(b3 == 0) row = (row + 1) & 0x3f;
+			else if(b3 <= 0x3f) row = b3;
+			else break;                    // $7f stop / illegal
+		}
+		return rows;
+	}
+
+	// True if this instrument's program shares ANY row with another instrument's program
+	// in the same table (walk all 48 pointer bytes + their chains). §20.2 sharing check.
+	private bool sweepProgramShared(int table, int ins) {
+		int col = (table == 0) ? 5 : 4;
+		bool[0x40] mine = sweepProgramRows(table, song.instrumentTable[ins + col * 48]);
+		bool any = false;
+		foreach(r; mine) if(r) { any = true; break; }
+		if(!any) return false;
+		foreach(j; 0 .. 48) {
+			if(j == ins) continue;
+			bool[0x40] other = sweepProgramRows(table, song.instrumentTable[j + col * 48]);
+			foreach(r; 0 .. 0x40) if(mine[r] && other[r]) return true;
+		}
+		return false;
+	}
+
+	// Whether the user already chose "edit shared in place" for this instrument's
+	// current program this session (keyed by the program start row = pointer byte).
+	private bool sweepDecided(int table, int ins) {
+		int col = (table == 0) ? 5 : 4;
+		int ptr = song.instrumentTable[ins + col * 48];
+		return (ptr in sweepEditShared[table]) !is null;
+	}
+
+	// §20.2 fork: allocate a private copy of this instrument's program at seekTableEnd,
+	// copy its rows, relocate their internal b3 jump targets to the new base, and repoint
+	// ONLY this instrument. Snapshots ALL tables + insLabels for undo (pointer shifts).
+	// Returns false (no mutation) if the sweep table can't fit the copy — never corrupts.
+	private bool forkSweepProgram(int table, int ins) {
+		int col = (table == 0) ? 5 : 4;
+		ubyte[] t = (table == 0) ? song.pulseTable : song.filterTable;
+		int startRow = song.instrumentTable[ins + col * 48];
+		bool[0x40] mine = sweepProgramRows(table, startRow);
+		int[] rows;
+		foreach(r; 0 .. 0x40) if(mine[r]) rows ~= r;
+		int count = cast(int)rows.length;
+		if(count == 0) return false;
+		int base = (table == 0) ? song.tPulse.seekTableEnd() : song.tFilter.seekTableEnd();
+		// Capacity: mirror insertInstrument's guard (data length 256 bytes - 4 => row 63).
+		if(base + count > 0x3f) {
+			UI.statusline.display(format("%s table full - cannot fork program.",
+				table == 0 ? "Pulse" : "Filter"));
+			return false;
+		}
+		snapshotAllTables(true);
+		// old row -> new row. Ascending placement keeps b3==0 "fall through to next row"
+		// adjacency (a b3==0 row's successor is the immediately-following row, which is
+		// the next element of the ascending set), and remaps explicit jumps below.
+		int[0x40] newRow; newRow[] = -1;
+		foreach(i, r; rows) newRow[r] = base + cast(int)i;
+		// Copy source rows into a buffer FIRST (source/dest may alias), relocate jumps.
+		ubyte[] buf = new ubyte[count * 4];
+		foreach(i, r; rows) buf[i * 4 .. i * 4 + 4] = t[r * 4 .. r * 4 + 4];
+		foreach(i; 0 .. count) {
+			ubyte b3 = buf[i * 4 + 3];
+			if(b3 >= 1 && b3 <= 0x3f) buf[i * 4 + 3] = cast(ubyte)newRow[b3];
+		}
+		t[base * 4 .. base * 4 + count * 4] = buf[];
+		song.instrumentTable[ins + col * 48] = cast(ubyte)newRow[startRow];
+		retriggerIfSounding();
+		return true;
+	}
+
+	// §20.2 pop the shared-program confirmation at PRESS. Y = fork a private copy,
+	// N = edit the shared program in place (remembered so it doesn't re-prompt). Either
+	// choice ends this press without starting a drag — the user drags again after.
+	private void promptSweepFork(int table, int ins) {
+		int col = (table == 0) ? 5 : 4;
+		int startRow = song.instrumentTable[ins + col * 48];
+		string what = (table == 0) ? "pulse" : "filter";
+		mainui.activateDialog(new ConfirmationDialog(
+			format("This %s program is shared. Fork a private copy (y/n)? ", what),
+			(int param) {
+				if(param == 0) forkSweepProgram(table, ins);       // Y = fork
+				else sweepEditShared[table][startRow] = true;      // N = edit shared
+			}));
+	}
+
+	// Map the current level drag's mouse Y to the target value and write the edited
+	// row's init byte b2 (pulse width nibble-swapped 0..4095 step 16, or filter cutoff
+	// 0..2047 >> 3). The band redraws live from the byte (WYSIWYG). No undo/re-trigger
+	// here — the gesture snapshot is at the first drag tick, the re-trigger at release.
+	private void sweepLevelDragUpdate(ref Geo g, int celly) {
+		int band = (sweepTable == 0) ? 3 : 4;
+		int maxVal = (sweepTable == 0) ? 4095 : 2047;
+		int topPx, botPx; bandBox(g, band, topPx, botPx);
+		int h = botPx - topPx; if(h < 1) h = 1;
+		int py = celly * FONT_Y + FONT_Y / 2;
+		int v = cast(int)lround(cast(double)(botPx - py) * maxVal / h);
+		v = clampInt(v, 0, maxVal);
+		if(sweepRow < 0 || sweepRow >= 0x40) return;
+		if(sweepTable == 0) {
+			// invert simPulse's pw=((b2&0x0f)<<8)|(b2&0xf0): sets pw in steps of 16.
+			ubyte b2 = cast(ubyte)(((v >> 8) & 0x0f) | (v & 0xf0));
+			song.pulseTable[sweepRow * 4 + 2] = b2;
+		} else {
+			ubyte b2 = cast(ubyte)((v >> 3) & 0xff);          // cutoff >> 3
+			song.filterTable[sweepRow * 4 + 2] = b2;
 		}
 	}
 
@@ -2335,6 +2538,29 @@ class SoundEditor : Window, Undoable {
 			clickWasButton = true;   // consume the paired release (no selection change)
 			return;
 		}
+		// §20 P4b-1: a vertical grab in the Pulse or Filter band begins a LEVEL drag of
+		// the SweepTable row active at the grabbed frame. Checked AFTER the ADSR handles /
+		// scrollbar / zoom buttons (above), before the plot drag-select (below).
+		int sb = sweepBandAt(g, x, y);
+		if(sb >= 0) {
+			int row = sweepRowAtPress(sb, g, x);
+			if(row >= 0) {
+				int ins = clampedIns();
+				clickWasButton = true;   // this press never starts/clears a selection
+				// §20.2 shared-program warn/fork at PRESS: if shared and the user hasn't
+				// decided for this program, pop the modal and DON'T start a drag this press
+				// (the user drags again after choosing — no modal mid-drag).
+				if(sweepProgramShared(sb, ins) && !sweepDecided(sb, ins)) {
+					promptSweepFork(sb, ins);
+					return;
+				}
+				sweepDragging = true;
+				sweepTable = sb;
+				sweepRow = row;
+				sweepMoved = false;      // snapshot + first write on the first drag tick
+				return;
+			}
+		}
 		// §17.2 begin a drag-select when the press lands in the plot; else clear.
 		if(inPlotCell(g, x, y)) {
 			selecting = true;
@@ -2354,6 +2580,14 @@ class SoundEditor : Window, Undoable {
 			Geo g = layout();
 			if(!adsrMoved) { snapshotInstruments(); adsrMoved = true; }
 			adsrDragUpdate(g, x, y);
+			return;
+		}
+		// §20 P4b-1 pulse/filter LEVEL drag: one all-tables undo snapshot on the first
+		// tick, then rewrite the edited row's b2 every tick (band redraws from the byte).
+		if(sweepDragging) {
+			Geo g = layout();
+			if(!sweepMoved) { snapshotAllTables(false); sweepMoved = true; }
+			sweepLevelDragUpdate(g, y);
 			return;
 		}
 		// §17.3 while a zoom button is held, keep its pressed style only while the pointer
@@ -2395,6 +2629,17 @@ class SoundEditor : Window, Undoable {
 			clickWasButton = false;
 			if(adsrMoved) retriggerIfSounding();
 			adsrMoved = false;
+			return;
+		}
+		// §20 P4b-1 end a pulse/filter LEVEL drag: make the edited program audible once
+		// (if a note is held) — never per drag tick.
+		if(sweepDragging) {
+			sweepDragging = false;
+			sweepTable = -1;
+			sweepRow = -1;
+			clickWasButton = false;
+			if(sweepMoved) retriggerIfSounding();
+			sweepMoved = false;
 			return;
 		}
 		// §17.4 end any scrollbar-thumb drag.

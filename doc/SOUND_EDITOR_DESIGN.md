@@ -1081,3 +1081,53 @@ core, has no sharing risk, and validates the WYSIWYG round-trip), then decide
   place. Per-edit choice. (P4a scalar edits have no sharing, so no prompt.)
 - **Checkpoint: build P4a first, then stop for review.** Then decide/proceed to
   P4b/c. P4a = envelope + scalar editing only.
+
+---
+
+## 20. P4b — pulse + filter program editing (2026-07-09)
+
+Edit an instrument's pulse (col5) and filter (col4) SweepTable programs from the
+graphs, WYSIWYG, never touching hex/pointers. Model: a program is a chain of rows
+[duration(b0), add(b1), init(b2), jump(b3)] each producing a ramp; simPulse/
+simFilter already turn it into a per-frame curve.
+
+### 20.1 Interaction model (row/step-based, faithful to the sweep data)
+- **Drag a step's LEVEL** (vertical drag on the pulse/filter band): find the
+  SweepTable row active at the dragged frame and set its **init value (b2)** to the
+  dragged value — pulse width 0..4095 (nibble-swapped encoding, invert simPulse's
+  `pw=((b2&0x0f)<<8)|(b2&0xf0)`), or filter cutoff 0..2047 (`b2 = cutoff>>3`). This
+  is the primary "shape the sweep" gesture; the curve follows live.
+- **Filter resonance / mode**: drag the resonance overlay level → `b1` hi nibble
+  (0..15) of the active CONFIG row; cycle the mode (LP/BP/HP combos, §10.1) via a
+  key/click → `b0 & 0x70` of the config row.
+- **Add / delete a step**: Ins / Del (band active) → `ct.purge.pulseInsertRow/
+  pulseDeleteRow` (and filter equivalents) — these fix instrument pointers +
+  sequence commands globally; snapshot ALL tables for undo.
+- **Drag the loop marker**: drag the subtle loop line → set the last step's jump
+  byte (b3) to loop back to the step under the marker (`<=0x3f` = jump-to-row).
+- Left column keeps showing Pulse/Filter ptr as read-only (managed here).
+
+### 20.2 Shared-program handling (§19.6 decision = WARN + choose)
+Before the FIRST mutating edit of a program in a gesture, check if its rows are
+shared (walk all 48 instrument pointer bytes + the program chains). If shared, pop
+a ConfirmationDialog: "This pulse/filter program is shared with other instruments.
+Fork a private copy? (Y = fork, N = edit shared)". 
+- **Fork**: `seekTableEnd`-allocate a copy of the program (relocate its internal
+  jump targets, `insertInstrument`-style), repoint ONLY this instrument's pointer
+  byte. Now edits are isolated.
+- **Edit shared**: mutate in place (classic behaviour; changes all sharers).
+Remember the choice for the rest of the gesture. Non-shared programs edit directly.
+
+### 20.3 Undo + parity
+Snapshot BEFORE mutating (com.session.insertUndo). Single-table for a b0/b1/b2/b3
+cell change; ALL-tables + insLabels for row-ops and forks (pointers shift). In-place
+edits are byte-identical to the classic Pulse/Filter table; forks produce valid
+relocated bytes (repointed) — verified by: the edited program plays as shown AND no
+other instrument's program changed.
+
+### 20.4 Sub-phases
+- **P4b-1**: sharing warn/fork infra + drag a pulse/filter step's LEVEL (init b2) +
+  undo + retrigger. *Verify*: drag → the right row's b2 changes (byte-parity vs
+  classic); shared → prompt; fork isolates; Ctrl-Z reverts; other instruments intact.
+- **P4b-2**: add/delete steps (Ins/Del row-ops) + draggable loop marker, both tables.
+- **P4b-3**: filter resonance + mode editing.

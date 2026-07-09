@@ -204,9 +204,12 @@ Left / Right............Edit the selected parameter (- / +)
   Arpeggio speed...................nibble 0-F
   HR wave / HR SR..................byte 00-FF
 Drag ADSR handles.......Set A/D/S/R by dragging the curve markers
+Drag in Pulse/Filter....Set the sweep step's level under the cursor
+                        (pulse width / filter cutoff). A shared program
+                        prompts: Y = fork a private copy, N = edit shared.
 Ctrl-Z / Ctrl-Y.........Undo / redo the edit
 (Pointer rows -- Waveform / Wave / Pulse / Filter ptr -- are
- display-only; edit those programs in the classic tables.)
+ display-only; the sweeps are edited by dragging their bands.)
 
 `+dView / zoom (mouse-first; the graphs zoom + pan)
 
