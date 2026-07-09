@@ -141,6 +141,10 @@ private struct SweepSim {
 	int[] modeOf;
 	int[] resOf;
 	int[] routeOf;
+	// §20 P4b-3: the filter CONFIG row (last b0&0x80 row at/before this frame) that
+	// governs the mode/res/routing on this frame, or -1 if none yet. This is the row
+	// whose b0/b1 the resonance-drag / mode-cycle edits.
+	int[] cfgRowOf;
 	int loopFrame = -1; // frame index the looped section starts at (-1 = none)
 	int loopPeriod = 0; // §11.3 length in frames of one loop cycle (for loop-line spacing)
 	bool stops;         // program halts ($7F) rather than loops
@@ -294,6 +298,19 @@ class SoundEditor : Window, Undoable {
 	private int  sweepLoopTable = -1;
 	private int  sweepLoopCloseRow = -1;
 	private bool sweepLoopMoved = false;
+
+	// §20 P4b-3 filter RESONANCE drag: a vertical grab on the resonance overlay line in
+	// the Filter band (band 4) rewrites the b1 HIGH nibble (res 0..15, low nibble =
+	// routing preserved) of the CONFIG row governing the grabbed frame. Distinct from the
+	// P4b-1 cutoff-level drag (hit-tested BEFORE it). sweepResRow = the config row whose
+	// b1 we edit; sweepResMoved gates the ONE undo snapshot per gesture (first drag tick).
+	private bool sweepResDragging = false;
+	private int  sweepResRow = -1;
+	private bool sweepResMoved = false;
+	// §20 P4b-3 the filter mode chip cycles through the LP/BP/HP combos (§10.1) writing the
+	// first config row's b0 mode bits (0x70). This is the requested cycle order.
+	private static immutable int[7] FILTER_MODE_CYCLE =
+		[0x10, 0x20, 0x40, 0x30, 0x60, 0x50, 0x70];   // LP BP HP LP+BP BP+HP LP+HP all
 
 	// §11.2 the voice whose real recording feeds the bands this frame (-1 = none),
 	// and whether that voice actually has a recording (else the bands fall back to
@@ -1350,6 +1367,138 @@ class SoundEditor : Window, Undoable {
 		}
 	}
 
+	// ---- §20 P4b-3 filter resonance + mode editing ----
+
+	// First CONFIG row (b0 & 0x80) reachable in the filter program chain from startRow,
+	// or -1 (fixed/off pointer, or a program with no config row). This is the "active
+	// config row" the mode chip cycles. Same chain traversal simFilter uses.
+	private int filterFirstConfigRow(int startRow) {
+		if(startRow <= 0 || startRow >= 0x40) return -1;
+		bool[0x40] visited;
+		int row = startRow, guard = 0;
+		while(row >= 0 && row < 0x40 && !visited[row] && guard++ < 0x80) {
+			visited[row] = true;
+			if(song.filterTable[row * 4] & 0x80) return row;
+			int b3 = song.filterTable[row * 4 + 3];
+			if(b3 == 0) row = (row + 1) & 0x3f;
+			else if(b3 <= 0x3f) row = b3;
+			else break;                          // $7f stop / illegal
+		}
+		return -1;
+	}
+
+	// Hit-test the resonance overlay line in the Filter band at press (x,y screen cells).
+	// The grab zone is a small band (RES_HIT_PX) around the DRAWN res line (which lives in
+	// the filter band by construction) at a column the filter program actually emits — a
+	// zone distinct from the cutoff-level drag area. Returns the CONFIG row governing the
+	// pressed frame (whose b1 hi nibble the drag edits), or -1 (press not on the res line /
+	// no config row governs this frame). Checked in clickedAt BEFORE the P4b-1 cutoff-level
+	// drag (and before sweepBandAt, whose cell-top band split can't reach a top-edge res
+	// line) so grabbing the resonance line always wins over a cutoff-level drag.
+	private enum int RES_HIT_PX = 6;
+	private int filterResHandleAt(ref Geo g, int x, int y) {
+		int px = x * FONT_X;
+		if(px < g.plotX0px || px >= g.plotX0px + g.plotWpx) return -1;
+		int ins = clampedIns();
+		int ptr = song.instrumentTable[ins + 4 * 48];
+		if(ptr < 1 || ptr > 0x3f) return -1;
+		SweepSim s = simFilter(ptr);
+		if(s.resOf.length == 0) return -1;
+		int fx = px + FONT_X / 2;
+		int f = cast(int)lround(tickForPixel(g, fx));
+		if(f < 0 || f >= cast(int)s.resOf.length) return -1;   // press x is off the drawn program
+		int cfg = (f < cast(int)s.cfgRowOf.length) ? s.cfgRowOf[f] : -1;
+		if(cfg < 0 || cfg > 0x3f) return -1;    // no config row here -> no res edit
+		int res = s.resOf[f]; if(res < 0) res = 0; if(res > 15) res = 15;
+		int topPx, botPx; bandBox(g, 4, topPx, botPx);
+		int hh = botPx - topPx; if(hh < 1) hh = 1;
+		int ry = botPx - res * hh / 15;
+		int clickPy = y * FONT_Y + FONT_Y / 2;
+		if(abs(clickPy - ry) <= RES_HIT_PX) return cfg;   // click is on the drawn res line
+		return -1;
+	}
+
+	// Map the resonance drag's mouse Y to res 0..15 (across the filter band height, the
+	// inverse of the drawer's ry = botPx - res*h/15) and write the CONFIG row's b1 HIGH
+	// nibble, PRESERVING the low nibble (routing). No undo/re-trigger here — the gesture
+	// snapshot is at the first drag tick, the re-trigger at release.
+	private void sweepResDragUpdate(ref Geo g, int celly) {
+		if(sweepResRow < 0 || sweepResRow >= 0x40) return;
+		int topPx, botPx; bandBox(g, 4, topPx, botPx);
+		int hh = botPx - topPx; if(hh < 1) hh = 1;
+		int py = celly * FONT_Y + FONT_Y / 2;
+		int v = cast(int)lround(cast(double)(botPx - py) * 15.0 / hh);
+		v = clampInt(v, 0, 15);
+		ubyte b1 = song.filterTable[sweepResRow * 4 + 1];
+		song.filterTable[sweepResRow * 4 + 1] = cast(ubyte)((v << 4) | (b1 & 0x0f));
+	}
+
+	// The Filter band's clickable MODE CHIP lives in the band's left gutter, two rows below
+	// the "Filter" label (below "res"), showing the first config row's mode name in its
+	// §10.1 colour. Fixed-width click target across the gutter (nothing else is drawn there).
+	private void filterModeChipCell(ref Geo g, out int cx, out int cy) {
+		cx = g.labelX;
+		cy = g.bandTopPx[4] / FONT_Y + 2;
+	}
+	private bool filterModeChipVisible(ref Geo g) {
+		int cx, cy; filterModeChipCell(g, cx, cy);
+		return cy < g.bandTopPx[5] / FONT_Y;      // fits inside the filter band
+	}
+	private bool filterModeChipAt(ref Geo g, int x, int y) {
+		if(!filterModeChipVisible(g)) return false;
+		int cx, cy; filterModeChipCell(g, cx, cy);
+		return y == cy && x >= cx && x < g.labelX + 8;   // whole 8-cell gutter row
+	}
+	private void drawFilterModeChip(int ins, ref Geo g) {
+		if(!filterModeChipVisible(g)) return;
+		int cx, cy; filterModeChipCell(g, cx, cy);
+		int cfg = filterFirstConfigRow(song.instrumentTable[ins + 4 * 48]);
+		string name; int col;
+		if(cfg < 0) { name = "n/a"; col = COL_DIM; }
+		else {
+			int mode = song.filterTable[cfg * 4] & 0x70;
+			name = filterModeName(mode);          // "LP".."LPBPHP" or "off"
+			int mc = filterModeColor(mode);
+			col = (mc < 0) ? COL_DIM : mc;
+		}
+		screen.cprint(cx, cy, col, 0, "[" ~ name ~ "]");
+	}
+
+	// §20 P4b-3 cycle the first filter config row's mode (LP->BP->HP->LP+BP->BP+HP->LP+HP->
+	// LP+HP+BP-> back to LP). Runs the §20.2 shared check first (fork/edit-shared prompt),
+	// then rewrites the config row's b0 mode bits (0x70), preserving the 0x80 config flag +
+	// low nibble. No-op with a status hint if the program has no config row.
+	private void cycleFilterMode(int ins) {
+		if(filterFirstConfigRow(song.instrumentTable[ins + 4 * 48]) < 0) {
+			UI.statusline.display("No filter config row - add a filter program to set mode.");
+			return;
+		}
+		if(sweepProgramShared(1, ins) && !sweepDecided(1, ins)) {
+			int startRow = song.instrumentTable[ins + 4 * 48];
+			mainui.activateDialog(new ConfirmationDialog(
+				"This filter program is shared. Fork a private copy (y/n)? ",
+				(int param) {
+					if(param == 0) { if(!forkSweepProgram(1, ins)) return; }  // Y = fork
+					else sweepEditShared[1][startRow] = true;                 // N = shared
+					doCycleFilterMode(ins);
+				}));
+			return;
+		}
+		doCycleFilterMode(ins);
+	}
+	private void doCycleFilterMode(int ins) {
+		int cfg = filterFirstConfigRow(song.instrumentTable[ins + 4 * 48]);
+		if(cfg < 0) return;
+		snapshotAllTables(false);
+		ubyte b0 = song.filterTable[cfg * 4];
+		int cur = b0 & 0x70;
+		int idx = -1;
+		foreach(i, m; FILTER_MODE_CYCLE) if(m == cur) { idx = cast(int)i; break; }
+		int next = FILTER_MODE_CYCLE[(idx + 1) % cast(int)FILTER_MODE_CYCLE.length];
+		song.filterTable[cfg * 4] = cast(ubyte)((b0 & 0x8f) | (next & 0x70));
+		retriggerIfSounding();
+	}
+
 	// ---- §20 P4b-2 add/delete step + loop-marker drag ----
 
 	// The loop-CLOSING row of the program at startRow: the row whose b3 either stops
@@ -1890,6 +2039,9 @@ class SoundEditor : Window, Undoable {
 		int lrow = g.bandTopPx[4] / FONT_Y + 1;
 		if(lrow < g.bandTopPx[5] / FONT_Y)
 			screen.cprint(g.labelX, lrow, rescol, 0, "res");
+
+		// §20 P4b-3 clickable mode chip (cycles LP/BP/HP combos, recolours the fill live).
+		drawFilterModeChip(ins, g);
 	}
 
 	// §10.3 Frequency/pitch band: the instrument's per-frame semitone program taken
@@ -2367,6 +2519,7 @@ class SoundEditor : Window, Undoable {
 		if(startRow <= 0 || startRow >= 0x40) return s;
 		int cutoff = 0;
 		int mode = 0, res = 0, routing = 0;   // persist across rows
+		int curCfgRow = -1;                    // §20 P4b-3 last CONFIG row seen (-1 = none)
 		int row = startRow;
 		bool[0x40] visited;
 		int[0x40] firstFrame; firstFrame[] = -1;
@@ -2375,6 +2528,7 @@ class SoundEditor : Window, Undoable {
 		void emit() {
 			s.val ~= cutoff; s.rowOf ~= row;
 			s.modeOf ~= mode; s.resOf ~= res; s.routeOf ~= routing;
+			s.cfgRowOf ~= curCfgRow;
 		}
 		while(s.val.length < MAXF) {
 			int base = row * 4;
@@ -2387,6 +2541,7 @@ class SoundEditor : Window, Undoable {
 				mode = b0 & 0x70;
 				res = b1 >> 4;
 				routing = b1 & 0x0f;
+				curCfgRow = row;               // §20 P4b-3 this row now governs mode/res
 				if(b2 != 0xff) cutoff = (b2 << 3);
 				emit();
 			}
@@ -2749,6 +2904,14 @@ class SoundEditor : Window, Undoable {
 			if(hit >= 0) { pressedBtn = hit; pressedOver = true; }
 			return;
 		}
+		// §20 P4b-3: a click on the Filter band's mode chip cycles the filter mode. Checked
+		// BEFORE step-selection so clicking the chip cycles rather than selecting a step (the
+		// chip lives in the gutter, so this also never starts a plot selection).
+		if(filterModeChipAt(g, x, y)) {
+			clickWasButton = true;   // consume the paired release (no selection change)
+			cycleFilterMode(clampedIns());
+			return;
+		}
 		// §19 P4a: grab an A/D/S/R handle on the ADSR curve if the press landed on one
 		// (checked BEFORE the plot drag-select, since the ADSR band is inside the plot).
 		// One undo snapshot per drag gesture is taken here at press.
@@ -2759,6 +2922,20 @@ class SoundEditor : Window, Undoable {
 			adsrMoved = false;       // snapshot + first write happen on the first drag tick
 			clickWasButton = true;   // consume the paired release (no selection change)
 			return;
+		}
+		// §20 P4b-3 RESONANCE drag: grabbing the resonance overlay line in the Filter band
+		// starts a res drag of the governing config row's b1 hi nibble. Checked BEFORE the
+		// P4b-1 cutoff-level drag AND before sweepBandAt (whose cell-top band split can miss
+		// a res line sitting at the filter band's top edge) so the two never conflict.
+		{
+			int rcfg = filterResHandleAt(g, x, y);
+			if(rcfg >= 0) {
+				clickWasButton = true;   // this press never starts/clears a selection
+				sweepResDragging = true;
+				sweepResRow = rcfg;
+				sweepResMoved = false;   // shared check + snapshot on the first drag tick
+				return;
+			}
 		}
 		// §20 P4b-1: a vertical grab in the Pulse or Filter band begins a LEVEL drag of
 		// the SweepTable row active at the grabbed frame. Checked AFTER the ADSR handles /
@@ -2831,6 +3008,23 @@ class SoundEditor : Window, Undoable {
 			sweepLoopDragUpdate(g, x);
 			return;
 		}
+		// §20 P4b-3 filter RESONANCE drag: on the first motion tick do the §20.2 shared
+		// check (prompt + abort if undecided; the user drags again after choosing), else
+		// take one all-tables undo snapshot, then rewrite the config row's b1 hi nibble.
+		if(sweepResDragging) {
+			Geo g = layout();
+			if(!sweepResMoved) {
+				int ins = clampedIns();
+				if(sweepProgramShared(1, ins) && !sweepDecided(1, ins)) {
+					promptSweepFork(1, ins);
+					sweepResDragging = false; sweepResRow = -1;
+					return;
+				}
+				snapshotAllTables(false); sweepResMoved = true;
+			}
+			sweepResDragUpdate(g, y);
+			return;
+		}
 		// §20 P4b-1 pulse/filter LEVEL drag: on the first motion tick do the §20.2 shared
 		// check (prompt + abort if undecided; the user drags again after choosing), else
 		// take one all-tables undo snapshot, then rewrite the edited row's b2 every tick.
@@ -2897,6 +3091,16 @@ class SoundEditor : Window, Undoable {
 			clickWasButton = false;
 			if(sweepLoopMoved) retriggerIfSounding();
 			sweepLoopMoved = false;
+			return;
+		}
+		// §20 P4b-3 end a filter RESONANCE drag: make the new resonance audible once if a
+		// note is held. A plain click (no motion) wrote nothing.
+		if(sweepResDragging) {
+			sweepResDragging = false;
+			sweepResRow = -1;
+			clickWasButton = false;
+			if(sweepResMoved) retriggerIfSounding();
+			sweepResMoved = false;
 			return;
 		}
 		// §20 P4b-1 end a pulse/filter LEVEL drag: make the edited program audible once

@@ -210,6 +210,8 @@ Drag in Pulse/Filter....Set the sweep step's level under the cursor
 Click a Pulse/Filter step..Select it (bright outline)
 Insert / Delete.........Add a step after / remove the selected step
 Drag the loop line......Move the program's loop-back point
+Drag the Filter res line..Set the config row's resonance (0-F)
+Click the Filter [mode] chip..Cycle LP / BP / HP combos (recolours the fill)
 Ctrl-Z / Ctrl-Y.........Undo / redo the edit
 (Pointer rows -- Waveform / Wave / Pulse / Filter ptr -- are
  display-only; the sweeps are edited by dragging their bands.)

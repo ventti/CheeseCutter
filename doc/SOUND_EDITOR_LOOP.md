@@ -1159,3 +1159,74 @@ Tech-debt to address in P6 polish (non-blocking, from verifiers):
     No com.shortcuts/CLI/flag change -> no KEYBOARD.md / man-page regen (Ins/Del + loop drag
     are internal keypress/mouse handling; F12 is a ContextHelp page). Did not commit/grade.
   - NOT done: P4b-3 (filter resonance + mode editing), wave editing (P4c).
+
+- (P4b-3 FILTER RESONANCE + MODE EDITING, §10.1/§10.2/§20.1/§20.4 P4b-3 2026-07-09) Fourth
+  editing pass, the LAST P4b piece. The filter (col4) SweepTable program's per-frame RESONANCE
+  and MODE (LP/BP/HP combos) are now editable from the Filter band, reusing ALL the P4b-1/2 fork
+  infra (`sweepProgramShared`/`sweepDecided`/`promptSweepFork`/`forkSweepProgram`/`sweepEditShared`)
+  + multi-table undo (`snapshotAllTables`) + retrigger. Writes ONLY filterTable b0 (mode nibble) /
+  b1 (res hi nibble) + the reused fork pointer/rows + undo insLabels. Files: `src/ui/soundedit.d`
+  (res drag + mode chip + config-row tracking), `src/ui/help.d` (2 F12 lines). No driver change
+  (reused the read-only `sweepdump:P|F` oracle + the existing `drag`/`click` primitives).
+  - **§10.2/§20.1 resonance drag.** `simFilter` now also emits `SweepSim.cfgRowOf[]` = the CONFIG
+    row (last `b0&0x80` row at/before each frame) governing that frame's mode/res. `filterResHandleAt`
+    hit-tests the DRAWN resonance line (ry = botPx - res*h/15) within RES_HIT_PX=6 of the click,
+    at a column the filter program actually emits (`f` in `resOf` range) -> returns the governing
+    config row. Checked in `clickedAt` BEFORE `sweepBandAt`/the P4b-1 cutoff-level drag (a res
+    line sitting at the filter band's TOP edge falls in a cell the cell-top band split calls the
+    Pulse band, so gating on it dropped max-res grabs -- the independent proximity test fixes that).
+    `sweepResDragUpdate` maps mouse Y -> res 0..15 (inverse of the drawer) and writes the config
+    row's b1 HIGH nibble, PRESERVING the low nibble (routing). Res drag state:
+    `sweepResDragging`/`sweepResRow`/`sweepResMoved` (independent of the level-drag vars).
+  - **§10.1/§20.1 mode chip.** A clickable `[MODE]` chip in the Filter band's left gutter (row 2,
+    below "res"), drawn by `drawFilterModeChip` showing the first config row's `filterModeName` in
+    its §10.1 `filterModeColor`. `filterModeChipAt` hit-tests the gutter row; checked in `clickedAt`
+    BEFORE step-selection so clicking the chip cycles rather than selecting a step. `cycleFilterMode`
+    -> `doCycleFilterMode` advances `b0`'s 0x70 bits through `FILTER_MODE_CYCLE =
+    [0x10,0x20,0x40,0x30,0x60,0x50,0x70]` (LP->BP->HP->LP+BP->BP+HP->LP+HP->all->LP), preserving the
+    0x80 config flag + low nibble. During playback the recorded-mode fill recolours per §10.1
+    (idle preview stays dim navy by the v6 recording-view design; the chip is the idle mode indicator).
+  - **§20.2/§20.3 shared + undo.** Both edits run the shared check on the first mutating tick (res
+    drag: first drag motion, like the level drag; mode chip: at click) -> shared+undecided pops the
+    fork/edit-shared ConfirmationDialog. Res drag aborts on the prompt (user re-drags after choosing);
+    the mode chip's dialog callback forks/edits-shared THEN cycles (fork+cycle = two undo gestures,
+    matching P4b-1). `filterFirstConfigRow` is re-derived after a fork so the cycle/res lands in the
+    private copy. Non-shared/decided edits `snapshotAllTables(false)` + write directly. No config row
+    in the program -> res drag is a no-op (hit-test returns -1), mode chip shows a statusline hint.
+    Retrigger a held keyjam note on release (res) / after the write (mode).
+  - Build: `make -f Makefile.mac clean && make -f Makefile.mac -j4 ccutter ccdriver` -> exit 0, both
+    binaries (ccutter 7577560, ccdriver 7639912).
+  - VERIFIED by DRIVING + SEEING (headless dummy SDL), tunes/abaddon-trouble.ct (has filter config
+    rows). Filter band rows ~21-25; res line at frame0 ~cell 43; mode chip at cell row 23. Instruments:
+    ins03 flt $05 = row05 `C0 F1 60 7F` (HP res15, NON-shared); ins00/ins04 share flt $01 (first
+    config row01 `E0 F1 50 00` = BP+HP).
+    * RES DRAG (ins03, non-shared): `drag:43,21,43,24` -> row05 b1 `F1`->`11` (res 15->1, routing low
+      nibble preserved; b0/b2/b3 untouched); only that byte + only that row changed (sweepdump:F); raw
+      strip `05:C0 11 60 7F`. /tmp/se-p4b3-1-resdrag.png.
+    * MODE CHIP (ins03, non-shared): 7 clicks cycle b0 `C0`->`B0`->`E0`->`D0`->`F0`->`90`->`A0`->`C0`
+      (HP->LP+BP->BP+HP->LP+HP->all->LP->BP->HP), 0x80 flag + b1/b2/b3 preserved. Chip recolours
+      lightblue([HP])->red([LP]) per §10.1 (/tmp/se-p4b3-2-modechip-LP.png). During playback the
+      RECORDED filter fill is RED for the edited LP mode (/tmp/se-p4b3-7-play-LPfill.png).
+    * CLASSIC PARITY: edit ins03 (mode+res) -> Ctrl-E to classic -> the classic Filter table shows
+      `05: B0 61 60 7F` byte-for-byte (/tmp/se-p4b3-4b-classic.png; "Sound Editor closed.", tracker
+      fully restored).
+    * SHARED (ins04 flt $01, shared w/ ins00): mode chip click -> "filter program is shared, fork
+      (y/n)?" prompt, zero graph bleed (/tmp/se-p4b3-3b-forkprompt.png). Y=fork -> ins04 $01->$06,
+      forked row06 config cycled `E0`->`D0`, original rows 01-05 + ins00 ptr $01 UNCHANGED
+      (/tmp/se-p4b3-3c-fork-yes.png). N=edit shared -> ptr stays $01, row01 `E0`->`D0` in place (ins00
+      sees it), no fork. Shared RES drag -> fork -> re-drag lands res only in forked row06 `E0 11 50 00`,
+      original row01 b1 stays F1 -> fork isolates.
+    * UNDO: res drag Ctrl-Z reverts row05 b1 `11`->`f1`; mode cycle Ctrl-Z reverts row05 b0 `b0`->`c0`.
+    * REGRESSION: P4b-1 pulse level drag still edits pulse b2 (ins04 row06 `01`->`8e`) and leaves
+      filterTable UNTOUCHED (the res-check reordering doesn't hijack pulse edits); P4b-2 pulse
+      select+Insert grows the program with the global purge pointer fixups (ins10 pul `08`->`09`);
+      keyjam ('a' -> KEYJAM + SID regs); F12 "Sound Editor help 1/2" + page 2/2 render with the new
+      "Drag the Filter res line" / "Click the Filter [mode] chip" lines (/tmp/se-p4b3-6b-f12-page2.png).
+  - SCOPE CONFIRMED: `git diff --stat 5ea33a3 -- src/` = soundedit.d (+204) + help.d (+2) only. The
+    only NEW table writes are `filterTable[cfg*4]` (mode b0) + `filterTable[sweepResRow*4+1]` (res b1);
+    everything else (fork rows/pointer, undo insLabels, P4b-1/2 pulse/filter b2/b3, ct.purge row-ops)
+    is reused. NO wave/super/chord writes; classic tables intact.
+  - Ran `make map` -> ARCHITECTURE.md unchanged (idempotent; no new module dep or synopsis change).
+    No com.shortcuts/CLI/flag change -> no KEYBOARD.md / man-page regen (res drag + mode chip are
+    internal mouse handling; F12 is a ContextHelp page). Did not commit/grade (loop orchestrator/verifier).
+  - NOT done: wave/arp editing (P4c), P4d polish. P4b (pulse+filter program editing) is now COMPLETE.
