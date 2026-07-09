@@ -27,7 +27,7 @@ into.
 
 P4a (§19.5) adds the FIRST editing: the per-instrument SCALAR bytes — Attack /
 Decay / Sustain / Release nibbles (AD col0, SR col1), the Restart type (col2 bits
-6-7) + gate-on/arp-delay nibble (col2 low nibble), and the HR wave (col3) / HR SR
+6-7) + arpeggio-speed nibble (col2 low nibble), and the HR wave (col3) / HR SR
 (col6) bytes — are editable BOTH numerically in the left column (Up/Down select a
 row, Left/Right decrement/increment; Shift-Left/Right pans instead) AND by dragging
 the A/D/S/R handles on the ADSR curve, each reflecting the other instantly (both
@@ -807,10 +807,10 @@ class SoundEditor : Window, Undoable {
 		foreach(c; w.cells) if(c.ctrl >= 0x10) { firstCtrl = c.ctrl; break; }
 
 		// §8.2 restart-condition byte (col 2): $80 hard / $40 soft / else 3-frame
-		// restart; the low nibble is the gate-on / arp delay.
-		string rstStr = (rst & 0xc0) == 0x80 ? "hard"
-			: ((rst & 0xc0) == 0x40 ? "soft" : "3fr");
-		int gateOn = rst & 0x0f;
+		// restart; the low nibble is the ARPEGGIO SPEED.
+		string rstStr = (rst & 0xc0) == 0x80 ? "Hard"
+			: ((rst & 0xc0) == 0x40 ? "Soft" : "3 Frames");
+		int arpSpeed = rst & 0x0f;
 
 		// 6-char text bar for a 0..15 nibble.
 		static string nibbleBar(int n) {
@@ -825,7 +825,7 @@ class SoundEditor : Window, Undoable {
 		// leaving Shift-Left/Right free to pan on every row).
 		string[PARAM_ROWS] labels = [
 			"Attack", "Decay", "Sustain", "Release", "Waveform", "Wave ptr",
-			"Pulse ptr", "Filter ptr", "Restart", "Gate dly", "HR wave", "HR SR"
+			"Pulse ptr", "Filter ptr", "Restart", "Arpeggio speed", "HR wave", "HR SR"
 		];
 		string[PARAM_ROWS] vals;
 		vals[ROW_ATTACK]  = format("%X %s", attack,  nibbleBar(attack));
@@ -836,13 +836,13 @@ class SoundEditor : Window, Undoable {
 		vals[ROW_WAVEPTR] = format("$%02X", wpt);
 		vals[ROW_PULSEPTR]= ppt >= 0x80 ? format("fix $%03X", (ppt & 0x0f) << 8) : format("$%02X", ppt);
 		vals[ROW_FILTPTR] = fpt == 0 ? "off" : format("$%02X", fpt);
-		vals[ROW_RESTART] = format("%s $%02X", rstStr, rst);
-		vals[ROW_GATE]    = format("%X %s", gateOn, nibbleBar(gateOn));
+		vals[ROW_RESTART] = rstStr;
+		vals[ROW_GATE]    = format("%X %s", arpSpeed, nibbleBar(arpSpeed));
 		vals[ROW_HRWAVE]  = format("$%02X", hrw);
 		vals[ROW_HRSR]    = format("$%02X", hsr);
 
 		int y0 = area.y + 3;
-		immutable int valX = g.paramX + 12;
+		immutable int valX = g.paramX + 16;   // wide enough for the "Arpeggio speed" label
 		immutable int valMax = g.sepX - valX;   // chars available before separator
 		screen.cprint(g.paramX, area.y + 2, COL_LABEL, 0, "Parameters");
 		foreach(i; 0 .. PARAM_ROWS) {

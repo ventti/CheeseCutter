@@ -200,8 +200,8 @@ Ctrl-E..................Exit back to the classic editor",
 
 Left / Right............Edit the selected parameter (- / +)
   Attack/Decay/Sustain/Release.....nibble 0-F
-  Restart..........................cycle type hard / soft / 3fr
-  Gate dly.........................gate-on / arp-delay nibble 0-F
+  Restart..........................cycle Hard / Soft / 3 Frames
+  Arpeggio speed...................nibble 0-F
   HR wave / HR SR..................byte 00-FF
 Drag ADSR handles.......Set A/D/S/R by dragging the curve markers
 Ctrl-Z / Ctrl-Y.........Undo / redo the edit
