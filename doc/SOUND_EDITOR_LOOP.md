@@ -960,3 +960,48 @@ Tech-debt to address in P6 polish (non-blocking, from verifiers):
       without crashing (/tmp/se-p4a-retrigger.png).
   - Classic editor intact: enter/exit clean ("Sound Editor closed."), tables render normally.
   - NOT done: P4b/c program editing, P4d polish. Did not commit/grade (loop orchestrator/verifier).
+- (v-est WHITE-DOTTED ADSR ESTIMATE overlaid on the recording, §19 2026-07-09) Files:
+  `src/ui/soundedit.d` ONLY (drawing + one nominal constant; read-only re: song data —
+  no byte-editing logic touched). Verifier grades separately; not committed.
+  - **§19.1 sustain = 50 axis units.** `nominalGateFrames` is no longer derived from
+    `NOMINAL_GATE_MS/tickMs` (was ~46-92 depending on multiplier) — it's a fixed **50**
+    ("frames" as shown on the scale label). One assignment change keeps the estimate
+    curve, the ADSR drag handles (`adsrHandlePositions`/`adsrDragUpdate`), the hover
+    `adsrAmpAt` Env% helper, and `computeVisFrames`'s idle window-fit all consistent at
+    50. `NOMINAL_GATE_MS` left defined but unused; the member initialiser + comment updated.
+  - **§19.2 exponential estimate matching the recording's shape.** New module-level
+    `expEnvLevel(float frac) nothrow` mirrors the visualizer's e^-5 decay/release curve.
+    BOTH `amp()` closures (the `drawAdsrBand` per-pixel estimate and the `adsrAmpAt` hover
+    helper) now use it: decay `= sLvl + (1-sLvl)*expEnvLevel((f-aF)/dF)`, release
+    `= clamp01(sLvl*expEnvLevel((f-gateEnd)/rF))`. Attack stays linear; sustain hold
+    unchanged. Estimate curve, hover Env%, and the recording now agree in SHAPE.
+  - **§19.3 always draw the estimate as WHITE DOTTED; keep the recorded curve.** New
+    `COL_ESTIMATE = BaseColor.white`. In `drawAdsrBand`: the `useRec` branch still draws
+    the solid green recorded polyline (`COL_CURVE`) but no longer `return`s — it falls
+    through, and the estimate per-pixel loop ALWAYS runs, drawing the AD/SR-derived curve
+    as a white dotted line (`if((x & 2) == 0) video.olPoint(x, y, COL_ESTIMATE)`, still
+    skipping pre-roll `f<0` columns) instead of the old dim solid polyline. So: idle ->
+    white-dotted estimate only; after a keyjam note -> solid green recording + white-dotted
+    estimate overlaid, the estimate updating live as A/D/S/R are edited. Restart pre-roll
+    drawing kept.
+  - Build: `make -f Makefile.mac clean && make -f Makefile.mac -j4 ccutter ccdriver` ->
+    exit 0, both binaries (ccutter 7556072, ccdriver 7615640).
+  - Smoke (headless dummy SDL), tunes/vent-arkijuusto.ct, ENTER seq `load:... key:ESC key:Ctrl-e`:
+    * /tmp/se-est-1-idle.png — ins00 "HihatClosed" (AD13 SR00, sustain 0): white-dotted
+      estimate = attack ramp then exponential decay to 0 (no plateau since S=0).
+    * /tmp/se-est-2-idle-full.png — `key:+`x6 -> ins06 "Bgtr" (AD04 SR9B): white-dotted
+      estimate shows fast attack, exponential decay to sustain ~9/15, ~50-unit sustain
+      plateau, then exponential release tail. Scale "0-302 f".
+    * /tmp/se-est-3-edited.png — `key:Right`x6 on Attack (AD 04->64, filename shows `*`):
+      the white-dotted estimate grew a visible attack RAMP at the left — changed live.
+    * /tmp/se-est-4-overlay.png — after `jamrender:q,80` on ins06 (voice0 hasRec=true
+      recLen=78): the ADSR band shows BOTH the solid GREEN recorded curve (held at the
+      sustain level) AND the white-dotted estimate (decay+release) overlaid.
+    * /tmp/se-est-5-overlay-edited.png — then edit Sustain to F (`Down`x2 `Right`x8,
+      SR->FB): the white-dotted estimate's plateau jumped to full height + longer release
+      tail — the estimate moves with the edit while the green recording is still drawn.
+  - READ-ONLY CONFIRMED: `git diff --stat 1eeb37f -- src/` = soundedit.d only (+41/-22);
+    grep of the diff finds NO new `song.{instrumentTable/waveTable/pulseTable/filterTable/
+    superTable/insLabels}[...] =` writes.
+  - No shortcut/CLI/flag/help-registry change -> no KEYBOARD.md / man-page / ARCHITECTURE.md
+    regen needed (module synopsis first-sentence unchanged). Did not commit/grade.

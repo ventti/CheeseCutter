@@ -77,6 +77,17 @@ private enum float SCREEN_FRAME_MS = 19.95f;   // PAL screen-frame period (ms)
 // knee on the sim/idle path. Real time, so it maps to the right number of ticks at
 // any multiplier (was a fixed 46-tick count = ~918 ms only correct at multiplier 1).
 private enum float NOMINAL_GATE_MS = 918.0f;
+// §19: exponential envelope level for the ADSR ESTIMATE curve, mirroring the
+// recording's exponential decay/release shape (audio.visualizer). frac 0->1 maps a
+// segment's progress to a level 1->0 with the same e^-5 curvature the recorder uses,
+// so the estimate curve, the hover Env% helper, and the recording all agree in shape.
+private float expEnvLevel(float frac) nothrow {
+	import std.math : exp;
+	if(frac <= 0.0f) return 1.0f;
+	if(frac >= 1.0f) return 0.0f;
+	immutable float e = exp(-5.0f);
+	return (exp(-5.0f * frac) - e) / (1.0f - e);
+}
 // §12.1: the post-trigger X span is no longer a fixed constant -- it AUTO-FITS the
 // note's full duration each frame (see SoundEditor.computeVisFrames). These are the
 // sane clamp bounds: a floor so a tiny sound isn't absurdly zoomed in, and a ceiling
@@ -186,6 +197,7 @@ class SoundEditor : Window, Undoable {
 	private enum int COL_PULSE_LINE = BaseColor.lightblue;
 	private enum int COL_FILT_LINE  = BaseColor.lightred;
 	private enum int COL_TRIGGER  = BaseColor.red;
+	private enum int COL_ESTIMATE = BaseColor.white;   // §19 white-dotted ADSR estimate
 	private enum int COL_RESTART  = BaseColor.cyan;
 	private enum int COL_RSTFILL  = BaseColor.brown;
 	private enum int COL_RSTCURVE = BaseColor.lightred;
@@ -274,12 +286,15 @@ class SoundEditor : Window, Undoable {
 	private int prerollTicks = 2;
 
 	// §16.2 real-time axis, refreshed at the top of update() from the live player
-	// multiplier: tickMs = the real duration of one axis index (one player tick), and
-	// nominalGateFrames = NOMINAL_GATE_MS expressed in those ticks. Every ms<->tick
-	// conversion (ADSR ms tables, the scale label, the probe readout) goes through
-	// tickMs so all bands + label agree at any multiplier.
+	// multiplier: tickMs = the real duration of one axis index (one player tick).
+	// Every ms<->tick conversion (ADSR ms tables, the scale label, the probe readout)
+	// goes through tickMs so all bands + label agree at any multiplier.
+	// §19: nominalGateFrames is the ADSR-estimate sustain hold, in axis units = 50
+	// "frames" as shown on the scale label. It drives the estimate curve, the drag
+	// handles, the hover Env% helper, and the idle window-fit — one constant keeps
+	// them all consistent at 50.
 	private float tickMs = SCREEN_FRAME_MS;
-	private int nominalGateFrames = 46;
+	private int nominalGateFrames = 50;
 
 	// §17.1 zoomable/pannable VIEWPORT over the shared tick axis. The axis maps
 	// [viewStartTick, viewEndTick] (a sub-window of the whole note) across plotWpx
@@ -591,7 +606,8 @@ class SoundEditor : Window, Undoable {
 		int mult = audio.audio.multiplier;
 		if(mult < 1) mult = 1;
 		tickMs = SCREEN_FRAME_MS / mult;
-		nominalGateFrames = cast(int)lround(NOMINAL_GATE_MS / tickMs);
+		// estimate sustain hold, in axis units = 50 "frames" as shown on the scale
+		nominalGateFrames = 50;
 
 		Geo g = layout();
 
@@ -1277,7 +1293,9 @@ class SoundEditor : Window, Undoable {
 				else video.olPoint(x, y, COL_CURVE);
 				prevX = x; prevY = y;
 			}
-			return;
+			// §19: DON'T return — fall through to overlay the white-dotted ADSR estimate
+			// (from the current AD/SR nibbles) on top of the solid green recording, so the
+			// estimate updates live as the user edits A/D/S/R.
 		}
 
 		ubyte ad = song.instrumentTable[ins + 0 * 48];
@@ -1296,12 +1314,14 @@ class SoundEditor : Window, Undoable {
 		float gateEnd = aF + dF + nominalGateFrames;
 
 		// Amplitude 0..1 at absolute frame f (f>=0, i.e. after the trigger).
+		// §19: decay/release use the exponential shape (expEnvLevel) that the recorder
+		// produces, so the estimate curve matches the recording's shape. Attack stays
+		// linear; sustain hold unchanged.
 		float amp(float f) {
 			if(f < aF) return aF > 0 ? f / aF : 1.0f;             // attack ramp -> 1.0
-			if(f < aF + dF) return dF > 0 ? 1.0f - (1.0f - sLvl) * ((f - aF) / dF) : sLvl;
+			if(f < aF + dF) return dF > 0 ? sLvl + (1.0f - sLvl) * expEnvLevel((f - aF) / dF) : sLvl;
 			if(f < gateEnd) return sLvl;                          // sustain hold
-			float rt = (f - gateEnd) / rF;                        // release
-			return clamp01(sLvl * (1.0f - rt));
+			return clamp01(sLvl * expEnvLevel((f - gateEnd) / rF)); // release (exponential)
 		}
 
 		// §9.2 restart pre-roll (frames -RESTART_FRAMES..0), shaded distinctly, showing
@@ -1333,19 +1353,17 @@ class SoundEditor : Window, Undoable {
 			screen.cprint(preX0 / FONT_X, topPx / FONT_Y, COL_RSTCURVE, 0, rlabel);
 		}
 
-		// Note envelope: one point per horizontal pixel across the visible note region,
-		// mapped pixel->tick through the SAME viewport axis so its knees align with the
-		// other bands at any zoom. Skip columns before the trigger (pre-roll, f<0).
-		int prevY = -1;
-		bool prevSet = false;
+		// §19 ADSR ESTIMATE: one point per horizontal pixel across the visible note
+		// region, mapped pixel->tick through the SAME viewport axis so its knees align
+		// with the other bands at any zoom. Skip columns before the trigger (pre-roll,
+		// f<0). Drawn as a WHITE DOTTED line (2-on/2-off pixel pattern) — ALWAYS, both
+		// idle (estimate only) and after a keyjam note (overlaid on the solid green
+		// recording); it updates live as the user edits A/D/S/R.
 		for(int x = g.plotX0px; x < plotEndPx; x++) {
 			double f = tickForPixel(g, x);
-			if(f < 0) { prevSet = false; continue; }
+			if(f < 0) continue;
 			int y = botPx - cast(int)lround(clamp01(amp(cast(float)f)) * h);
-			// §11.2 sim = dimmed idle preview.
-			if(prevSet) video.olLine(x - 1, prevY, x, y, COL_DIM);
-			else video.olPoint(x, y, COL_DIM);
-			prevY = y; prevSet = true;
+			if((x & 2) == 0) video.olPoint(x, y, COL_ESTIMATE);
 		}
 	}
 
@@ -1703,10 +1721,11 @@ class SoundEditor : Window, Undoable {
 		float rF = DECAY_RELEASE_TIME_MS[release] / tickMs;
 		if(rF < 0.5f) rF = 0.5f;
 		float gateEnd = aF + dF + nominalGateFrames;
+		// §19: exponential decay/release matching the recording + drawAdsrBand estimate.
 		if(f < aF) return aF > 0 ? f / aF : 1.0f;
-		if(f < aF + dF) return dF > 0 ? 1.0f - (1.0f - sLvl) * ((f - aF) / dF) : sLvl;
+		if(f < aF + dF) return dF > 0 ? sLvl + (1.0f - sLvl) * expEnvLevel((f - aF) / dF) : sLvl;
 		if(f < gateEnd) return sLvl;
-		return clamp01(sLvl * (1.0f - (f - gateEnd) / rF));
+		return clamp01(sLvl * expEnvLevel((f - gateEnd) / rF));
 	}
 
 	// §14.1 Draw the hover probe: a dashed WHITE vertical line at the hovered frame
