@@ -44,13 +44,14 @@ module ui.soundedit;
 import std.conv : to;
 import std.string : format, stripRight;
 import std.algorithm : max, min;
-import std.math : lround, log2, floor, ceil;
+import std.math : lround, log2, floor, ceil, abs;
 import derelict.sdl2.sdl;
 import com.fb : FONT_X, FONT_Y, keyjamBackground;
 import com.session : screen, video, state, song, mainui, insertUndo, UndoValue, Undoable;
 import com.shortcuts : Ctx;
 import com.palette : idx, Role, BaseColor;
 import ct.base : Song;
+static import ct.purge;
 import ui.window;
 import ui.input;
 import ui.button : Button;
@@ -200,6 +201,7 @@ class SoundEditor : Window, Undoable {
 	private enum int COL_FILT_LINE  = BaseColor.lightred;
 	private enum int COL_TRIGGER  = BaseColor.red;
 	private enum int COL_ESTIMATE = BaseColor.white;   // §19 white-dotted ADSR estimate
+	private enum int COL_STEPSEL  = BaseColor.white;   // §20 P4b-2 selected-step outline
 	private enum int COL_RESTART  = BaseColor.cyan;
 	private enum int COL_RSTFILL  = BaseColor.brown;
 	private enum int COL_RSTCURVE = BaseColor.lightred;
@@ -275,6 +277,23 @@ class SoundEditor : Window, Undoable {
 	// re-prompt. A fork changes the pointer (private rows), so a forked program is no
 	// longer shared and never prompts again either.
 	private bool[int][2] sweepEditShared;
+
+	// §20 P4b-2 SELECTED STEP: a plain CLICK (press+release, no motion) inside the Pulse
+	// (0) or Filter (1) band selects the SweepTable row active at that frame; a bright
+	// outline is drawn on that step's frame span. Ins/Del then insert/delete a row via the
+	// ct.purge row-ops. selectedSweepTable = -1 means no step selected; selecting in one
+	// band clears the other; switching instrument clears it (the row index is table-local).
+	private int selectedSweepTable = -1;
+	private int selectedSweepRow = -1;
+	// §20 P4b-2 LOOP-MARKER drag: grabbing the subtle loop line (or, for a stopping
+	// program, its end marker) drags the program's loop-BACK point. sweepLoopCloseRow =
+	// the row whose b3 jump we rewrite (the loop-closing / terminal row); dragging sets it
+	// to the SweepTable row active at the dragged frame (converting a $7f stop into a loop
+	// if needed). sweepLoopMoved gates the ONE undo snapshot per gesture (first drag tick).
+	private bool sweepLoopDragging = false;
+	private int  sweepLoopTable = -1;
+	private int  sweepLoopCloseRow = -1;
+	private bool sweepLoopMoved = false;
 
 	// §11.2 the voice whose real recording feeds the bands this frame (-1 = none),
 	// and whether that voice actually has a recording (else the bands fall back to
@@ -690,6 +709,9 @@ class SoundEditor : Window, Undoable {
 		drawFilterBand(ins, g);
 		drawBandAxis(g, 5);
 		drawWaveBand(ins, g);
+
+		// §20 P4b-2 bright outline on the selected pulse/filter step (Ins/Del target).
+		drawSweepSelection(ins, g);
 
 		// §13.4 restart marker: a vertical line at the START of the restart phase
 		// (frame -restartFrames, the actual hard/soft/3-frame restart length for this
@@ -1281,6 +1303,11 @@ class SoundEditor : Window, Undoable {
 		}
 		t[base * 4 .. base * 4 + count * 4] = buf[];
 		song.instrumentTable[ins + col * 48] = cast(ubyte)newRow[startRow];
+		// §20 P4b-2 keep the selected step pointing at the SAME step in the private copy
+		// (its row index moved with the fork), so a post-fork Ins/Del acts on it.
+		if(selectedSweepTable == table && selectedSweepRow >= 0 && selectedSweepRow < 0x40
+				&& newRow[selectedSweepRow] >= 0)
+			selectedSweepRow = newRow[selectedSweepRow];
 		retriggerIfSounding();
 		return true;
 	}
@@ -1321,6 +1348,189 @@ class SoundEditor : Window, Undoable {
 			ubyte b2 = cast(ubyte)((v >> 3) & 0xff);          // cutoff >> 3
 			song.filterTable[sweepRow * 4 + 2] = b2;
 		}
+	}
+
+	// ---- §20 P4b-2 add/delete step + loop-marker drag ----
+
+	// The loop-CLOSING row of the program at startRow: the row whose b3 either stops
+	// ($7f / illegal) or jumps back to an already-visited row. This is the row whose b3
+	// the loop-marker drag rewrites. Same chain traversal simPulse/simFilter use. -1 if
+	// the program is empty (fixed/off pointer).
+	private int sweepCloseRow(int table, int startRow) {
+		if(startRow <= 0 || startRow >= 0x40) return -1;
+		const(ubyte)[] t = (table == 0) ? song.pulseTable : song.filterTable;
+		bool[0x40] visited;
+		int row = startRow, guard = 0;
+		while(row >= 0 && row < 0x40 && guard++ < 0x80) {
+			visited[row] = true;
+			int b3 = t[row * 4 + 3];
+			int next;
+			if(b3 == 0) next = (row + 1) & 0x3f;
+			else if(b3 == 0x7f) return row;          // stop -> this row closes
+			else if(b3 <= 0x3f) next = b3;
+			else return row;                          // illegal terminal
+			if(visited[next]) return row;             // loops back -> this row closes
+			row = next;
+		}
+		return row;
+	}
+
+	// True if the SweepTable's last row (0x3f) already holds data, so inserting (which
+	// shifts every row down one and drops the last) would lose it. Guards Ins so a full
+	// table shows a status message instead of silently corrupting the program.
+	private bool sweepTableFull(int table) {
+		const(ubyte)[] t = (table == 0) ? song.pulseTable : song.filterTable;
+		int b = 0x3f * 4;
+		return t[b] != 0 || t[b + 1] != 0 || t[b + 2] != 0 || t[b + 3] != 0;
+	}
+
+	// Hit-test the loop marker in the Pulse/Filter band at press (x,y screen cells).
+	// Returns the loop-closing row if the press is within LOOP_HIT_PX of a drawn loop
+	// line (loopFrame + k*period) or, for a stopping program, its subtle end marker;
+	// else -1. Checked in clickedAt BEFORE the level-drag so grabbing the loop line
+	// neither pans nor edits levels.
+	private enum int LOOP_HIT_PX = 5;
+	private int sweepLoopHandleAt(int table, ref Geo g, int x, int y) {
+		int band = (table == 0) ? 3 : 4;
+		int px = x * FONT_X, py = y * FONT_Y;
+		if(px < g.plotX0px || px >= g.plotX0px + g.plotWpx) return -1;
+		if(py < g.bandTopPx[band] || py >= g.bandTopPx[band + 1]) return -1;
+		int ins = clampedIns();
+		int col = (table == 0) ? 5 : 4;
+		int startRow = song.instrumentTable[ins + col * 48];
+		int closeRow = sweepCloseRow(table, startRow);
+		if(closeRow < 0) return -1;
+		SweepSim s = (table == 0) ? simPulse(startRow) : simFilter(startRow);
+		int pressX = px + FONT_X / 2;
+		if(s.loopFrame >= 0 && s.loopPeriod >= 2) {
+			int n = min(cast(int)s.val.length, visFrames);
+			for(int f = s.loopFrame; f < n && f < visFrames; f += s.loopPeriod) {
+				if(!frameInView(f)) continue;
+				if(abs(pressX - xForFrame(g, f)) <= LOOP_HIT_PX) return closeRow;
+			}
+		} else if(s.stops) {
+			int f = min(cast(int)s.val.length, visFrames);
+			if(frameInView(f) && abs(pressX - xForFrame(g, f)) <= LOOP_HIT_PX)
+				return closeRow;
+		}
+		return -1;
+	}
+
+	// Map the loop-marker drag's mouse X to a frame -> the SweepTable row active there,
+	// and set the loop-closing row's b3 jump to that row (the new loop-start). Converts a
+	// $7f stop into a loop. The band + loop line follow live from the byte (WYSIWYG). No
+	// undo/re-trigger here — snapshot is at the first drag tick, re-trigger at release.
+	private void sweepLoopDragUpdate(ref Geo g, int cellx) {
+		int table = sweepLoopTable;
+		if(sweepLoopCloseRow < 0 || sweepLoopCloseRow >= 0x40) return;
+		int px = cellx * FONT_X + FONT_X / 2;
+		int f = cast(int)lround(tickForPixel(g, px));
+		if(f < 0) f = 0;
+		int ins = clampedIns();
+		int col = (table == 0) ? 5 : 4;
+		int startRow = song.instrumentTable[ins + col * 48];
+		SweepSim s = (table == 0) ? simPulse(startRow) : simFilter(startRow);
+		if(s.rowOf.length == 0) return;
+		if(f >= cast(int)s.rowOf.length) f = cast(int)s.rowOf.length - 1;
+		int target = s.rowOf[f];
+		if(target < 0 || target > 0x3f) return;
+		ubyte[] t = (table == 0) ? song.pulseTable : song.filterTable;
+		t[sweepLoopCloseRow * 4 + 3] = cast(ubyte)target;
+	}
+
+	// §20.1/§20.4 insert (after the selected row) or delete the selected sweep step via
+	// the ct.purge row-ops (which shift the table AND fix every instrument pointer +
+	// sequence command globally). Runs the §20.2 shared-program check first: if shared &
+	// undecided, prompts fork/edit-shared and performs the row-op in the dialog callback
+	// (on the private copy if forked). Snapshots ALL tables + insLabels for undo.
+	private void sweepRowOp(int table, bool insert) {
+		int ins = clampedIns();
+		if(selectedSweepRow < 0 || selectedSweepRow >= 0x40) return;
+		if(insert && sweepTableFull(table)) {
+			UI.statusline.display(format("%s table full - cannot insert step.",
+				table == 0 ? "Pulse" : "Filter"));
+			return;
+		}
+		if(sweepProgramShared(table, ins) && !sweepDecided(table, ins)) {
+			int col = (table == 0) ? 5 : 4;
+			int startRow = song.instrumentTable[ins + col * 48];
+			string what = (table == 0) ? "pulse" : "filter";
+			mainui.activateDialog(new ConfirmationDialog(
+				format("This %s program is shared. Fork a private copy (y/n)? ", what),
+				(int param) {
+					if(param == 0) { if(!forkSweepProgram(table, ins)) return; }  // Y = fork
+					else sweepEditShared[table][startRow] = true;                 // N = shared
+					doSweepRowOp(table, insert);   // operate on private (forked) or shared
+				}));
+			return;
+		}
+		doSweepRowOp(table, insert);
+	}
+
+	// The actual row-op, once sharing is resolved. INSERT: a new row after the selected
+	// one, seeded with the selected row's shape (b0/b1/b2) and taking over its jump role
+	// (the selected row now falls through to it) so the program stays valid; selection ->
+	// the new row. DELETE: remove the selected row; selection -> an adjacent program row.
+	private void doSweepRowOp(int table, bool insert) {
+		int sel = selectedSweepRow;
+		if(sel < 0 || sel >= 0x40) return;
+		ubyte[] t = (table == 0) ? song.pulseTable : song.filterTable;
+		snapshotAllTables(true);                 // row-ops shift pointers + seq commands
+		if(insert) {
+			int nr = sel + 1;
+			ubyte b0 = t[sel * 4], b1 = t[sel * 4 + 1], b2 = t[sel * 4 + 2];
+			if(table == 0) ct.purge.pulseInsertRow(song, nr);
+			else ct.purge.filterInsertRow(song, nr);
+			// Seed the new row with the selected step's shape; the new row inherits the
+			// selected row's (possibly-adjusted) jump so the terminal/loop still resolves,
+			// and the selected row now falls through (b3=0) into the new row.
+			ubyte cur = t[sel * 4 + 3];
+			t[nr * 4 + 0] = b0; t[nr * 4 + 1] = b1; t[nr * 4 + 2] = b2; t[nr * 4 + 3] = cur;
+			t[sel * 4 + 3] = 0;
+			selectedSweepRow = nr;
+		} else {
+			if(table == 0) ct.purge.pulseDeleteRow(song, sel);
+			else ct.purge.filterDeleteRow(song, sel);
+			// Move the selection to an adjacent row still inside the (shifted) program.
+			int ins = clampedIns();
+			int col = (table == 0) ? 5 : 4;
+			int startRow = song.instrumentTable[ins + col * 48];
+			bool[0x40] rows = sweepProgramRows(table, startRow);
+			int pick = -1;
+			if(sel - 1 >= 0 && rows[sel - 1]) pick = sel - 1;
+			else if(sel < 0x40 && rows[sel]) pick = sel;
+			else foreach(r; 0 .. 0x40) if(rows[r]) { pick = r; break; }
+			selectedSweepRow = pick;
+			if(pick < 0) selectedSweepTable = -1;   // program emptied -> no selection
+		}
+		retriggerIfSounding();
+	}
+
+	// §20 P4b-2 draw a bright outline around the selected step's frame span in its band,
+	// so the click target Ins/Del acts on is unmistakable. Uses the sim's rowOf to find
+	// the first contiguous run of the selected row on the shared frame axis. Clears the
+	// selection if the row is no longer part of the instrument's program (e.g. deleted).
+	private void drawSweepSelection(int ins, ref Geo g) {
+		if(selectedSweepTable < 0 || selectedSweepRow < 0) return;
+		int band = (selectedSweepTable == 0) ? 3 : 4;
+		int col = (selectedSweepTable == 0) ? 5 : 4;
+		int startRow = song.instrumentTable[ins + col * 48];
+		SweepSim s = (selectedSweepTable == 0) ? simPulse(startRow) : simFilter(startRow);
+		int f0 = -1, f1 = -1;
+		foreach(f, r; s.rowOf) {
+			if(r == selectedSweepRow) { if(f0 < 0) f0 = cast(int)f; f1 = cast(int)f + 1; }
+			else if(f0 >= 0) break;
+		}
+		if(f0 < 0) return;                       // selected row not in the current program
+		int topPx, botPx; bandBox(g, band, topPx, botPx);
+		int xa = xForFrame(g, f0), xb = xForFrame(g, f1);
+		if(xb <= xa) xb = xa + 1;
+		video.olRect(xa, topPx, xb - xa, botPx - topPx, COL_STEPSEL);
+	}
+
+	private void clearSweepSelection() {
+		selectedSweepTable = -1;
+		selectedSweepRow = -1;
 	}
 
 	// ---- band chrome ----
@@ -1592,6 +1802,17 @@ class SoundEditor : Window, Undoable {
 			drawValueBand(s.val, 4095, COL_DIMFILL, COL_DIM, topPx, botPx, g);
 		}
 		drawLoopLines(g, topPx, botPx, lf, lp, ln);
+		drawSweepEndMarker(g, topPx, botPx, s);   // §20 P4b-2 grabbable stop marker
+	}
+
+	// §20 P4b-2 for a STOPPING program (no loop line to grab), draw a subtle marker at the
+	// program's end so the loop-marker drag has something to grab (dragging it converts the
+	// stop into a loop). Looping programs already draw grabbable loop lines.
+	private void drawSweepEndMarker(ref Geo g, int topPx, int botPx, ref SweepSim s) {
+		if(s.loopFrame >= 0 || !s.stops) return;
+		int f = min(cast(int)s.val.length, visFrames);
+		if(!frameInView(f)) return;
+		video.olVLine(xForFrame(g, f), topPx, botPx, COL_LOOPLINE);
 	}
 
 	// §10.1/§10.2 Filter band: cutoff fill/line coloured PER FRAME by the active
@@ -1663,6 +1884,7 @@ class SoundEditor : Window, Undoable {
 		if(useRec) loopFromRecording(cutoff, n, lf, lp);
 		drawLoopLines(g, topPx, botPx, lf, lp,
 			useRec ? n : min(cast(int)s.val.length, visFrames));
+		drawSweepEndMarker(g, topPx, botPx, s);   // §20 P4b-2 grabbable stop marker
 
 		// Label the resonance overlay in the band's left gutter (row below "Filter").
 		int lrow = g.bandTopPx[4] / FONT_Y + 1;
@@ -2543,21 +2765,31 @@ class SoundEditor : Window, Undoable {
 		// scrollbar / zoom buttons (above), before the plot drag-select (below).
 		int sb = sweepBandAt(g, x, y);
 		if(sb >= 0) {
+			// §20 P4b-2 loop-marker drag FIRST: if the press grabs the subtle loop line
+			// (or a stopping program's end marker) start a loop-back drag, not a level
+			// edit. The shared check + prompt happens on the first drag tick (not here),
+			// so a plain click never pops a modal.
+			int lc = sweepLoopHandleAt(sb, g, x, y);
+			if(lc >= 0) {
+				clickWasButton = true;   // this press never starts/clears a selection
+				sweepLoopDragging = true;
+				sweepLoopTable = sb;
+				sweepLoopCloseRow = lc;
+				sweepLoopMoved = false;
+				return;
+			}
 			int row = sweepRowAtPress(sb, g, x);
 			if(row >= 0) {
-				int ins = clampedIns();
-				clickWasButton = true;   // this press never starts/clears a selection
-				// §20.2 shared-program warn/fork at PRESS: if shared and the user hasn't
-				// decided for this program, pop the modal and DON'T start a drag this press
-				// (the user drags again after choosing — no modal mid-drag).
-				if(sweepProgramShared(sb, ins) && !sweepDecided(sb, ins)) {
-					promptSweepFork(sb, ins);
-					return;
-				}
+				clickWasButton = true;   // this press never starts/clears a plot selection
+				// §20 P4b-2 SELECT the step immediately (non-mutating; selecting in one
+				// band clears the other). A vertical DRAG turns into a level edit; a plain
+				// click (no motion) leaves just this selection.
+				selectedSweepTable = sb;
+				selectedSweepRow = row;
 				sweepDragging = true;
 				sweepTable = sb;
 				sweepRow = row;
-				sweepMoved = false;      // snapshot + first write on the first drag tick
+				sweepMoved = false;      // shared check + snapshot on the first drag tick
 				return;
 			}
 		}
@@ -2582,11 +2814,37 @@ class SoundEditor : Window, Undoable {
 			adsrDragUpdate(g, x, y);
 			return;
 		}
-		// §20 P4b-1 pulse/filter LEVEL drag: one all-tables undo snapshot on the first
-		// tick, then rewrite the edited row's b2 every tick (band redraws from the byte).
+		// §20 P4b-2 loop-marker drag: on the first motion tick do the shared check (prompt
+		// fork/edit-shared and abort if undecided — the user drags again after choosing),
+		// else snapshot ALL tables and rewrite the loop-closing row's b3 every tick.
+		if(sweepLoopDragging) {
+			Geo g = layout();
+			if(!sweepLoopMoved) {
+				int ins = clampedIns();
+				if(sweepProgramShared(sweepLoopTable, ins) && !sweepDecided(sweepLoopTable, ins)) {
+					promptSweepFork(sweepLoopTable, ins);
+					sweepLoopDragging = false; sweepLoopTable = -1; sweepLoopCloseRow = -1;
+					return;
+				}
+				snapshotAllTables(false); sweepLoopMoved = true;
+			}
+			sweepLoopDragUpdate(g, x);
+			return;
+		}
+		// §20 P4b-1 pulse/filter LEVEL drag: on the first motion tick do the §20.2 shared
+		// check (prompt + abort if undecided; the user drags again after choosing), else
+		// take one all-tables undo snapshot, then rewrite the edited row's b2 every tick.
 		if(sweepDragging) {
 			Geo g = layout();
-			if(!sweepMoved) { snapshotAllTables(false); sweepMoved = true; }
+			if(!sweepMoved) {
+				int ins = clampedIns();
+				if(sweepProgramShared(sweepTable, ins) && !sweepDecided(sweepTable, ins)) {
+					promptSweepFork(sweepTable, ins);
+					sweepDragging = false; sweepTable = -1; sweepRow = -1;
+					return;
+				}
+				snapshotAllTables(false); sweepMoved = true;
+			}
 			sweepLevelDragUpdate(g, y);
 			return;
 		}
@@ -2631,8 +2889,19 @@ class SoundEditor : Window, Undoable {
 			adsrMoved = false;
 			return;
 		}
+		// §20 P4b-2 end a loop-marker drag: make the new loop audible once if a note is held.
+		if(sweepLoopDragging) {
+			sweepLoopDragging = false;
+			sweepLoopTable = -1;
+			sweepLoopCloseRow = -1;
+			clickWasButton = false;
+			if(sweepLoopMoved) retriggerIfSounding();
+			sweepLoopMoved = false;
+			return;
+		}
 		// §20 P4b-1 end a pulse/filter LEVEL drag: make the edited program audible once
-		// (if a note is held) — never per drag tick.
+		// (if a note is held) — never per drag tick. A plain click (no motion) wrote
+		// nothing; it only left the §20 P4b-2 step selection set at press.
 		if(sweepDragging) {
 			sweepDragging = false;
 			sweepTable = -1;
@@ -2693,6 +2962,15 @@ class SoundEditor : Window, Undoable {
 		case SDLK_BACKSPACE:
 			hasSelection = false;
 			return OK;
+		// §20 P4b-2 add / delete a sweep step (row-op) on the selected Pulse/Filter step.
+		case SDLK_INSERT:
+			if(selectedSweepTable >= 0) sweepRowOp(selectedSweepTable, true);
+			else UI.statusline.display("Select a pulse/filter step first (click it).");
+			return OK;
+		case SDLK_DELETE:
+			if(selectedSweepTable >= 0) sweepRowOp(selectedSweepTable, false);
+			else UI.statusline.display("Select a pulse/filter step first (click it).");
+			return OK;
 		// Octave nudges (mirrors the classic keypad octave keys).
 		case SDLK_KP_DIVIDE:
 			if(state.octave > 0) state.octave--;
@@ -2705,10 +2983,12 @@ class SoundEditor : Window, Undoable {
 		case SDLK_PLUS:
 		case SDLK_KP_PLUS:
 			UI.activateInstrument(state.activeInstrument + 1);
+			clearSweepSelection();   // §20 P4b-2 row index is table-local to the old ins
 			return OK;
 		case SDLK_MINUS:
 		case SDLK_KP_MINUS:
 			UI.activateInstrument(state.activeInstrument - 1);
+			clearSweepSelection();
 			return OK;
 		default:
 			break;

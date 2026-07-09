@@ -1072,3 +1072,90 @@ Tech-debt to address in P6 polish (non-blocking, from verifiers):
     no synopsis change. No com.shortcuts/CLI/flag change -> no KEYBOARD.md / man-page regen needed
     (the drag is internal mouse handling; F12 is a ContextHelp page). Did not commit/grade.
   - NOT done: P4b-2 (add/delete step + loop-marker drag), P4b-3 (filter res/mode), wave editing (P4c).
+
+- (P4b-2 ADD/DELETE STEP + DRAGGABLE LOOP MARKER, §20.1/§20.2/§20.4 P4b-2 2026-07-09)
+  Third editing pass. The pulse (col5) + filter (col4) SweepTable PROGRAMS can now have
+  steps added/removed and their loop-back point dragged, from the graph bands. Reuses ALL
+  the P4b-1 fork infra (`sweepProgramShared`/`promptSweepFork`/`forkSweepProgram`/
+  `sweepEditShared`) + multi-table undo (`snapshotAllTables`). Writes song data (pulse/
+  filter tables + the pointers/commands the ct.purge row-ops fix globally + the fork
+  pointer/insLabels). Files: `src/ui/soundedit.d` (select/Ins/Del/loop-drag + helpers),
+  `src/ui/help.d` (3 F12 lines). Regenerated `doc/ARCHITECTURE.md` (new soundedit->ct.purge
+  dep edge). No driver change — reused the existing read-only `sweepdump:P|F` + `insbytes`
+  oracles.
+  - **§20 P4b-2(1) select a step.** A plain CLICK (press+release, no motion) inside the
+    Pulse (band 3) or Filter (band 4) plot region selects the SweepTable row active at that
+    frame (`sweepRowAtPress` -> the sim's `rowOf`). New members `selectedSweepTable
+    (0 pulse / 1 filter / -1 none)` + `selectedSweepRow`; `drawSweepSelection` draws a bright
+    WHITE outline (`olRect`, `COL_STEPSEL`) around the step's first contiguous frame span on
+    the band. Selecting in one band clears the other (single var); switching instrument
+    (`+/-`) clears it (`clearSweepSelection`, the row index is table-local). Selection is
+    set at PRESS (non-mutating), so a plain click never pops a modal. A vertical DRAG in the
+    band is still the P4b-1 LEVEL edit; the shared-program fork prompt moved from press to
+    the FIRST DRAG-MOTION tick (so click-to-select and drag-to-edit coexist cleanly — the
+    net shared/fork/edit behaviour + undo is unchanged from P4b-1, just triggered on motion).
+  - **§20 P4b-2(2) add/delete a step (Ins/Del).** With a step selected, `SDLK_INSERT` inserts
+    a row AFTER it and `SDLK_DELETE` removes it, via `ct.purge.pulse/filterInsertRow` /
+    `...DeleteRow` (the classic row-ops that shift the table AND fix every instrument pointer
+    + sequence command GLOBALLY). Ins/Del aren't com.shortcuts entries (registry Ins/Del are
+    C.noteColumn/C.trackColumn, not active for Ctx.soundEditor), so they fall through to the
+    editor's own `keypress`. `sweepRowOp` runs the §20.2 shared check first: shared+undecided
+    -> `ConfirmationDialog` whose callback forks (`forkSweepProgram`, which now remaps
+    `selectedSweepRow` into the private copy) or sets edit-shared, THEN performs the row-op —
+    one Ins/Del press does it all. `doSweepRowOp` snapshots ALL tables + insLabels
+    (`snapshotAllTables(true)`) before mutating. INSERT default: the new row copies the
+    selected step's shape (b0/b1/b2) and INHERITS its (post-shift) jump b3, and the selected
+    row now falls through (b3=0) into it — so the program stays valid (terminal/loop still
+    resolves) and grows in place; selection -> the new row. DELETE: selection -> an adjacent
+    program row (prev if still in the program, else the shifted row, else program start).
+    Table-full guard: `sweepTableFull` refuses an Ins that would push a used row 0x3f off the
+    end (statusline msg, no corruption). No selection -> statusline "Select a ... step first".
+  - **§20 P4b-2(3) draggable loop marker.** `sweepLoopHandleAt` hit-tests the subtle loop
+    line(s) (drawn at `loopFrame + k*period`) or, for a STOPPING program, a new grabbable end
+    marker (`drawSweepEndMarker` draws a darkgray vLine at the program's stop frame) — checked
+    BEFORE the level-drag so grabbing the loop line neither pans nor edits levels. Dragging
+    (`sweepLoopDragUpdate`) maps the cursor frame -> its SweepTable row and sets the loop-
+    CLOSING row's b3 (`sweepCloseRow` = the row whose b3 stops or jumps back) to that row —
+    moving the loop-back point, or CONVERTING a $7f stop into a loop. Shared check + fork on
+    the first drag tick (same as the level drag); one `snapshotAllTables(false)` per gesture;
+    retrigger a held note on release.
+  - Build: `make -f Makefile.mac clean && make -f Makefile.mac -j4 ccutter ccdriver` -> exit 0,
+    both binaries (ccutter 7576152, ccdriver 7638520).
+  - VERIFIED by DRIVING + SEEING (headless dummy SDL), tunes/vent-arkijuusto.ct. Pulse band
+    cell rows 18-21, Filter 22-24, plot cells x 39..155.
+    * SELECT: `click:50,20` on ins07 -> the Pulse step gets a bright white outline
+      (/tmp/se-p4b2-8...); sweepdump shows NO byte change (selection is non-mutating). Filter
+      select `click:45,23` on ins0A -> white outline in the Filter band (/tmp/se-p4b2-13...).
+    * INSERT (non-shared, ins07 pul $06 rows {06,07}): `click:50,20 key:INS` -> program grows
+      to {06,07,08}: 06:40101000 (falls to 07) / 07:40101008 (new, copy of 06, b3->08) /
+      08:b010ff06 (old 07 shifted, still loops to 06). All pointers valid (sweepdump).
+      Exit to classic: the classic Pulse table shows the SAME rows byte-for-byte and Wave/
+      Chord/Command tables intact (/tmp/se-p4b2-15...). DELETE `click:120,20 key:DEL` ->
+      row07 removed, row06 b3 07->06 (self-loop), pointers intact.
+    * SHARED (ins0A pul $01, shared w/ ins06+ins10): Ins -> "shared, fork? (y/n)" prompt
+      (/tmp/se-p4b2-5..., zero graph bleed). Y=fork -> ins0A $01->$08, private copy rows
+      08/09/0A with the inserted step, original rows 01/02 + ins06/ins10 ptrs UNCHANGED
+      (/tmp/se-p4b2-6...). N=edit shared -> ptr stays $01, the row inserted into the shared
+      {01,02,03}, EVERY instrument pointer >=02 re-fixed globally by the purge op (ins07
+      06->07, ins09 05->06, ...) so all other programs still play (/tmp/se-p4b2-7...).
+      Filter fork on ins0A $01->$02 likewise isolates (/tmp/se-p4b2-14...).
+    * LOOP DRAG: ins07 grab the frame-114 loop line (cell 124) drag left -> loop-closing
+      row07 b3 06->07 (only b3 changed; /tmp/se-p4b2-9...). STOP->LOOP: ins0D (pul $03, single
+      row03=7f00907f STOP, non-shared) grab the end marker (cell 93) drag left -> row03 b3
+      7f->03 (a self-loop; /tmp/se-p4b2-12...). Nothing else touched either time.
+    * UNDO/REDO: Ins Ctrl-Z reverts to {06,07}; Ctrl-Y redoes to {06,07,08}. Loop-drag Ctrl-Z
+      reverts row07 b3 07->06. Stop->loop Ctrl-Z reverts row03 b3 03->7f. Fork+Ins = two
+      gestures (two Ctrl-Z: the level/row-op then the fork).
+    * REGRESSION: P4b-1 level drag still edits b2 (ins07 row06 10->8e, b3 untouched); P4a
+      scalar edit (ins00 AD 13->33) + undo/redo intact; F12 "Sound Editor help 1/2" renders
+      clean over the editor with the new Click/Insert-Delete/loop-line lines (/tmp/se-p4b2-16).
+      Enter/exit clean ("Sound Editor closed.", classic tracker fully restored).
+  - SCOPE CONFIRMED: `git diff --stat 1e6e105 -- src/` = soundedit.d (+310/-15) + help.d only.
+    The only table writes are pulse/filterTable (b2 level, b3 loop, seeded Ins rows), the
+    ct.purge row-ops (pulse/filterTable + instrument pointers + seq commands — the globally-
+    managed fixups), instrumentTable (scalars + fork pointer), insLabels (undo). NO wave/
+    super/chord writes; classic tables intact.
+  - Ran `make map` (ARCHITECTURE.md gains the soundedit->ct.purge dep edge; no synopsis change).
+    No com.shortcuts/CLI/flag change -> no KEYBOARD.md / man-page regen (Ins/Del + loop drag
+    are internal keypress/mouse handling; F12 is a ContextHelp page). Did not commit/grade.
+  - NOT done: P4b-3 (filter resonance + mode editing), wave editing (P4c).
