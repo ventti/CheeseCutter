@@ -689,6 +689,23 @@ class SoundEditor : Window {
 	// voice whose last recording is of it (a finished note still shown frozen).
 	// -1 when nothing has played this instrument (bands then show the dimmed sim).
 	private int chooseVoice(int ins) {
+		// §11.2b Keyjam audition (this screen's own note preview): the note is played
+		// on ONE voice (audio.player.playNote / captureStart, others muted) with the
+		// VIEWED instrument (state.activeInstrument), so that voice's recording IS the
+		// viewed instrument's note. Bind to it directly via the capture voice+instrument
+		// tracked at note-on, WITHOUT the player-memory instrument read — that read
+		// derives the per-voice instrument from a SHTRANS-relative offset that is wrong
+		// for OLD players (CC03.30 kalmankone: it returns instrument 0), which made the
+		// getVoiceInstrument()==ins matches below fail and the bands fall back to the
+		// ADSR-estimated table SIMULATION instead of the real recording. captureInstr
+		// guards the stale case (instrument switched with +/- after playing, before
+		// replaying). Only in keyjam mode: song playback (Status.Play) plays different
+		// instruments per voice, where the player-memory match below is the right signal.
+		if(audio.player.keyjamEnabled()) {
+			int kv = audio.audio.captureVoice;
+			if(kv >= 0 && kv < 3 && audio.audio.captureInstr == ins
+			   && audio.visualizer.voiceHasRecording(kv)) return kv;
+		}
 		foreach(v; 0 .. 3)
 			if(audio.visualizer.getVoiceInstrument(v) == ins
 			   && audio.visualizer.getVoiceBrightness(v) > 0.01f) return v;

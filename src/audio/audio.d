@@ -46,6 +46,11 @@ __gshared int captureOnsetSample;  // §16 sample offset in captureBuf of the FI
                                    // gate 0->1 edge). -1 until the gate first opens.
 __gshared bool capturing;
 __gshared int captureVoice;        // SID voice (0..2) whose gate we track
+__gshared int captureInstr = -1;   // instrument # this keyjam capture is of (set by
+                                   // audio.player.playNote on the struck note). Lets
+                                   // the Sound Editor match a keyjam recording to the
+                                   // viewed instrument WITHOUT the player-memory
+                                   // instrument read, which is wrong for old players.
 __gshared int captureFrameSamples; // samples per gate entry (= callbackInterval)
 __gshared int captureSilenceRun;   // consecutive near-silent samples recorded
 __gshared bool captureWasLoud;     // §16.3: seen an audibly-loud block yet? The
@@ -113,7 +118,15 @@ private void captureBlock(short* block, int n) nothrow {
 	// many blocks; without this gate the run of quiet onset samples would trip the
 	// stop and cut the Output waveform short of the real note. The hard cap on
 	// captureCap still bounds the recording regardless.
-	if((captureWasLoud && captureLen > freq / 4 && captureSilenceRun > freq / 6)
+	// §16.4: additionally require the note's gate to have gone OFF (gbit == 0) before
+	// the decay-to-silence stop may fire. While the gate is HIGH the note is still
+	// sounding, so a momentary quiet dip within a still-gated note — an arp/chord or a
+	// pulse-width sweep (e.g. wave $0F + PW sweep) that passes through near-silence —
+	// must NOT end the capture, which truncated the Output waveform to a tiny onset
+	// blip. The capture now spans attack->sustain->release; the capacity cap still
+	// terminates a note held (gate-on) indefinitely.
+	bool gateOff = (gbit == 0);
+	if((gateOff && captureWasLoud && captureLen > freq / 4 && captureSilenceRun > freq / 6)
 	   || captureLen >= captureCap) capturing = false;
 }
 

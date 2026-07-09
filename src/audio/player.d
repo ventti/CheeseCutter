@@ -85,8 +85,11 @@ void playNote(Element emt) {
 	// Start a fresh recording only on an actual struck note (>=3); a keyoff (1),
 	// keyon (2) or rest (0) keeps recording into the current note so the release
 	// tail is captured rather than starting a new (empty) recording.
-	if(emt.note.value >= 3)
+	if(emt.note.value >= 3) {
 		audio.audio.captureStart(v);   // record this note for the oscilloscope view
+		audio.audio.captureInstr = emt.instr.value;  // remember which instrument, so the
+		                               // Sound Editor can bind the recording to it
+	}
 
 	// no audio reset if already inited
 	if(playstatus != Status.Keyjam) {
