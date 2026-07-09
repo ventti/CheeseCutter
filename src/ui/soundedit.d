@@ -39,6 +39,7 @@ import com.shortcuts : Ctx;
 import com.palette : idx, Role, BaseColor;
 import ui.window;
 import ui.input;
+import ui.button : Button;
 import ui.ui : UI;
 import ui.menubar : MenuBar;
 import ui.palette : CommandPalette;
@@ -156,8 +157,6 @@ class SoundEditor : Window {
 	private @property int COL_VALUE() { return idx(Role.soundeditValue); }
 	private @property int COL_HEAD()  { return idx(Role.cursor); }
 	private @property int COL_CTRL()  { return idx(Role.text); }
-	private @property int COL_CTRL_LBL() { return idx(Role.soundeditButtonLabel); }
-	private @property int COL_CTRL_BG()  { return idx(Role.soundeditButtonBg); }
 	private @property int COL_SCROLL_TRACK() { return idx(Role.soundeditScrollTrack); }
 	private @property int COL_SCROLL_THUMB() { return idx(Role.soundeditScrollThumb); }
 	private @property int COL_SEL_WASH() { return idx(Role.soundeditSelection); }
@@ -283,6 +282,15 @@ class SoundEditor : Window {
 	// A left-press that landed on a zoom-control button (so the paired release neither
 	// finalises nor clears a selection).
 	private bool clickWasButton = false;
+	// §17.3 zoom-control button feedback: which button the pointer hovers (-1 = none,
+	// updated by hoverAt) and which one is currently held down (-1 = none, set on
+	// press, fired on release over the same button). Drive the Button widget's hover/
+	// pressed styles so the user sees what the click will do.
+	private int hoveredBtn = -1;
+	private int pressedBtn = -1;
+	// True while a held button (pressedBtn) still has the pointer over it — drag off
+	// and the pressed style drops (the release then cancels instead of firing).
+	private bool pressedOver = false;
 
 	// §17.4 horizontal-scrollbar drag state. A left-press ON the scrollbar row grabs
 	// the thumb; while dragging, the viewport start follows the pointer so the thumb
@@ -1374,6 +1382,9 @@ class SoundEditor : Window {
 		hoverCellX = scrx;
 		hoverCellY = scry;
 		hovering = true;
+		// §17.3 light the zoom button under the pointer (-1 = none / disabled).
+		Geo g = layout();
+		hoveredBtn = buttonAt(g, scrx, scry);
 	}
 
 	// Note name from a raw 16-bit SID frequency register value (PAL). "if easy": a
@@ -1794,24 +1805,57 @@ class SoundEditor : Window {
 			video.olVLine(xForFrame(g, selEndTick), g.stackTopPx, g.stackBotPx, COL_SEL_EDGE);
 	}
 
-	// §17.3 A zoom-control button: its inclusive-exclusive cell X span on the control
-	// row and its glyph label.
-	private struct ZoomBtn { int x0, x1; string label; }
+	// §17.3 The four zoom controls, left-to-right on the control row.
+	private enum int BTN_ZOOMOUT = 0, BTN_ZOOMIN = 1, BTN_FIT = 2, BTN_SEL = 3;
 
-	// §17.3 The four zoom buttons laid out left-to-right on the control row starting at
-	// the plot's left edge, 1 cell of gap between them. Recomputed identically in the
-	// drawer and the click hit-test so they always agree.
-	private ZoomBtn[4] zoomButtons(ref Geo g) {
+	// §17.3 Build the four zoom buttons as ordinary ui.button widgets, laid out
+	// left-to-right on the control row from the plot's left edge with a 1-cell gap,
+	// each pre-loaded with its current interaction/state flags. Recomputed identically
+	// by the drawer, the hover probe and the click hit-test so they always agree:
+	//   * hovered/pressed track the pointer (see hoverAt + the press/release gesture);
+	//   * [Fit] is `active` while the view is auto-fitted (not user-zoomed);
+	//   * [Selection] needs a selection — it is `disabled` without one, and `active`
+	//     while the viewport currently equals that selection.
+	private Button[4] zoomButtons(ref Geo g) {
 		static immutable string[4] labels = ["[-]", "[+]", "[Fit]", "[Selection]"];
-		ZoomBtn[4] b;
+		Button[4] b;
 		int cx = g.plotX0px / FONT_X;
-		foreach(i; 0 .. 4) {
+		foreach(int i; 0 .. 4) {
 			b[i].x0 = cx;
 			b[i].x1 = cx + cast(int)labels[i].length;
+			b[i].row = g.controlRow;
 			b[i].label = labels[i];
+			b[i].hovered = (hoveredBtn == i);
+			b[i].pressed = (pressedBtn == i && pressedOver);
 			cx = b[i].x1 + 1;   // 1-cell gap
 		}
+		b[BTN_FIT].active = !userZoomed;
+		b[BTN_SEL].enabled = hasSelection;
+		b[BTN_SEL].active = hasSelection
+			&& cast(int)lround(viewStartTick) == selStartTick
+			&& cast(int)lround(viewEndTick) == selEndTick;
 		return b;
+	}
+
+	// §17.3 The enabled zoom button under screen cell (x,y), or -1. Disabled buttons and
+	// cells off the control row never match, so hover/click only react where a click
+	// would actually do something.
+	private int buttonAt(ref Geo g, int x, int y) {
+		auto btns = zoomButtons(g);
+		foreach(int i, ref b; btns)
+			if(b.enabled && b.contains(x, y)) return i;
+		return -1;
+	}
+
+	// §17.3 Perform a zoom button's action (fired on release over the pressed button).
+	private void activateZoomButton(int i) {
+		switch(i) {
+			case BTN_ZOOMOUT: zoomBy(2.0); break;             // [-] zoom out
+			case BTN_ZOOMIN:  zoomBy(0.5); break;             // [+] zoom in
+			case BTN_FIT:     userZoomed = false; fitViewport(); break;  // [Fit]
+			case BTN_SEL:     zoomToSelection(); break;       // [Selection]
+			default: break;
+		}
 	}
 
 	// §17.3 Draw the subtle control-button row + the current selection readout (its tick
@@ -1819,8 +1863,8 @@ class SoundEditor : Window {
 	// the rest of the chrome.
 	private void drawZoomControls(ref Geo g) {
 		auto btns = zoomButtons(g);
-		foreach(b; btns)
-			screen.cprint(b.x0, g.controlRow, COL_CTRL_LBL, COL_CTRL_BG, b.label);
+		foreach(ref b; btns)
+			b.draw();
 		int rx = btns[3].x1 + 2;
 		int rw = (g.plotX0px + g.plotWpx) / FONT_X - rx;
 		if(rw < 4) return;
@@ -1964,20 +2008,15 @@ class SoundEditor : Window {
 			}
 			return;
 		}
-		// §17.3 control-button hit test first (like the menu bar).
+		// §17.3 control-button row: arm the button under the press (its action fires on
+		// release over the same button, so the user sees the pressed style meanwhile).
+		// The whole row is consumed (never starts/clears a plot selection), like the
+		// scrollbar row above.
 		if(y == g.controlRow) {
-			foreach(i, b; zoomButtons(g)) {
-				if(x >= b.x0 && x < b.x1) {
-					clickWasButton = true;
-					final switch(i) {
-						case 0: zoomBy(2.0); break;         // [-] zoom out
-						case 1: zoomBy(0.5); break;         // [+] zoom in
-						case 2: userZoomed = false; fitViewport(); break;  // [Fit]
-						case 3: zoomToSelection(); break;   // [Sel]
-					}
-					return;
-				}
-			}
+			clickWasButton = true;   // consume the paired release for selection purposes
+			int hit = buttonAt(g, x, y);
+			if(hit >= 0) { pressedBtn = hit; pressedOver = true; }
+			return;
 		}
 		// §17.2 begin a drag-select when the press lands in the plot; else clear.
 		if(inPlotCell(g, x, y)) {
@@ -1991,6 +2030,13 @@ class SoundEditor : Window {
 	}
 
 	override void draggedTo(int x, int y) {
+		// §17.3 while a zoom button is held, keep its pressed style only while the pointer
+		// stays on it — drag off and it un-presses (and the release will not fire it).
+		if(pressedBtn >= 0) {
+			Geo g = layout();
+			pressedOver = (buttonAt(g, x, y) == pressedBtn);
+			return;
+		}
 		// §17.4 dragging the scrollbar thumb pans the viewport (span kept, thumb follows
 		// the grab point). Takes priority over plot selection; they never overlap (the
 		// scrollbar drag only starts on the scroll row).
@@ -2017,6 +2063,17 @@ class SoundEditor : Window {
 	override void releasedAt(int x, int y) {
 		// §17.4 end any scrollbar-thumb drag.
 		scrollDragging = false;
+		// §17.3 a held zoom button fires only if the release lands back on it (drag off
+		// then release = cancel). Clears the pressed style either way.
+		if(pressedBtn >= 0) {
+			Geo g = layout();
+			if(buttonAt(g, x, y) == pressedBtn)
+				activateZoomButton(pressedBtn);
+			pressedBtn = -1;
+			pressedOver = false;
+			clickWasButton = false;
+			return;
+		}
 		// A press on a control button / the scrollbar consumes its paired release.
 		if(clickWasButton) { clickWasButton = false; return; }
 		if(!selecting) return;

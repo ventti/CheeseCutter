@@ -64,8 +64,15 @@ enum Role : int {
 	keyjamTag,         // "KEYJAM" mode badge text in the top bar
 	soundeditSelection, // Sound Editor time-range selection overlay (translucent)
 	soundeditValue,       // Sound Editor parameter values (yellow)
-	soundeditButtonBg,    // Sound Editor zoom-button background (darkgray)
-	soundeditButtonLabel, // Sound Editor zoom-button label (white)
+	buttonLabel,          // clickable button label, resting state
+	buttonBg,             // clickable button background, resting state
+	buttonHoverLabel,     // button label while the pointer hovers it
+	buttonHoverBg,        // button background while hovered
+	buttonPressLabel,     // button label while pressed (the "click" look)
+	buttonPressBg,        // button background while pressed
+	buttonActiveLabel,    // button label in its persistent "on"/current state
+	buttonActiveBg,       // button background in its "on"/current state
+	buttonDisabledLabel,  // button label when greyed out / not clickable
 	soundeditScrollTrack, // Sound Editor scrollbar track (darkgray, dotted)
 	soundeditScrollThumb, // Sound Editor scrollbar thumb (mid-gray)
 	soundeditSelEdge,     // Sound Editor selection edges (lightblue)
@@ -94,8 +101,15 @@ private immutable int[Role.max + 1] defaultRoleBase = [
 	Role.keyjamTag:        BaseColor.yellow,
 	Role.soundeditSelection: BaseColor.blue,
 	Role.soundeditValue:       BaseColor.yellow,
-	Role.soundeditButtonBg:    BaseColor.darkgray,
-	Role.soundeditButtonLabel: BaseColor.white,
+	Role.buttonLabel:          BaseColor.lightgray,
+	Role.buttonBg:             BaseColor.darkgray,
+	Role.buttonHoverLabel:     BaseColor.white,
+	Role.buttonHoverBg:        BaseColor.gray,
+	Role.buttonPressLabel:     BaseColor.black,
+	Role.buttonPressBg:        BaseColor.lightgray,
+	Role.buttonActiveLabel:    BaseColor.white,
+	Role.buttonActiveBg:       BaseColor.blue,
+	Role.buttonDisabledLabel:  BaseColor.gray,
 	Role.soundeditScrollTrack: BaseColor.darkgray,
 	Role.soundeditScrollThumb: BaseColor.gray,
 	Role.soundeditSelEdge:     BaseColor.lightblue,
@@ -158,8 +172,15 @@ shared static this() {
 		"keyjamBg": Role.keyjamBg, "keyjamTag": Role.keyjamTag,
 		"soundeditSelection": Role.soundeditSelection,
 		"soundeditValue": Role.soundeditValue,
-		"soundeditButtonBg": Role.soundeditButtonBg,
-		"soundeditButtonLabel": Role.soundeditButtonLabel,
+		"buttonLabel": Role.buttonLabel,
+		"buttonBg": Role.buttonBg,
+		"buttonHoverLabel": Role.buttonHoverLabel,
+		"buttonHoverBg": Role.buttonHoverBg,
+		"buttonPressLabel": Role.buttonPressLabel,
+		"buttonPressBg": Role.buttonPressBg,
+		"buttonActiveLabel": Role.buttonActiveLabel,
+		"buttonActiveBg": Role.buttonActiveBg,
+		"buttonDisabledLabel": Role.buttonDisabledLabel,
 		"soundeditScrollTrack": Role.soundeditScrollTrack,
 		"soundeditScrollThumb": Role.soundeditScrollThumb,
 		"soundeditSelEdge": Role.soundeditSelEdge,

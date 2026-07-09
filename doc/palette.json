@@ -29,6 +29,15 @@
     "filterStatic":     "lightgray",
     "filterCalc":       "gray",
     "filterEmpty":      "darkgray",
-    "filterHeader":     "darkgray"
+    "filterHeader":     "darkgray",
+    "buttonLabel":         "lightgray",
+    "buttonBg":            "darkgray",
+    "buttonHoverLabel":    "white",
+    "buttonHoverBg":       "gray",
+    "buttonPressLabel":    "black",
+    "buttonPressBg":       "lightgray",
+    "buttonActiveLabel":   "white",
+    "buttonActiveBg":      "blue",
+    "buttonDisabledLabel": "gray"
   }
 }

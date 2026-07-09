@@ -33,6 +33,7 @@ OBJS= \
 	src/ui/palette.o \
 	src/ui/oscilloscope.o \
 	src/ui/soundedit.o \
+	src/ui/button.o \
 	src/ui/ui.o \
 	src/ui/window.o \
 	src/ui/statusbar.o \
