@@ -25,6 +25,13 @@ __gshared ubyte[] scrollfont;
 immutable SPLASH_W = 320, SPLASH_H = 200, SPLASH_SCALE = 2;
 immutable ubyte[] splashData = cast(immutable(ubyte)[])import("splash.dat");
 
+// Window icon: raw 96x96 RGBA (see tools/mk-icon.py), handed to
+// SDL_SetWindowIcon() at window creation. SDL applies it to the title-bar /
+// taskbar icon on Windows and Linux; macOS ignores it and uses the .app
+// bundle's ct.icns for the Dock icon instead.
+immutable ICON_W = 96, ICON_H = 96;
+immutable ubyte[] iconData = cast(immutable(ubyte)[])import("icon.dat");
+
 // About-splash scroller: a right-to-left PETSCII scroller drawn over the bottom
 // of the artwork. Text is light gray (PALETTE 15) by default; an inline control
 // byte 0x00..0x0f changes the colour to that C64 palette index for what follows.
@@ -181,6 +188,7 @@ class VideoStandard : Video {
 				throw new DisplayError("Unable to initialize graphics mode.");
 			}
 			SDL_SetWindowTitle(window, com.util.APP_NAME);
+			setWindowIcon();
 			SDL_StartTextInput();
 		} else {
 			// Subsequent toggles: switch the EXISTING window in place. Recreating
@@ -191,6 +199,21 @@ class VideoStandard : Video {
 
 		SDL_RaiseWindow(window);
 		screen.refresh();
+	}
+
+	// Set the window icon from the embedded 96x96 RGBA blob. SDL copies the
+	// pixels into its own storage, so the temporary surface (and our immutable
+	// source data) can be freed/left untouched afterwards. No-op visually on
+	// macOS, where the Dock icon comes from the .app bundle's ct.icns.
+	private void setWindowIcon() {
+		// Byte order in memory is R,G,B,A; masks below are the little-endian form.
+		SDL_Surface* icon = SDL_CreateRGBSurfaceFrom(
+			cast(void*)iconData.ptr, ICON_W, ICON_H, 32, ICON_W * 4,
+			0x000000ff, 0x0000ff00, 0x00ff0000, 0xff000000);
+		if(icon !is null) {
+			SDL_SetWindowIcon(window, icon);
+			SDL_FreeSurface(icon);
+		}
 	}
 
 	// --- Pixel-resolution oscilloscope trace overlay ---
