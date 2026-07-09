@@ -166,6 +166,9 @@ class HelpDialog : Window {
 					  std.array.replicate(" ", area.width-3));
 
 		foreach(line; pages[page-1]) {
+			if(ypos >= 36) break;   // clamp: never render past the content area (a too-long
+			                        // help page would otherwise overflow the screen and assert
+			                        // in Screen.cprint). Pages should be sized to fit; this guards.
 			screen.cprint(area.x+1, ypos, 1, 0, std.array.replicate(" ", area.width-3));
 			screen.fprint(txt_x, ypos, "`0f" ~ line);
 			ypos++;

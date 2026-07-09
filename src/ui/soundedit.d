@@ -21,9 +21,22 @@ reserves a small pre-roll at the left for the hard/soft/3-frame restart phase,
 with a note-trigger divider at frame 0. All bands share the same left edge and
 pixel width so a single full-height vertical playhead, placed at the current
 frame-since-trigger of the sounding voice, crosses them all in lockstep. Left of the graphs a parameter column lists the instrument's editable
-fields with a movable cursor (display-only this pass); the bottom strip shows the
+fields with a movable cursor; the bottom strip shows the
 raw hex of the instrument's 8 bytes plus the wave/pulse/filter rows it points
-into. Everything is READ-ONLY -- data editing / write-back / undo arrive in P4+.
+into.
+
+P4a (§19.5) adds the FIRST editing: the per-instrument SCALAR bytes — Attack /
+Decay / Sustain / Release nibbles (AD col0, SR col1), the Restart type (col2 bits
+6-7) + gate-on/arp-delay nibble (col2 low nibble), and the HR wave (col3) / HR SR
+(col6) bytes — are editable BOTH numerically in the left column (Up/Down select a
+row, Left/Right decrement/increment; Shift-Left/Right pans instead) AND by dragging
+the A/D/S/R handles on the ADSR curve, each reflecting the other instantly (both
+read the same song.instrumentTable byte, so one write updates both views). Edits go
+through com.session's undo stack (Undoable: one step per keypress / per drag
+gesture; global Ctrl-Z/Y) and re-trigger a held keyjam note so the new envelope is
+audible immediately. This is BYTE-IDENTICAL to editing the same bytes in the classic
+Instruments table. The pointer rows (Waveform / Wave / Pulse / Filter ptr) stay
+DISPLAY-ONLY — the wave/pulse/filter PROGRAMS are edited via their graphs in P4b/c.
 */
 
 module ui.soundedit;
@@ -34,7 +47,7 @@ import std.algorithm : max, min;
 import std.math : lround, log2, floor, ceil;
 import derelict.sdl2.sdl;
 import com.fb : FONT_X, FONT_Y, keyjamBackground;
-import com.session : screen, video, state, song, mainui;
+import com.session : screen, video, state, song, mainui, insertUndo, UndoValue, Undoable;
 import com.shortcuts : Ctx;
 import com.palette : idx, Role, BaseColor;
 import ui.window;
@@ -149,7 +162,7 @@ private struct WaveFrameSim {
 /// Full-screen visual Sound Editor (see module doc). v2 layout: left parameter
 /// column + stacked frame-aligned graph bands with one shared playhead + raw
 /// table-data strip. All read-only.
-class SoundEditor : Window {
+class SoundEditor : Window, Undoable {
 	// All colours go through the semantic palette (com.palette): UI chrome via Role.*
 	// (idx), graph colours via named BaseColor.* — no magic indices anywhere.
 	private @property int COL_TITLE() { return idx(Role.cursor); }
@@ -212,10 +225,26 @@ class SoundEditor : Window {
 		BaseColor.cyan, BaseColor.green, BaseColor.yellow, BaseColor.lightgray];
 	private static immutable string[8] BITLANE_LBL = ["Gate","Sync","Ring","Test","Tri","Saw","Pulse","Noise"];
 
-	// Left parameter column: fixed set of rows, cursor moved with Up/Down.
-	// Display-only this pass (no byte writes).
-	private enum int PARAM_ROWS = 11;
+	// Left parameter column: fixed set of rows, cursor moved with Up/Down. The
+	// scalar/envelope rows are EDITABLE (P4a) with Left/Right; the pointer rows
+	// (Waveform/Wave/Pulse/Filter ptr) stay display-only — programs are edited via the
+	// graphs in P4b/c, never by hand-poking a pointer. Row indices are named so the
+	// editable/write-back switch and the ADSR-curve mapping never use magic numbers.
+	private enum int ROW_ATTACK = 0, ROW_DECAY = 1, ROW_SUSTAIN = 2, ROW_RELEASE = 3,
+		ROW_WAVEFORM = 4, ROW_WAVEPTR = 5, ROW_PULSEPTR = 6, ROW_FILTPTR = 7,
+		ROW_RESTART = 8, ROW_GATE = 9, ROW_HRWAVE = 10, ROW_HRSR = 11;
+	private enum int PARAM_ROWS = 12;
 	private int paramCursor;
+
+	// §19 P4a ADSR-curve drag: which handle (ADSR_*) the user grabbed on the ADSR band,
+	// and whether a handle drag is in progress. One insertUndo is taken at press
+	// (clickedAt), the byte(s) are rewritten each draggedTo tick (curve + column redraw
+	// from the bytes automatically), and the held note is re-triggered once at release.
+	private enum int ADSR_ATTACK = 0, ADSR_DECAY = 1, ADSR_SUSTAIN = 2, ADSR_RELEASE = 3;
+	private enum int ADSR_HIT_PX = 9;      // handle grab radius (device pixels; ~one cell)
+	private bool adsrDragging = false;
+	private int  adsrHandle = -1;
+	private bool adsrMoved = false;    // a byte was actually written this gesture
 
 	// §11.2 the voice whose real recording feeds the bands this frame (-1 = none),
 	// and whether that voice actually has a recording (else the bands fall back to
@@ -554,9 +583,7 @@ class SoundEditor : Window {
 		// trace lingers underneath the bands.
 		video.clearScopeTrace();
 
-		int ins = state.activeInstrument;
-		if(ins < 0) ins = 0;
-		if(ins > 47) ins = 47;
+		int ins = clampedIns();
 
 		// §16.2 refresh the real-time axis unit from the live multiplier BEFORE any
 		// ms<->tick conversion (computeVisFrames, ADSR sim, scale label, probe) so
@@ -660,6 +687,10 @@ class SoundEditor : Window {
 				video.olVLine(xForFrame(g, rh), g.stackTopPx, g.stackBotPx, COL_HEAD);
 		}
 
+		// §19 P4a draggable A/D/S/R handles on the ADSR curve (drawn on top of the band
+		// so the grab targets are visible; the grabbed one lights up while dragging).
+		drawAdsrHandles(ins, g);
+
 		// §17.3 subtle zoom-control button row + the current selection readout.
 		drawZoomControls(g);
 
@@ -756,7 +787,7 @@ class SoundEditor : Window {
 		}
 	}
 
-	// ---- left parameter column (display-only, movable cursor) ----
+	// ---- left parameter column (movable cursor; scalar/envelope rows editable P4a) ----
 
 	private void drawParamColumn(int ins, ref Geo g) {
 		ubyte ad = song.instrumentTable[ins + 0 * 48];
@@ -789,22 +820,26 @@ class SoundEditor : Window {
 			return cast(string)b.dup;
 		}
 
+		// Row order MUST match the ROW_* enum (Gate delay is its own row so Left/Right
+		// edits it directly, keeping "Left/Right edits the selected value" consistent and
+		// leaving Shift-Left/Right free to pan on every row).
 		string[PARAM_ROWS] labels = [
 			"Attack", "Decay", "Sustain", "Release", "Waveform", "Wave ptr",
-			"Pulse ptr", "Filter ptr", "Restart", "HR wave", "HR SR"
+			"Pulse ptr", "Filter ptr", "Restart", "Gate dly", "HR wave", "HR SR"
 		];
 		string[PARAM_ROWS] vals;
-		vals[0]  = format("%X %s", attack,  nibbleBar(attack));
-		vals[1]  = format("%X %s", decay,   nibbleBar(decay));
-		vals[2]  = format("%X %s", sustain, nibbleBar(sustain));
-		vals[3]  = format("%X %s", release, nibbleBar(release));
-		vals[4]  = waveformName(firstCtrl);
-		vals[5]  = format("$%02X", wpt);
-		vals[6]  = ppt >= 0x80 ? format("fix $%03X", (ppt & 0x0f) << 8) : format("$%02X", ppt);
-		vals[7]  = fpt == 0 ? "off" : format("$%02X", fpt);
-		vals[8]  = format("$%02X %s g%X", rst, rstStr, gateOn);
-		vals[9]  = format("$%02X", hrw);
-		vals[10] = format("$%02X", hsr);
+		vals[ROW_ATTACK]  = format("%X %s", attack,  nibbleBar(attack));
+		vals[ROW_DECAY]   = format("%X %s", decay,   nibbleBar(decay));
+		vals[ROW_SUSTAIN] = format("%X %s", sustain, nibbleBar(sustain));
+		vals[ROW_RELEASE] = format("%X %s", release, nibbleBar(release));
+		vals[ROW_WAVEFORM]= waveformName(firstCtrl);
+		vals[ROW_WAVEPTR] = format("$%02X", wpt);
+		vals[ROW_PULSEPTR]= ppt >= 0x80 ? format("fix $%03X", (ppt & 0x0f) << 8) : format("$%02X", ppt);
+		vals[ROW_FILTPTR] = fpt == 0 ? "off" : format("$%02X", fpt);
+		vals[ROW_RESTART] = format("%s $%02X", rstStr, rst);
+		vals[ROW_GATE]    = format("%X %s", gateOn, nibbleBar(gateOn));
+		vals[ROW_HRWAVE]  = format("$%02X", hrw);
+		vals[ROW_HRSR]    = format("$%02X", hsr);
 
 		int y0 = area.y + 3;
 		immutable int valX = g.paramX + 12;
@@ -815,12 +850,21 @@ class SoundEditor : Window {
 			bool sel = (i == paramCursor);
 			int lc = sel ? COL_TITLE : COL_LABEL;
 			int vc = sel ? COL_TITLE : COL_VALUE;
-			screen.cprint(g.paramX, y, lc, 0, sel ? ">" : " ");
+			// Cursor marker: ">" on the selected row. An EDITABLE selected row reads
+			// "<>" (Left/Right change this value); pointer rows just show ">".
+			string marker = sel ? (isEditableRow(i) ? "<" : " ") : " ";
+			screen.cprint(g.paramX, y, lc, 0, marker);
 			screen.cprint(g.paramX + 1, y, lc, 0, labels[i]);
 			string v = vals[i];
+			// A trailing ">" on an editable selected row balances the leading "<".
+			if(sel && isEditableRow(i)) v = v ~ " >";
 			if(v.length > valMax) v = v[0 .. valMax];
 			screen.cprint(valX, y, vc, 0, v);
 		}
+
+		// §19 P4a on-screen key hint (one row below the param block, above the probe box).
+		int hintY = y0 + PARAM_ROWS;
+		screen.cprint(g.paramX, hintY, COL_LABEL, 0, "L/R edit  Shift+L/R pan");
 	}
 
 	private static string waveformName(int ctrl) {
@@ -832,6 +876,232 @@ class SoundEditor : Window {
 		if(ctrl & 0x80) s ~= "noi ";
 		if(s.length == 0) s = format("$%02X", ctrl);
 		return stripRight(s);
+	}
+
+	// ---- §19 P4a: instrument-scalar editing (left column + ADSR drag) + undo ----
+
+	// The current instrument, clamped to a valid index (shared by update / keypress /
+	// the mouse handlers so they all edit the same instrument).
+	private int clampedIns() {
+		int ins = state.activeInstrument;
+		if(ins < 0) ins = 0;
+		if(ins > 47) ins = 47;
+		return ins;
+	}
+
+	private static int clampInt(int v, int lo, int hi) {
+		return v < lo ? lo : (v > hi ? hi : v);
+	}
+
+	// Which param rows carry an EDITABLE per-instrument scalar byte (P4a). The pointer
+	// rows (Waveform / Wave / Pulse / Filter ptr) are display-only — programs are edited
+	// via their graphs in P4b/c, never by hand-poking a pointer.
+	private bool isEditableRow(int r) {
+		switch(r) {
+			case ROW_ATTACK, ROW_DECAY, ROW_SUSTAIN, ROW_RELEASE,
+				 ROW_RESTART, ROW_GATE, ROW_HRWAVE, ROW_HRSR:
+				return true;
+			default:
+				return false;
+		}
+	}
+
+	// ---- Undoable (com.session): one snapshot of the WHOLE instrument table per edit
+	// gesture (per keypress, or once at ADSR drag start). Mirrors the classic HexTable
+	// pattern (tableData = [data.dup]); global Ctrl-Z/Y dispatch to us for free once we
+	// are on the stack. Byte-identical to a classic InsTable edit.
+	private void snapshotInstruments() {
+		UndoValue u;
+		u.tableData = [song.instrumentTable.dup];
+		insertUndo(this, u);
+	}
+
+	override void undo(UndoValue v) {
+		if(v.tableData.length >= 1)
+			song.instrumentTable[] = v.tableData[0];
+	}
+
+	override UndoValue createRedoState(UndoValue) {
+		UndoValue r;
+		r.tableData = [song.instrumentTable.dup];
+		return r;
+	}
+
+	// Set one nibble of instrument byte col to an ABSOLUTE 0..15 value (preserving the
+	// other nibble). The one true write path — same index expression the classic
+	// InsValueTable uses (col*48 + ins), so the result is byte-identical.
+	private void setNibbleAbs(int ins, int col, bool hi, int val) {
+		val = clampInt(val, 0, 15);
+		int idx = ins + col * 48;
+		ubyte b = song.instrumentTable[idx];
+		int h = (b >> 4) & 0x0f, l = b & 0x0f;
+		if(hi) h = val; else l = val;
+		song.instrumentTable[idx] = cast(ubyte)((h << 4) | l);
+	}
+
+	// Nudge a nibble by delta (Left/Right keyboard editing), clamped 0..15.
+	private void bumpNibble(int ins, int col, bool hi, int delta) {
+		ubyte b = song.instrumentTable[ins + col * 48];
+		int cur = hi ? ((b >> 4) & 0x0f) : (b & 0x0f);
+		setNibbleAbs(ins, col, hi, cur + delta);
+	}
+
+	// Nudge a whole byte (HR wave col3 / HR SR col6) by delta, clamped 0..255.
+	private void bumpByte(int ins, int col, int delta) {
+		int idx = ins + col * 48;
+		song.instrumentTable[idx] = cast(ubyte)clampInt(song.instrumentTable[idx] + delta, 0, 255);
+	}
+
+	// Cycle the restart TYPE (col2 bits 6-7) hard->soft->3fr by delta, preserving bits
+	// 0-5 (gate-on nibble + any low bits) so only the type field changes.
+	private void cycleRestart(int ins, int delta) {
+		int idx = ins + 2 * 48;
+		ubyte b = song.instrumentTable[idx];
+		static immutable int[3] order = [0x80, 0x40, 0x00]; // hard, soft, 3-frame
+		int cur = 0;
+		int tb = b & 0xc0;
+		foreach(i, o; order) if(o == tb) { cur = cast(int)i; break; }
+		int ni = ((cur + delta) % 3 + 3) % 3;
+		song.instrumentTable[idx] = cast(ubyte)((b & 0x3f) | order[ni]);
+	}
+
+	// Apply a Left/Right delta to whatever the cursor row selects (no undo/re-trigger —
+	// editSelected wraps this with the gesture snapshot + re-trigger).
+	private void applyRowDelta(int ins, int row, int delta) {
+		switch(row) {
+			case ROW_ATTACK:  bumpNibble(ins, 0, true,  delta); break;
+			case ROW_DECAY:   bumpNibble(ins, 0, false, delta); break;
+			case ROW_SUSTAIN: bumpNibble(ins, 1, true,  delta); break;
+			case ROW_RELEASE: bumpNibble(ins, 1, false, delta); break;
+			case ROW_RESTART: cycleRestart(ins, delta); break;
+			case ROW_GATE:    bumpNibble(ins, 2, false, delta); break;
+			case ROW_HRWAVE:  bumpByte(ins, 3, delta); break;
+			case ROW_HRSR:    bumpByte(ins, 6, delta); break;
+			default: break;
+		}
+	}
+
+	// One keyboard edit gesture: snapshot for undo, mutate, then make it audible.
+	private void editSelected(int ins, int delta) {
+		if(!isEditableRow(paramCursor)) return;
+		snapshotInstruments();
+		applyRowDelta(ins, paramCursor, delta);
+		retriggerIfSounding();
+	}
+
+	// §19.5 P4a immediate audibility: if a keyjam note is currently held on this screen,
+	// re-trigger it so the just-edited envelope is heard at once (AD/SR only take effect
+	// on the NEXT trigger). Never called per drag tick — only on keypress / drag release.
+	private void retriggerIfSounding() {
+		if(inputKeyjam.noteHeld())
+			inputKeyjam.retrigger();
+	}
+
+	// ---- ADSR-curve drag handles (§19.2/§19.3 graph gesture) ----
+
+	// The 4 A/D/S/R handle centres (device pixels) for the CURRENT bytes, so the drawer
+	// and the hit-test agree. Positions mirror drawAdsrBand's sim geometry: attack peak
+	// (amp 1.0 at aF), decay->sustain knee (sustain level at aF+dF), a sustain-level grab
+	// on the plateau, and the release tail (amp 0 at gateEnd+rF). inView[i] = drawable/
+	// grabbable at the current zoom/pan.
+	private void adsrHandlePositions(int ins, ref Geo g, out int[4] hx, out int[4] hy, out bool[4] inView) {
+		int topPx, botPx; bandBox(g, 1, topPx, botPx);
+		int h = botPx - topPx; if(h < 1) h = 1;
+		ubyte ad = song.instrumentTable[ins + 0 * 48];
+		ubyte sr = song.instrumentTable[ins + 1 * 48];
+		int attack = (ad >> 4) & 0x0f, decay = ad & 0x0f;
+		int sustain = (sr >> 4) & 0x0f, release = sr & 0x0f;
+		float sLvl = sustain / 15.0f;
+		float aF = ATTACK_TIME_MS[attack]         / tickMs;
+		float dF = DECAY_RELEASE_TIME_MS[decay]   / tickMs;
+		float rF = DECAY_RELEASE_TIME_MS[release] / tickMs;
+		if(rF < 0.5f) rF = 0.5f;
+		float gateEnd = aF + dF + nominalGateFrames;
+		float sustMid = (aF + dF + gateEnd) / 2.0f;    // middle of the sustain plateau
+		float[4] hf   = [aF, aF + dF, sustMid, gateEnd + rF];
+		float[4] hlvl = [1.0f, sLvl, sLvl, 0.0f];
+		foreach(i; 0 .. 4) {
+			hx[i] = xForFrame(g, hf[i]);
+			hy[i] = botPx - cast(int)lround(clamp01(hlvl[i]) * h);
+			inView[i] = frameInView(hf[i]);
+		}
+	}
+
+	// Draw a small square marker at each in-view A/D/S/R handle (the grabbed one lights
+	// up red while dragging). Read-only sizing; positions come straight from the bytes.
+	private void drawAdsrHandles(int ins, ref Geo g) {
+		int[4] hx, hy; bool[4] inView;
+		adsrHandlePositions(ins, g, hx, hy, inView);
+		foreach(i; 0 .. 4) {
+			if(!inView[i]) continue;
+			int c = (adsrDragging && adsrHandle == i) ? COL_TRIGGER : COL_HEAD;
+			video.olFillRect(hx[i] - 2, hy[i] - 2, 5, 5, c);
+		}
+	}
+
+	// The A/D/S/R handle (ADSR_*) nearest screen cell (x,y) within the grab radius, or -1.
+	private int adsrHandleAt(ref Geo g, int cellx, int celly) {
+		int[4] hx, hy; bool[4] inView;
+		adsrHandlePositions(clampedIns(), g, hx, hy, inView);
+		int px = cellx * FONT_X + FONT_X / 2;
+		int py = celly * FONT_Y + FONT_Y / 2;
+		int best = -1, bestd = ADSR_HIT_PX * ADSR_HIT_PX + 1;
+		foreach(i; 0 .. 4) {
+			if(!inView[i]) continue;
+			int dx = px - hx[i], dy = py - hy[i];
+			int d = dx * dx + dy * dy;
+			if(d <= ADSR_HIT_PX * ADSR_HIT_PX && d < bestd) { bestd = d; best = i; }
+		}
+		return best;
+	}
+
+	// Nearest SID nibble 0..15 whose ms-table entry is closest to `ms`.
+	private static int nearestMs(ref const float[16] tbl, double ms) {
+		int best = 0; double bd = 1e18;
+		foreach(i; 0 .. 16) {
+			double d = tbl[i] - ms; if(d < 0) d = -d;
+			if(d < bd) { bd = d; best = i; }
+		}
+		return best;
+	}
+
+	// Map the current ADSR-handle drag to the nearest SID nibble and write the byte
+	// (curve + column redraw from the byte automatically). No undo/re-trigger here — the
+	// gesture's snapshot was taken at press, the re-trigger fires once on release.
+	private void adsrDragUpdate(ref Geo g, int cellx, int celly) {
+		int ins = clampedIns();
+		int px = cellx * FONT_X + FONT_X / 2;
+		int py = celly * FONT_Y + FONT_Y / 2;
+		double t = tickForPixel(g, px);
+		ubyte ad = song.instrumentTable[ins + 0 * 48];
+		int attack = (ad >> 4) & 0x0f, decay = ad & 0x0f;
+		float aF = ATTACK_TIME_MS[attack]       / tickMs;
+		float dF = DECAY_RELEASE_TIME_MS[decay] / tickMs;
+		switch(adsrHandle) {
+			case ADSR_ATTACK: {
+				double ms = t * tickMs; if(ms < 0) ms = 0;
+				setNibbleAbs(ins, 0, true, nearestMs(ATTACK_TIME_MS, ms));
+				break;
+			}
+			case ADSR_DECAY: {
+				double ms = (t - aF) * tickMs; if(ms < 0) ms = 0;
+				setNibbleAbs(ins, 0, false, nearestMs(DECAY_RELEASE_TIME_MS, ms));
+				break;
+			}
+			case ADSR_SUSTAIN: {
+				int topPx, botPx; bandBox(g, 1, topPx, botPx);
+				int h = botPx - topPx; if(h < 1) h = 1;
+				double lvl = cast(double)(botPx - py) / h;
+				setNibbleAbs(ins, 1, true, clampInt(cast(int)lround(lvl * 15.0), 0, 15));
+				break;
+			}
+			case ADSR_RELEASE: {
+				double ms = (t - (aF + dF + nominalGateFrames)) * tickMs; if(ms < 0) ms = 0;
+				setNibbleAbs(ins, 1, false, nearestMs(DECAY_RELEASE_TIME_MS, ms));
+				break;
+			}
+			default: break;
+		}
 	}
 
 	// ---- band chrome ----
@@ -2035,6 +2305,17 @@ class SoundEditor : Window {
 			if(hit >= 0) { pressedBtn = hit; pressedOver = true; }
 			return;
 		}
+		// §19 P4a: grab an A/D/S/R handle on the ADSR curve if the press landed on one
+		// (checked BEFORE the plot drag-select, since the ADSR band is inside the plot).
+		// One undo snapshot per drag gesture is taken here at press.
+		int ah = adsrHandleAt(g, x, y);
+		if(ah >= 0) {
+			adsrDragging = true;
+			adsrHandle = ah;
+			adsrMoved = false;       // snapshot + first write happen on the first drag tick
+			clickWasButton = true;   // consume the paired release (no selection change)
+			return;
+		}
 		// §17.2 begin a drag-select when the press lands in the plot; else clear.
 		if(inPlotCell(g, x, y)) {
 			selecting = true;
@@ -2047,6 +2328,15 @@ class SoundEditor : Window {
 	}
 
 	override void draggedTo(int x, int y) {
+		// §19 P4a ADSR-handle drag: on the first drag tick take the one gesture undo
+		// snapshot, then rewrite the mapped byte every tick (curve + column redraw from
+		// the byte). No re-trigger here — that fires once on release.
+		if(adsrDragging) {
+			Geo g = layout();
+			if(!adsrMoved) { snapshotInstruments(); adsrMoved = true; }
+			adsrDragUpdate(g, x, y);
+			return;
+		}
 		// §17.3 while a zoom button is held, keep its pressed style only while the pointer
 		// stays on it — drag off and it un-presses (and the release will not fire it).
 		if(pressedBtn >= 0) {
@@ -2078,6 +2368,16 @@ class SoundEditor : Window {
 	}
 
 	override void releasedAt(int x, int y) {
+		// §19 P4a end an ADSR-handle drag: make the new envelope audible once (if a note
+		// is held) — never per drag tick. A plain click with no drag wrote nothing.
+		if(adsrDragging) {
+			adsrDragging = false;
+			adsrHandle = -1;
+			clickWasButton = false;
+			if(adsrMoved) retriggerIfSounding();
+			adsrMoved = false;
+			return;
+		}
 		// §17.4 end any scrollbar-thumb drag.
 		scrollDragging = false;
 		// §17.3 a held zoom button fires only if the release lands back on it (drag off
@@ -2100,20 +2400,25 @@ class SoundEditor : Window {
 	}
 
 	override int keypress(Keyinfo key) {
+		int ins = clampedIns();
 		switch(key.raw) {
-		// Move the parameter cursor (display-only this pass; no byte writes).
+		// Move the parameter cursor.
 		case SDLK_UP:
 			if(paramCursor > 0) paramCursor--;
 			return OK;
 		case SDLK_DOWN:
 			if(paramCursor < PARAM_ROWS - 1) paramCursor++;
 			return OK;
-		// §17.3 viewport pan / zoom on non-keyjam keys (letters/digits are keyjam).
+		// §19 P4a Left/Right EDIT the selected value (decrement/increment); on the
+		// pointer rows (nothing editable) or with Shift held they PAN the viewport
+		// instead (view control moved off bare Left/Right). Letters/digits stay keyjam.
 		case SDLK_LEFT:
-			panBy(-(viewEndTick - viewStartTick) / 4.0);
+			if(!(key.mods & KMOD_SHIFT) && isEditableRow(paramCursor)) editSelected(ins, -1);
+			else panBy(-(viewEndTick - viewStartTick) / 4.0);
 			return OK;
 		case SDLK_RIGHT:
-			panBy((viewEndTick - viewStartTick) / 4.0);
+			if(!(key.mods & KMOD_SHIFT) && isEditableRow(paramCursor)) editSelected(ins, +1);
+			else panBy((viewEndTick - viewStartTick) / 4.0);
 			return OK;
 		case SDLK_HOME:
 			userZoomed = false; fitViewport();

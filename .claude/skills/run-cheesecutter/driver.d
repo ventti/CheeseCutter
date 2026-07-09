@@ -215,6 +215,16 @@ private bool processCommand(string arg) {
 					wp, song.tWave.wave2[wp]);
 			}
 			break;
+		case "insbytes": {
+			// insbytes — dump the ACTIVE instrument's 8 raw bytes (AD SR Rst HRw Flt Pul
+			// HRsr Wav) straight from the live instrumentTable — the exact array both the
+			// classic InsTable and the Sound Editor write, so it is the byte-parity oracle.
+			int ins = state.activeInstrument;
+			stderr.writef("ins%02x:", ins);
+			foreach(col; 0 .. 8) stderr.writef(" %02x", song.instrumentTable[ins + col * 48]);
+			stderr.writeln();
+			break;
+		}
 		case "palette":
 			// palette:<file> — load a JSON palette at runtime, then force a full
 			// repaint so the new colors take effect on the next shot.

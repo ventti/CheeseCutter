@@ -987,3 +987,97 @@ darkgray), buttons with a background, and a dotted scrollbar with a mid-gray thu
 - **Graph colours** (envelope, output trace, pulse fill/edge, filter edge +
   per-mode colours, trigger, restart, resonance, freq, loop marker/line,
   bit-lanes) → named `BaseColor.*` (no integer literals).
+
+---
+
+## 19. Functional editing (P4) — plan (2026-07-09)
+
+Goal: make the Sound Editor a WYSIWYG synth editor — edit the SOUND (envelope,
+pitch, pulse, filter, waveform-over-time) both **numerically in the left column**
+and **by dragging in the graphs**, each reflecting the other instantly, writing
+back to the same `ct.base` byte tables. The user never touches table pointers or
+hex loop values. The **classic tracker table views stay 100% intact** (deep hex
+editing lives there, unchanged) — the Sound Editor is a parallel, friendlier face
+over the same live `memspace`.
+
+### 19.1 Foundations (from the survey)
+- Every table is a live slice of the 64K `memspace` the reSID driver runs on —
+  **writing a byte IS the edit**; no player reload. AD/SR take effect on the next
+  note trigger; program bytes take effect live while a note sustains. Re-trigger
+  (`audio.player.playNote`) to make an envelope change audible immediately.
+- **Undo**: implement `Undoable` on `SoundEditor`; call `com.session.insertUndo(
+  this, snapshot)` BEFORE mutating (snapshot = `[table.dup]` for a single-table
+  edit, or all tables + `insLabels` for anything that shifts rows/pointers).
+  `undo()` restores the arrays; `createRedoState()` re-snapshots. Global Ctrl-Z/Y
+  then work for free. One `insertUndo` per gesture (at drag start) = one undo step.
+- Row ops exist and fix pointers: `WaveTable.insertRow/deleteRow` (fix `$7F`
+  targets + every instrument's wave pointer), `ct.purge.pulse/filterInsert/DeleteRow`
+  (fix instrument pointers + sequence commands). Cell writes: instrument
+  `instrumentTable[no+col*48]`; wave `data[col?256+row:row]`; sweep `data[row*4+col]`.
+- **Sharing**: NO copy-on-write. Editing a shared program row changes all
+  instruments pointing at it. `insertInstrument` (base.d:2200) shows the canonical
+  append-and-relocate (`seekTableEnd` → copy → fix internal jump/wrap targets →
+  repoint one instrument) used to fork a program.
+
+### 19.2 What's editable, and the visual↔byte mapping
+| Sound element | Left column | Graph gesture | Bytes |
+|---|---|---|---|
+| Attack/Decay/Sustain/Release | nibble 0–F | drag A/D/S/R handles on the ADSR curve | AD (col0), SR (col1) |
+| Restart type + gate-on delay | cycle hard/soft/3fr, nibble | — | col2 |
+| Hard-restart wave / SR | byte | — | col3 / col6 |
+| Pitch / arp over time | per-step semitone | drag pitch steps, drag loop | wave1 + `$7E/$7F` |
+| Waveform + gate/ring/sync/test over time | toggle per step | click bit-lane cells; insert/delete steps; drag loop | wave2 control + markers |
+| Pulse width over time | per-step value | drag the sweep, add/remove steps, drag loop | pulse SweepTable |
+| Filter cutoff/res/mode over time | per-step | drag cutoff/res, pick mode, steps, loop | filter SweepTable |
+Loops are **draggable markers**, not hex: drag where the program repeats → the
+tool writes the `$7E/$7F` (wave) or byte3 jump (sweep). Insert/Delete a step =
+Ins/Del key or a graph +/− affordance → the row-op that keeps all pointers valid.
+
+### 19.3 Input scheme (keyjam owns letters/digits)
+- **Mouse-first** (modern-synth): drag handles/steps/loops in the graphs; press→
+  drag→release is one undo step. Mouse hit-testing reuses the existing
+  clickedAt/draggedTo/releasedAt state machine.
+- **Left column keyboard**: Up/Down select a param row (as now); **Left/Right
+  decrease/increase** the selected value (Shift = coarse); Ins/Del where a row op
+  applies. Viewport **pan** moves off Left/Right onto the scrollbar drag + a
+  Shift-Left/Right (keeps keyjam + zoom controls intact).
+- Keyjam, F1–F3 song play, +/- instrument, octave keys stay as they are.
+
+### 19.4 The sharing decision (needs confirmation — see below)
+Program edits (pulse/filter/wave) hit the shared-table problem. Options:
+- **A. Edit in place** (classic model): a shared program is shared; editing one
+  instrument's program changes every instrument pointing at those rows. Simple;
+  byte-identical to a classic edit; but "surprising" for a synth UX.
+- **B. Copy-on-write (fork if shared)**: on the first program edit, if the rows
+  are shared with another instrument, `seekTableEnd`-allocate a fresh copy,
+  relocate its internal loop/jump targets, and repoint ONLY this instrument — so
+  editing a sound never affects another. Matches "modern synth / don't care about
+  pointers", but allocates rows (can hit the table-full limit → must degrade
+  gracefully) and diverges from a pure in-place byte-parity.
+Scalar edits (AD/SR/restart/HR, §19.2 rows 1–3) are per-instrument, NOT shared —
+no sharing concern, byte-identical to classic either way.
+
+### 19.5 Phases (each: implement → verify → commit; classic editor stays intact)
+- **P4a — Envelope + scalar editing** (no sharing issue): A/D/S/R + Restart + HR
+  bytes, editable in the left column (Left/Right/Ins) AND by dragging the ADSR
+  curve handles, bidirectionally WYSIWYG, with undo + immediate re-trigger.
+  *Verify*: edit in the Sound Editor → open the classic InsTable → the 8 bytes
+  match exactly; Ctrl-Z reverts; audible on the next/held note. **Byte-parity clean.**
+- **P4b — Pulse & Filter program editing**: drag the sweep, add/remove steps,
+  drag the loop marker; mode/res picks. Uses the §19.4 sharing policy.
+- **P4c — Wave program editing**: toggle control-bit lanes per step, edit the
+  pitch/arp steps, insert/delete steps, drag the loop.
+- **P4d — Polish**: mouse+keyboard parity everywhere, table-full graceful
+  handling, docs (README/guide + F12 help), an ADR for the sharing decision.
+
+Recommendation: build **P4a first and stop for review** (it's the synth-editor
+core, has no sharing risk, and validates the WYSIWYG round-trip), then decide
+§19.4 A-vs-B before P4b/c.
+
+### 19.6 Decisions (2026-07-09)
+- **Sharing (§19.4): WARN + let the user choose.** For P4b/c program edits that
+  would touch rows shared with another instrument, prompt: fork a private copy
+  (COW via the `insertInstrument` relocate pattern) vs edit the shared program in
+  place. Per-edit choice. (P4a scalar edits have no sharing, so no prompt.)
+- **Checkpoint: build P4a first, then stop for review.** Then decide/proceed to
+  P4b/c. P4a = envelope + scalar editing only.

@@ -904,3 +904,59 @@ Tech-debt to address in P6 polish (non-blocking, from verifiers):
   - Ran neither `make map`/`make docs` change — no synopsis/dep-edge/CLI-flag/shortcut change (the
     palette JSON roles are documented in doc/palette.json schema, not the generated man pages).
   - NOT done: data editing / write-back / undo (P4+, still read-only). Did not commit/grade.
+
+- (P4a ENVELOPE + SCALAR EDITING, §19.5 2026-07-09) FIRST editing pass — no longer read-only.
+  The per-instrument SCALAR bytes are now editable in the Sound Editor, both numerically in the
+  left column AND by dragging the ADSR curve; nothing shared, BYTE-IDENTICAL to the classic
+  InsTable (same `instrumentTable[ins + col*48]` writes). P4b/c (pulse/filter/wave PROGRAM
+  editing) intentionally NOT done — pointer rows stay display-only.
+  - Editable: Attack (AD hi), Decay (AD lo), Sustain (SR hi), Release (SR lo); Restart TYPE
+    (col2 bits 6-7, cycle hard/soft/3fr preserving bits 0-5); Gate delay (col2 low nibble, now
+    its OWN param row); HR wave (col3 byte); HR SR (col6 byte).
+  - `src/ui/soundedit.d`:
+    * `class SoundEditor : Window, Undoable` — implements com.session `Undoable`:
+      snapshotInstruments() does `insertUndo(this, {tableData:[song.instrumentTable.dup]})`;
+      `undo(v){ song.instrumentTable[] = v.tableData[0]; }`;
+      `createRedoState(){ r.tableData=[song.instrumentTable.dup]; }`. ONE insertUndo per gesture
+      (per keypress; once at ADSR drag's first tick). Global Ctrl-Z/Y (Ctx.global, keymap.d)
+      dispatch to us for free.
+    * PARAM_ROWS 11->12: added named ROW_* enum + a new "Gate dly" row after "Restart" (so
+      Left/Right edits the gate nibble directly and Shift-Left/Right can always pan — a clean,
+      consistent scheme). Editable rows show a `<value >` marker; a hint line "L/R edit
+      Shift+L/R pan" sits under the param block.
+    * Left-column keys: Up/Down select; Left/Right decrement/increment the SELECTED editable
+      row (nibbles clamp 0..15, Restart cycles the type, HR bytes clamp 0..255); on a
+      non-editable (pointer) row OR with Shift held, Left/Right PAN the viewport instead
+      (view-pan moved OFF bare Left/Right). Letters/digits still keyjam.
+    * ADSR-curve drag: adsrHandlePositions() computes the 4 A/D/S/R handle centres from the
+      bytes (attack peak, decay->sustain knee, sustain-level grab, release tail);
+      drawAdsrHandles() draws square markers (grabbed one lights red); adsrHandleAt() hit-tests
+      within ADSR_HIT_PX=9. clickedAt grabs the nearest handle (before the plot drag-select),
+      draggedTo maps mouse->nearest SID nibble via the ms tables (X for A/D/R, Y for S) and
+      rewrites the byte each tick, releasedAt re-triggers. One undo snapshot at the first drag
+      tick; a plain click with no drag writes nothing.
+    * retriggerIfSounding(): after a keypress commit / drag release, if a keyjam note is held it
+      re-triggers via inputKeyjam so the new envelope is audible at once (never per drag tick).
+  - `src/ui/input.d`: InputKeyjam gains `noteHeld()` (heldKeys non-empty) and `retrigger()`
+    (re-`playNote(element)` with the active instrument) — the only new surface, trailing.
+  - `src/ui/help.d`: HELPSOUNDEDITOR (F12) gains an "Editing the sound" section (Left/Right per
+    row, ADSR drag, Ctrl-Z/Y) and moves pan onto Shift-Left/Right. Static ContextHelp, so no
+    man-page / KEYBOARD.md / ARCHITECTURE.md drift (make docs + make check-map both clean).
+  - `.claude/skills/run-cheesecutter/driver.d`: added a test-only `insbytes` oracle — dumps the
+    active instrument's 8 raw bytes from the live instrumentTable (the byte-parity oracle).
+  - Build: `make -f Makefile.mac clean && make -f Makefile.mac -j4 ccutter ccdriver` -> exit 0,
+    both binaries.
+  - VERIFIED by driving ccdriver (tunes/vent-arkijuusto.ct, ins00 HihatClosed, headless dummy):
+    * keyboard: each editable row's Left/Right lands the exact expected byte — Attack 13->73,
+      Decay 13->15, Sustain ->50, Release ->57, Restart cycle 40->00 (soft->3fr, low nibble
+      kept), Gate ->06, HR wave 80->82, HR SR ->09; Shift-Right on a row makes no byte change
+      (pans). Screens /tmp/se-p4a-enter.png, /tmp/se-p4a-attack.png (attack ramp lengthens).
+    * byte-parity: after editing to AD=75 SR=57, Ctrl-E to the classic editor shows Instruments
+      row `00:75 57 40 80 ...` — identical (/tmp/se-p4a-classic.png).
+    * undo: Ctrl-Z 13->23->33 then 33->23->13; Ctrl-R redo ->23.
+    * ADSR drag: attack handle 13->a3 (drag right), sustain handle 00->d0 (drag up), decay
+      handle 13->19 (drag right). Screens /tmp/se-p4a-drag-attack.png, -drag-sustain.png.
+    * re-trigger: with a note held ('q'), a keypress edit and a handle drag both fire playNote
+      without crashing (/tmp/se-p4a-retrigger.png).
+  - Classic editor intact: enter/exit clean ("Sound Editor closed."), tables render normally.
+  - NOT done: P4b/c program editing, P4d polish. Did not commit/grade (loop orchestrator/verifier).

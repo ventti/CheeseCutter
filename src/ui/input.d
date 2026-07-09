@@ -919,6 +919,20 @@ class InputKeyjam : ExtendedInput {
 		return r;
 	}
 
+	// True while at least one note key is held down (a keyjam note is sounding). Used by
+	// the Sound Editor to decide whether an envelope edit should re-trigger the note.
+	bool noteHeld() { return heldKeys.length > 0; }
+
+	// Re-play the currently held note (same note + active instrument) so a just-edited
+	// envelope is heard immediately — AD/SR only take effect on the next note trigger.
+	// No-op when nothing is held.
+	void retrigger() {
+		if(heldKeys.length == 0) return;
+		if(state.activeInstrument >= 0)
+			element.instr = cast(ubyte)(state.activeInstrument);
+		audio.player.playNote(element);
+	}
+
 	override int keyrelease(Keyinfo key) {
 		size_t idx = heldKeys.length;
 		foreach(i, k; heldKeys) if(k == key.raw) { idx = i; break; }

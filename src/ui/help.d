@@ -166,15 +166,18 @@ Ctrl-Alt-3..............Swap voice's track with voice 3's tracks from crsr down
 "]);
 
 
+// Two pages (SPACE / F12-again cycles). Each MUST fit the help window (~27 lines);
+// an over-long single page overflows the screen and crashes Screen.cprint.
 ContextHelp HELPSOUNDEDITOR = ContextHelp("Sound Editor help",
-["`+1Press F12 again to see the global help.
+["`+1Press F12 again to see the global help.  SPACE for more.
 
 `+dSound Editor (Ctrl-E toggles it from the classic editor)
 
-A live, read-only view of the selected instrument: stacked, time-
-aligned graph bands (output, ADSR, freq/arp, pulse, filter+resonance,
-wave control bits) on one note-on axis, plus a parameter column and a
-raw table strip. Play a note to see the playhead sweep across.
+A live view of the selected instrument: stacked, time-aligned graph
+bands (output, ADSR, freq/arp, pulse, filter+resonance, wave control
+bits) on one note-on axis, plus a parameter column and a raw table
+strip. Play a note to see the playhead sweep across. The envelope +
+scalar bytes are editable here (byte-identical to the classic table).
 
 `+dJamming notes
 
@@ -188,25 +191,36 @@ Keypad / *..............Lower / raise the base octave
 `+dNavigation
 
 + / - (or Keypad -/+)...Previous / next instrument
-Up / Down...............Move the parameter cursor (display-only)
-Ctrl-E..................Exit back to the classic editor
+Up / Down...............Move the parameter cursor
+Ctrl-E..................Exit back to the classic editor",
+
+"`+1Press F12 again to see the global help.
+
+`+dEditing the sound (writes the same bytes as the classic table)
+
+Left / Right............Edit the selected parameter (- / +)
+  Attack/Decay/Sustain/Release.....nibble 0-F
+  Restart..........................cycle type hard / soft / 3fr
+  Gate dly.........................gate-on / arp-delay nibble 0-F
+  HR wave / HR SR..................byte 00-FF
+Drag ADSR handles.......Set A/D/S/R by dragging the curve markers
+Ctrl-Z / Ctrl-Y.........Undo / redo the edit
+(Pointer rows -- Waveform / Wave / Pulse / Filter ptr -- are
+ display-only; edit those programs in the classic tables.)
 
 `+dView / zoom (mouse-first; the graphs zoom + pan)
 
 Drag on the plot........Mark a tick-snapped selection
 [-] [+] [Fit] [Sel].....Zoom out / in / whole note / to selection
 Scrollbar...............Drag the thumb to pan; click the track to page
-Left / Right............Pan the view (~1/4 window)
-Home....................Fit (show the whole note)
-End.....................Zoom to the current selection
+Shift-Left / Right......Pan the view (~1/4 window)
+Home / End..............Fit whole note / Zoom to selection
 Backspace...............Clear the selection
 
 `+dPlayback
 
-F1 / F2 / F3............Play from mark / start / cursor
-Shift-F1/F2/F3..........Play with tracking (follow)
-F4......................Stop playback
-"]);
+F1 / F2 / F3............Play from mark / start / cursor  (Shift = follow)
+F4......................Stop playback"]);
 
 ContextHelp genPlayerContextHelp(string title, char*[] descriptions) {
 	string text;
