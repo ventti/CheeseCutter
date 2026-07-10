@@ -166,8 +166,10 @@ Ctrl-Alt-3..............Swap voice's track with voice 3's tracks from crsr down
 "]);
 
 
-// Two pages (SPACE / F12-again cycles). Each MUST fit the help window (~27 lines);
-// an over-long single page overflows the screen and crashes Screen.cprint.
+// Three pages (SPACE / F12-again cycles). Each MUST fit the help window (~34 lines
+// before the render clamp); an over-long single page overflows the screen and its
+// tail is silently dropped (and long enough would crash Screen.cprint) -- so keep
+// each page comfortably short and add a page rather than growing one past the fold.
 ContextHelp HELPSOUNDEDITOR = ContextHelp("Sound Editor help",
 ["`+1Press F12 again to see the global help.  SPACE for more.
 
@@ -194,7 +196,7 @@ Keypad / *..............Lower / raise the base octave
 Up / Down...............Move the parameter cursor
 Ctrl-E..................Exit back to the classic editor",
 
-"`+1Press F12 again to see the global help.
+"`+1Press F12 again to see the global help.  SPACE for more.
 
 `+dEditing the sound (writes the same bytes as the classic table)
 
@@ -204,6 +206,8 @@ Left / Right............Edit the selected parameter (- / +)
   Arpeggio speed...................nibble 0-F
   HR wave / HR SR..................byte 00-FF
 Drag ADSR handles.......Set A/D/S/R by dragging the curve markers
+                        (drag the decay dot up/down for sustain; zoom
+                        out to reach the release dot past the note)
 Drag in Pulse/Filter....Set the sweep step's level under the cursor
                         (pulse width / filter cutoff). A shared program
                         prompts: Y = fork a private copy, N = edit shared.
@@ -214,7 +218,9 @@ Drag the Filter res line..Set the config row's resonance (0-F)
 Click the Filter [mode] chip..Cycle LP / BP / HP combos (recolours the fill)
 Ctrl-Z / Ctrl-Y.........Undo / redo the edit
 (Pointer rows -- Waveform / Wave / Pulse / Filter ptr -- are
- display-only; the sweeps are edited by dragging their bands.)
+ display-only; the sweeps are edited by dragging their bands.)",
+
+"`+1Press F12 again to see the global help.
 
 `+dView / zoom (mouse-first; the graphs zoom + pan)
 

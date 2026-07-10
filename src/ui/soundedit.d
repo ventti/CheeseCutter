@@ -97,6 +97,10 @@ private float expEnvLevel(float frac) nothrow {
 // so a pathological length still renders (long sounds get <1px/frame = zoomed out).
 private enum int MIN_VIS = 24;
 private enum int MAX_VIS = 1600;
+// §17.3 The viewport can zoom/scroll out PAST the fitted note (visFrames) so the
+// release-tail dot is reachable even for a long release. MAX_CONTENT bounds that
+// extended right edge (enough to hold a full nibble-F release at 2x multispeed).
+private enum int MAX_CONTENT = 3200;
 // §12.1: envelope-amplitude threshold for "the note is still audible" when reading
 // the recorded extent (below this counts as silence / note ended).
 private enum float AMP_EPS = 0.02f;
@@ -330,6 +334,9 @@ class SoundEditor : Window, Undoable {
 	// through xForFrame + every band so they all share the exact same zoom. visFrames
 	// = the auto-fitted post-trigger span (frames); totalFrames = pre-roll + visFrames.
 	private int visFrames = MIN_VIS;
+	// §17.3 right edge the viewport may zoom/scroll out to (>= visFrames): far enough
+	// that the release-tail dot is always reachable past the fitted note.
+	private int contentMaxFrames = MIN_VIS;
 	private int totalFrames = RESTART_FRAMES + MIN_VIS;
 	// §17/left-edge fix: the restart pre-roll is only as wide as the ACTUAL restart
 	// phase for this instrument (restartFramesFor(ins), ~2-3 ticks) — NOT a fixed
@@ -512,6 +519,23 @@ class SoundEditor : Window, Undoable {
 		return vf;
 	}
 
+	// §17.3 Right-hand extent the viewport may zoom/scroll out to. Independent of the
+	// fitted note (visFrames): it always spans up to where a FULL (nibble-F) release
+	// would end, so the release-tail dot is reachable past the sound even when the
+	// note recording/estimate is short. Attack+decay come from this instrument; the
+	// release term uses the max nibble so any release length can be dialled in.
+	private int computeContentMax(int ins) {
+		ubyte ad = song.instrumentTable[ins + 0 * 48];
+		int attack = (ad >> 4) & 0x0f, decay = ad & 0x0f;
+		int aF = cast(int)lround(ATTACK_TIME_MS[attack]       / tickMs);
+		int dF = cast(int)lround(DECAY_RELEASE_TIME_MS[decay]  / tickMs);
+		int rFmax = cast(int)lround(DECAY_RELEASE_TIME_MS[15]  / tickMs);
+		int cm = aF + dF + nominalGateFrames + rFmax;
+		if(cm < visFrames) cm = visFrames;   // never narrower than the fitted note
+		if(cm > MAX_CONTENT) cm = MAX_CONTENT;
+		return cm;
+	}
+
 	// §9.1/§12.2/§17.1 THE one true tick->pixel map every band shares, now over the
 	// zoomable/pannable VIEWPORT [viewStartTick, viewEndTick] (a sub-window of the whole
 	// note; dynamic ticks-per-pixel = zoom). Frame/tick f may be negative (pre-roll /
@@ -558,11 +582,11 @@ class SoundEditor : Window, Undoable {
 		viewEndTick = visFrames;
 	}
 
-	// §17.1 Clamp the (user) viewport within [-RESTART_FRAMES, visFrames] and enforce
+	// §17.1/§17.3 Clamp the (user) viewport within [-RESTART_FRAMES, contentMaxFrames] and enforce
 	// the MIN_VIEW_SPAN floor, keeping the view centre where possible.
 	private void clampViewport() {
 		double lo = -prerollTicks;
-		double hi = visFrames;
+		double hi = contentMaxFrames;   // §17.3 allow zoom/scroll past the note to the release tail
 		double full = hi - lo;
 		if(full <= MIN_VIEW_SPAN) { viewStartTick = lo; viewEndTick = hi; return; }
 		double span = viewEndTick - viewStartTick;
@@ -676,6 +700,7 @@ class SoundEditor : Window, Undoable {
 		// then thread visFrames/totalFrames through xForFrame + every band so they all
 		// share the exact same zoom (they'd misalign if recomputed per band).
 		visFrames = computeVisFrames(ins);
+		contentMaxFrames = computeContentMax(ins);   // §17.3 zoom/scroll-out reaches the release tail
 		prerollTicks = restartFramesFor(ins);   // thin restart strip -> graphs start at the left edge
 		totalFrames = prerollTicks + visFrames;
 
@@ -2819,7 +2844,7 @@ class SoundEditor : Window, Undoable {
 	private void scrollThumbCells(ref Geo g, out int x0, out int x1) {
 		int trackX0, trackW;
 		scrollTrackCells(g, trackX0, trackW);
-		double full = cast(double)visFrames - (-prerollTicks);
+		double full = cast(double)contentMaxFrames - (-prerollTicks);
 		if(full < 1e-6) full = 1;
 		double f0 = (viewStartTick - (-prerollTicks)) / full;
 		double f1 = (viewEndTick   - (-prerollTicks)) / full;
@@ -2841,7 +2866,7 @@ class SoundEditor : Window, Undoable {
 		double frac = (cellX + 0.5 - trackX0) / trackW;
 		if(frac < 0) frac = 0;
 		if(frac > 1) frac = 1;
-		return -prerollTicks + frac * (cast(double)visFrames - (-prerollTicks));
+		return -prerollTicks + frac * (cast(double)contentMaxFrames - (-prerollTicks));
 	}
 
 	// §17.4 Draw the scrollbar: a dim darkgray track across the whole plot width, with the
@@ -2862,13 +2887,15 @@ class SoundEditor : Window, Undoable {
 	// ---- §17.2/§17.3 mouse: drag-select + control-button clicks ----
 
 	// Snap an absolute pixel column to the nearest integer tick on the viewport axis,
-	// clamped to the note extent [-RESTART_FRAMES, visFrames]. Integer ticks ARE the
-	// native per-tick grid (1/frame at 1×, 2/frame at 2×), so this is the §17.2 snap.
+	// clamped to the content extent [-RESTART_FRAMES, contentMaxFrames]. Integer ticks
+	// ARE the native per-tick grid (1/frame at 1×, 2/frame at 2×), so this is the §17.2
+	// snap. Uses contentMaxFrames (not visFrames) so a selection can extend into the
+	// zoomed/scrolled-out release-tail region past the fitted note (§17.3).
 	private int snapPixelToTick(ref Geo g, int cellX) {
 		int px = cellX * FONT_X + FONT_X / 2;
 		int t = cast(int)lround(tickForPixel(g, px));
 		if(t < -prerollTicks) t = -prerollTicks;
-		if(t > visFrames) t = visFrames;
+		if(t > contentMaxFrames) t = contentMaxFrames;
 		return t;
 	}
 
