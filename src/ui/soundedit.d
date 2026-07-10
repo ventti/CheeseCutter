@@ -1187,8 +1187,14 @@ class SoundEditor : Window, Undoable {
 				break;
 			}
 			case ADSR_DECAY: {
+				// The decay-end dot sits at (decay time, sustain level): X sets the decay
+				// nibble, Y sets the SUSTAIN level — so dragging it up/down adjusts sustain.
 				double ms = (t - aF) * tickMs; if(ms < 0) ms = 0;
 				setNibbleAbs(ins, 0, false, nearestMs(DECAY_RELEASE_TIME_MS, ms));
+				int topPx, botPx; bandBox(g, 1, topPx, botPx);
+				int hh = botPx - topPx; if(hh < 1) hh = 1;
+				double lvl = cast(double)(botPx - py) / hh;
+				setNibbleAbs(ins, 1, true, clampInt(cast(int)lround(lvl * 15.0), 0, 15));
 				break;
 			}
 			case ADSR_SUSTAIN: {
