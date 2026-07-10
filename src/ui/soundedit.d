@@ -280,11 +280,17 @@ class SoundEditor : Window, Undoable {
 	private int  sweepTable = -1;
 	private int  sweepRow = -1;
 	private bool sweepMoved = false;
-	// §20.2 shared-program decision memory (per session): [table][programStartRow] ->
-	// true means the user chose "edit shared in place" for that program, so we don't
-	// re-prompt. A fork changes the pointer (private rows), so a forked program is no
-	// longer shared and never prompts again either.
-	private bool[int][2] sweepEditShared;
+	// §20.2 shared-program fork prompt = WARN EVERY TIME. There is deliberately NO
+	// persistent "I already chose edit-shared" memory: every distinct edit of a shared
+	// program re-asks fork/edit-shared. Discrete edits (Ins/Del, mode chip) resolve the
+	// choice inside the dialog callback, so they need no state. A DRAG, however, can't
+	// pause mid-gesture for a modal: the first drag tick pops the prompt and cancels the
+	// drag, the user answers, then drags AGAIN to actually edit. This transient grant
+	// bridges only that answer->re-drag gap for ONE program, and is cleared on the next
+	// mouse release, so the following drag prompts afresh.
+	private bool sweepDragGrant;
+	private int sweepDragGrantTable = -1;
+	private int sweepDragGrantRow   = -1;
 
 	// §20 P4b-2 SELECTED STEP: a plain CLICK (press+release, no motion) inside the Pulse
 	// (0) or Filter (1) band selects the SweepTable row active at that frame; a bright
@@ -1308,12 +1314,14 @@ class SoundEditor : Window, Undoable {
 		return false;
 	}
 
-	// Whether the user already chose "edit shared in place" for this instrument's
-	// current program this session (keyed by the program start row = pointer byte).
-	private bool sweepDecided(int table, int ins) {
+	// Whether the in-flight DRAG is already authorized to edit this shared program in
+	// place (the user just answered "edit shared" for THIS program). Transient: keyed by
+	// the current program start row, and cleared on the next mouse release so the next
+	// drag warns again. Discrete edits don't use this — they resolve in the callback.
+	private bool sweepDragAuthorized(int table, int ins) {
 		int col = (table == 0) ? 5 : 4;
-		int ptr = song.instrumentTable[ins + col * 48];
-		return (ptr in sweepEditShared[table]) !is null;
+		int startRow = song.instrumentTable[ins + col * 48];
+		return sweepDragGrant && sweepDragGrantTable == table && sweepDragGrantRow == startRow;
 	}
 
 	// §20.2 fork: allocate a private copy of this instrument's program at seekTableEnd,
@@ -1360,9 +1368,10 @@ class SoundEditor : Window, Undoable {
 		return true;
 	}
 
-	// §20.2 pop the shared-program confirmation at PRESS. Y = fork a private copy,
-	// N = edit the shared program in place (remembered so it doesn't re-prompt). Either
-	// choice ends this press without starting a drag — the user drags again after.
+	// §20.2 pop the shared-program confirmation for a DRAG edit. Y = fork a private copy,
+	// N = edit the shared program in place. The prompt fires on the first drag tick and
+	// cancels that drag, so N grants a ONE-SHOT authorization for the immediate re-drag
+	// (cleared on the next mouse release -> the following drag warns again).
 	private void promptSweepFork(int table, int ins) {
 		int col = (table == 0) ? 5 : 4;
 		int startRow = song.instrumentTable[ins + col * 48];
@@ -1371,7 +1380,11 @@ class SoundEditor : Window, Undoable {
 			format("This %s program is shared. Fork a private copy (y/n)? ", what),
 			(int param) {
 				if(param == 0) forkSweepProgram(table, ins);       // Y = fork
-				else sweepEditShared[table][startRow] = true;      // N = edit shared
+				else {                                             // N = edit shared once
+					sweepDragGrant = true;
+					sweepDragGrantTable = table;
+					sweepDragGrantRow = startRow;
+				}
 			}));
 	}
 
@@ -1504,14 +1517,12 @@ class SoundEditor : Window, Undoable {
 			UI.statusline.display("No filter config row - add a filter program to set mode.");
 			return;
 		}
-		if(sweepProgramShared(1, ins) && !sweepDecided(1, ins)) {
-			int startRow = song.instrumentTable[ins + 4 * 48];
+		if(sweepProgramShared(1, ins)) {   // §20.2 warn every time (no remembered choice)
 			mainui.activateDialog(new ConfirmationDialog(
 				"This filter program is shared. Fork a private copy (y/n)? ",
 				(int param) {
 					if(param == 0) { if(!forkSweepProgram(1, ins)) return; }  // Y = fork
-					else sweepEditShared[1][startRow] = true;                 // N = shared
-					doCycleFilterMode(ins);
+					doCycleFilterMode(ins);                                   // N = edit shared
 				}));
 			return;
 		}
@@ -1631,16 +1642,13 @@ class SoundEditor : Window, Undoable {
 				table == 0 ? "Pulse" : "Filter"));
 			return;
 		}
-		if(sweepProgramShared(table, ins) && !sweepDecided(table, ins)) {
-			int col = (table == 0) ? 5 : 4;
-			int startRow = song.instrumentTable[ins + col * 48];
+		if(sweepProgramShared(table, ins)) {   // §20.2 warn every time (no remembered choice)
 			string what = (table == 0) ? "pulse" : "filter";
 			mainui.activateDialog(new ConfirmationDialog(
 				format("This %s program is shared. Fork a private copy (y/n)? ", what),
 				(int param) {
 					if(param == 0) { if(!forkSweepProgram(table, ins)) return; }  // Y = fork
-					else sweepEditShared[table][startRow] = true;                 // N = shared
-					doSweepRowOp(table, insert);   // operate on private (forked) or shared
+					doSweepRowOp(table, insert);   // N = edit shared; Y = the forked copy
 				}));
 			return;
 		}
@@ -3031,7 +3039,7 @@ class SoundEditor : Window, Undoable {
 			Geo g = layout();
 			if(!sweepLoopMoved) {
 				int ins = clampedIns();
-				if(sweepProgramShared(sweepLoopTable, ins) && !sweepDecided(sweepLoopTable, ins)) {
+				if(sweepProgramShared(sweepLoopTable, ins) && !sweepDragAuthorized(sweepLoopTable, ins)) {
 					promptSweepFork(sweepLoopTable, ins);
 					sweepLoopDragging = false; sweepLoopTable = -1; sweepLoopCloseRow = -1;
 					return;
@@ -3048,7 +3056,7 @@ class SoundEditor : Window, Undoable {
 			Geo g = layout();
 			if(!sweepResMoved) {
 				int ins = clampedIns();
-				if(sweepProgramShared(1, ins) && !sweepDecided(1, ins)) {
+				if(sweepProgramShared(1, ins) && !sweepDragAuthorized(1, ins)) {
 					promptSweepFork(1, ins);
 					sweepResDragging = false; sweepResRow = -1;
 					return;
@@ -3065,7 +3073,7 @@ class SoundEditor : Window, Undoable {
 			Geo g = layout();
 			if(!sweepMoved) {
 				int ins = clampedIns();
-				if(sweepProgramShared(sweepTable, ins) && !sweepDecided(sweepTable, ins)) {
+				if(sweepProgramShared(sweepTable, ins) && !sweepDragAuthorized(sweepTable, ins)) {
 					promptSweepFork(sweepTable, ins);
 					sweepDragging = false; sweepTable = -1; sweepRow = -1;
 					return;
@@ -3106,6 +3114,9 @@ class SoundEditor : Window, Undoable {
 	}
 
 	override void releasedAt(int x, int y) {
+		// §20.2 a mouse gesture ended: forget any one-shot "edit shared" grant so the next
+		// drag on a shared program warns again (warn-every-time). Harmless if unset.
+		sweepDragGrant = false; sweepDragGrantTable = -1; sweepDragGrantRow = -1;
 		// §19 P4a end an ADSR-handle drag: make the new envelope audible once (if a note
 		// is held) — never per drag tick. A plain click with no drag wrote nothing.
 		if(adsrDragging) {

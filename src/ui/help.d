@@ -210,7 +210,8 @@ Drag ADSR handles.......Set A/D/S/R by dragging the curve markers
                         out to reach the release dot past the note)
 Drag in Pulse/Filter....Set the sweep step's level under the cursor
                         (pulse width / filter cutoff). A shared program
-                        prompts: Y = fork a private copy, N = edit shared.
+                        asks each edit: Y = fork a private copy for this
+                        instrument, N = edit the shared rows in place.
 Click a Pulse/Filter step..Select it (bright outline)
 Insert / Delete.........Add a step after / remove the selected step
 Drag the loop line......Move the program's loop-back point
