@@ -1440,14 +1440,8 @@ class SoundEditor : Window, Undoable {
 		int v = cast(int)lround(cast(double)(botPx - py) * maxVal / h);
 		v = clampInt(v, 0, maxVal);
 		if(sweepRow < 0 || sweepRow >= 0x40) return;
-		if(sweepTable == 0) {
-			// invert simPulse's pw=((b2&0x0f)<<8)|(b2&0xf0): sets pw in steps of 16.
-			ubyte b2 = cast(ubyte)(((v >> 8) & 0x0f) | (v & 0xf0));
-			song.pulseTable[sweepRow * 4 + 2] = b2;
-		} else {
-			ubyte b2 = cast(ubyte)((v >> 3) & 0xff);          // cutoff >> 3
-			song.filterTable[sweepRow * 4 + 2] = b2;
-		}
+		if(sweepTable == 0) song.pulseTable[sweepRow * 4 + 2] = encodeInitB2(0, v);
+		else song.filterTable[sweepRow * 4 + 2] = encodeInitB2(1, v);
 	}
 
 	// ---- §20 P4b-3 filter resonance + mode editing ----
@@ -1798,6 +1792,12 @@ class SoundEditor : Window, Undoable {
 		int v0 = s.val[f0], v1 = s.val[f1 - 1];
 		syStart = botPx - cast(int)lround(cast(double)v0 * h / maxVal);
 		syEnd   = botPx - cast(int)lround(cast(double)v1 * h / maxVal);
+		// Keep the handles inside the band's grabbable interior: a value pinned to the very
+		// top/bottom would land in a half-cell edge that the cell-granular (14px) hit-test
+		// can't reach. A few px of pad barely moves the marker but keeps it grabbable.
+		int pad = FONT_Y / 2;
+		syStart = clampInt(syStart, topPx + pad, botPx - pad);
+		syEnd   = clampInt(syEnd,   topPx + pad, botPx - pad);
 		return true;
 	}
 
@@ -1860,12 +1860,13 @@ class SoundEditor : Window, Undoable {
 	}
 
 	// §21 P4c draw the interactive step box for the hovered (or currently-dragged) step: a
-	// subtle outline with LEFT/RIGHT duration edges, each YELLOW when the pointer is over its
-	// grab zone or a duration drag is active on it.
+	// subtle outline with LEFT/RIGHT duration edges and START/END value handles, each YELLOW
+	// when the pointer is over its grab zone or a drag is active on it.
 	private void drawSweepStepBox(int ins, ref Geo g) {
 		int table = -1, row = -1;
-		bool dur = sweepDurDragging;
+		bool dur = sweepDurDragging, endd = sweepEndDragging;
 		if(dur) { table = sweepDurTable; row = sweepDurRow; }
+		else if(endd) { table = sweepEndTable; row = sweepEndRow; }
 		else if(!hoverSweepStep(g, table, row)) return;
 		int f0, f1, xa, xb, syS, syE;
 		if(!sweepStepGeom(table, ins, row, g, f0, f1, xa, xb, syS, syE)) return;
@@ -1875,14 +1876,23 @@ class SoundEditor : Window, Undoable {
 		int hx = hovering ? hoverCellX * FONT_X + FONT_X / 2 : -9999;
 		int hy = hovering ? hoverCellY * FONT_Y + FONT_Y / 2 : -9999;
 		bool inY = hy >= topPx && hy < botPx;
+		bool resizable = sweepRowResizable(table, row);
 		// RIGHT edge (resizes this step): hot while dragging it, or when hovered near.
 		bool rHot = dur || (inY && abs(hx - xb) <= BOX_HIT_PX);
-		if(sweepRowResizable(table, row))
+		if(resizable)
 			video.olVLine(xb, topPx, botPx, rHot ? COL_BOX_HOT : COL_BOX_IDLE);
 		// LEFT edge (resizes the previous step): hot only on hover (a drag on it redraws as
 		// the previous step's RIGHT edge above).
-		bool lHot = !dur && inY && abs(hx - xa) <= BOX_HIT_PX && f0 >= 1;
+		bool lHot = !dur && !endd && inY && abs(hx - xa) <= BOX_HIT_PX && f0 >= 1;
 		video.olVLine(xa, topPx, botPx, lHot ? COL_BOX_HOT : COL_BOX_IDLE);
+		// §21 P4c value ENDPOINT handles (sweep rows only): START (left, init) + END (right,
+		// ramp end). Yellow while dragging that end, or when the pointer hovers its square.
+		if(resizable) {
+			bool sHot = (endd && !sweepEndIsEnd) || (inY && nearHandle(hx, hy, xa, syS));
+			bool eHot = (endd &&  sweepEndIsEnd) || (inY && nearHandle(hx, hy, xb, syE));
+			video.olFillRect(xa - 2, syS - 2, 5, 5, sHot ? COL_BOX_HOT : COL_HEAD);
+			video.olFillRect(xb - 2, syE - 2, 5, 5, eHot ? COL_BOX_HOT : COL_HEAD);
+		}
 	}
 
 	// §21 P4c apply a duration drag: width in frames from the step's fixed start to the
@@ -1897,6 +1907,115 @@ class SoundEditor : Window, Undoable {
 		ubyte[] t = (sweepDurTable == 0) ? song.pulseTable : song.filterTable;
 		ubyte b0 = t[sweepDurRow * 4];
 		t[sweepDurRow * 4] = cast(ubyte)((b0 & 0x80) | field);
+	}
+
+	// §21 P4c the value ENTERING a step's ramp: its explicit init (b2 != 0xff) decoded,
+	// else the value carried over from the previous frame (read from the sim). Used to
+	// pivot the END-endpoint tilt around a fixed start.
+	private int sweepStepEnterVal(int table, int row) {
+		const(ubyte)[] t = (table == 0) ? song.pulseTable : song.filterTable;
+		ubyte b2 = t[row * 4 + 2];
+		if(b2 != 0xff) return (table == 0) ? (((b2 & 0x0f) << 8) | (b2 & 0xf0)) : (b2 << 3);
+		int ins = clampedIns();
+		int col = (table == 0) ? 5 : 4;
+		int startRow = song.instrumentTable[ins + col * 48];
+		SweepSim s = (table == 0) ? simPulse(startRow) : simFilter(startRow);
+		int f0 = -1;
+		foreach(f, r; s.rowOf) if(r == row) { f0 = cast(int)f; break; }
+		if(f0 <= 0) return (table == 0) ? 0x800 : 0;
+		return s.val[f0 - 1];
+	}
+
+	// §21 P4c hit-test a step's value ENDPOINT handle at press (x,y screen cells): the
+	// START (left, init) or END (right, ramp end) square. Iterates the program's distinct
+	// SWEEP rows and picks the nearest handle — robust to the frame-rounding that makes a
+	// boundary press resolve to the wrong (adjacent) row. On an exact coincidence (a step's
+	// END meets the next step's inherited START), the earlier row's END wins (tilt the
+	// incoming ramp). Config rows have no ramp and are skipped.
+	private bool sweepEndpointGrab(int ins, ref Geo g, int x, int y, out int table, out int row, out bool isEnd) {
+		table = -1; row = -1; isEnd = false;
+		// Cell CENTRE for the band test: a high/low handle sits in the band's edge cell whose
+		// top/bottom lies outside the band, but its centre is inside.
+		int pyc = y * FONT_Y + FONT_Y / 2;
+		int tb;
+		if(pyc >= g.bandTopPx[3] && pyc < g.bandTopPx[4]) tb = 0;
+		else if(pyc >= g.bandTopPx[4] && pyc < g.bandTopPx[5]) tb = 1;
+		else return false;
+		int px = x * FONT_X + FONT_X / 2, py = pyc;
+		int col = (tb == 0) ? 5 : 4;
+		int startRow = song.instrumentTable[ins + col * 48];
+		SweepSim s = (tb == 0) ? simPulse(startRow) : simFilter(startRow);
+		bool[0x40] seen;
+		int bestRow = -1, bestD = int.max; bool bestEnd = false;
+		foreach(r; s.rowOf) {
+			if(r < 1 || r >= 0x40 || seen[r]) continue;
+			seen[r] = true;
+			if(!sweepRowResizable(tb, r)) continue;
+			int f0, f1, xa, xb, sy0, sy1;
+			if(!sweepStepGeom(tb, ins, r, g, f0, f1, xa, xb, sy0, sy1)) continue;
+			if(nearHandle(px, py, xa, sy0)) {
+				int d = abs(px - xa) + abs(py - sy0);
+				if(d < bestD) { bestD = d; bestRow = r; bestEnd = false; }
+			}
+			if(nearHandle(px, py, xb, sy1)) {
+				int d = abs(px - xb) + abs(py - sy1);
+				if(d < bestD) { bestD = d; bestRow = r; bestEnd = true; }
+			}
+		}
+		if(bestRow < 0) return false;
+		table = tb; row = bestRow; isEnd = bestEnd;
+		return true;
+	}
+
+	// §21 P4c a value-endpoint handle grab zone: tight in X (it sits on the box edge) but a
+	// cell-ROW tall in Y, since mouse input is cell-granular (14px) — a small radius would
+	// fall between rows and miss.
+	private static bool nearHandle(int px, int py, int hx, int hy) {
+		return abs(px - hx) <= BOX_HIT_PX && abs(py - hy) <= FONT_Y - 2;
+	}
+
+	// §21 P4c encode a value to a step's init byte b2 (pulse nibble-swap / filter >>3),
+	// avoiding 0xff — the player reads 0xff as "inherit the running value", not a literal
+	// maximum, so a max-level drag must land on the nearest literal instead.
+	private static ubyte encodeInitB2(int table, int v) {
+		ubyte b2 = (table == 0) ? cast(ubyte)(((v >> 8) & 0x0f) | (v & 0xf0))
+		                        : cast(ubyte)((v >> 3) & 0xff);
+		if(b2 == 0xff) b2 = (table == 0) ? 0xef : 0xfe;
+		return b2;
+	}
+
+	// §21 P4c apply a value-endpoint drag. START: set the init/enter value (b2), which
+	// translates the whole segment. END: set the ramp slope (b1) + direction so the ramp
+	// ENDS at the pointer value, keeping the entering value fixed (a tilt).
+	private void sweepEndDragUpdate(ref Geo g, int celly) {
+		int table = sweepEndTable, row = sweepEndRow;
+		if(row < 1 || row >= 0x40) return;
+		int band = (table == 0) ? 3 : 4;
+		int maxVal = (table == 0) ? 4095 : 2047;
+		int topPx, botPx; bandBox(g, band, topPx, botPx);
+		int h = botPx - topPx; if(h < 1) h = 1;
+		int py = celly * FONT_Y + FONT_Y / 2;
+		int target = clampInt(cast(int)lround(cast(double)(botPx - py) * maxVal / h), 0, maxVal);
+		ubyte[] t = (table == 0) ? song.pulseTable : song.filterTable;
+		if(!sweepEndIsEnd) {
+			// START: rewrite the init byte b2 (avoiding the 0xff "inherit" sentinel).
+			t[row * 4 + 2] = encodeInitB2(table, target);
+			return;
+		}
+		// END: slope so entering + ramp == target.
+		int entering = sweepStepEnterVal(table, row);
+		ubyte b0 = t[row * 4];
+		int d = target - entering;
+		if(table == 0) {
+			int n = (b0 & 0x7f) + 1;                       // pulse ramps n times
+			int mag = clampInt(cast(int)lround(cast(double)(d < 0 ? -d : d) / n), 0, 0xff);
+			t[row * 4]     = cast(ubyte)((d < 0 ? 0x80 : 0) | (b0 & 0x7f));  // direction bit
+			t[row * 4 + 1] = cast(ubyte)mag;                                 // slope magnitude
+		} else {
+			int nf = b0 & 0x7f; if(nf < 1) nf = 1;         // filter ramps nf times, delta=2*b1
+			int sgn = clampInt(cast(int)lround(cast(double)d / (2 * nf)), -128, 127);
+			t[row * 4 + 1] = cast(ubyte)(sgn & 0xff);      // signed slope in b1
+		}
 	}
 
 	// ---- band chrome ----
@@ -3156,15 +3275,33 @@ class SoundEditor : Window, Undoable {
 				return;
 			}
 		}
+		// §21 P4c a value ENDPOINT handle grab starts a ramp drag (START=init b2, END=slope
+		// b1). Checked BEFORE sweepBandAt (which gates on the cell's TOP edge and would miss a
+		// high/low handle sitting in the band's top/bottom cell) and before the loop/edges so
+		// a precise corner-handle grab always wins over the lines that pass through it.
+		{
+			int nt, nr; bool nEnd;
+			if(sweepEndpointGrab(clampedIns(), g, x, y, nt, nr, nEnd)) {
+				clickWasButton = true;
+				sweepEndDragging = true;
+				sweepEndTable = nt;
+				sweepEndRow = nr;
+				sweepEndIsEnd = nEnd;
+				sweepEndMoved = false;       // shared check + snapshot on first drag tick
+				selectedSweepTable = nt;
+				selectedSweepRow = nr;
+				return;
+			}
+		}
 		// §20 P4b-1: a vertical grab in the Pulse or Filter band begins a LEVEL drag of
 		// the SweepTable row active at the grabbed frame. Checked AFTER the ADSR handles /
 		// scrollbar / zoom buttons (above), before the plot drag-select (below).
 		int sb = sweepBandAt(g, x, y);
 		if(sb >= 0) {
-			// §20 P4b-2 loop-marker drag FIRST: if the press grabs the subtle loop line
-			// (or a stopping program's end marker) start a loop-back drag, not a level
-			// edit. The shared check + prompt happens on the first drag tick (not here),
-			// so a plain click never pops a modal.
+			// §20 P4b-2 loop-marker drag: if the press grabs the subtle loop line (or a
+			// stopping program's end marker) start a loop-back drag, not a level edit. The
+			// shared check + prompt happens on the first drag tick (not here), so a plain
+			// click never pops a modal.
 			int lc = sweepLoopHandleAt(sb, g, x, y);
 			if(lc >= 0) {
 				clickWasButton = true;   // this press never starts/clears a selection
@@ -3277,6 +3414,22 @@ class SoundEditor : Window, Undoable {
 			sweepLevelDragUpdate(g, y);
 			return;
 		}
+		// §21 P4c value-ENDPOINT drag: first tick runs the §20.2 shared check, else snapshot
+		// all tables, then rewrite the row's b2 (START) or b1 (END slope).
+		if(sweepEndDragging) {
+			Geo g = layout();
+			if(!sweepEndMoved) {
+				int ins = clampedIns();
+				if(sweepProgramShared(sweepEndTable, ins) && !sweepDragAuthorized(sweepEndTable, ins)) {
+					promptSweepFork(sweepEndTable, ins);
+					sweepEndDragging = false; sweepEndTable = -1; sweepEndRow = -1;
+					return;
+				}
+				snapshotAllTables(false); sweepEndMoved = true;
+			}
+			sweepEndDragUpdate(g, y);
+			return;
+		}
 		// §21 P4c DURATION (box-edge) drag: on the first tick run the §20.2 shared check
 		// (prompt + abort if undecided), else snapshot all tables, then rewrite the row's b0.
 		if(sweepDurDragging) {
@@ -3367,6 +3520,16 @@ class SoundEditor : Window, Undoable {
 			clickWasButton = false;
 			if(sweepMoved) retriggerIfSounding();
 			sweepMoved = false;
+			return;
+		}
+		// §21 P4c end a value-endpoint drag: make the new ramp audible once.
+		if(sweepEndDragging) {
+			sweepEndDragging = false;
+			sweepEndTable = -1;
+			sweepEndRow = -1;
+			clickWasButton = false;
+			if(sweepEndMoved) retriggerIfSounding();
+			sweepEndMoved = false;
 			return;
 		}
 		// §21 P4c end a duration (box-edge) drag: make the new window audible once.
