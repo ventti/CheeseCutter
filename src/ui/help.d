@@ -212,16 +212,22 @@ Drag in Pulse/Filter....Set the sweep step's level under the cursor
                         (pulse width / filter cutoff). A shared program
                         asks each edit: Y = fork a private copy for this
                         instrument, N = edit the shared rows in place.
+Step boxes..............Hover a step to reveal its box; edges + end
+                        dots go YELLOW when grabbable:
+  Drag a box left/right edge...Resize the step's window (duration)
+  Drag the START dot (left)....Move the step's start level
+  Drag the END dot (right).....Tilt the ramp (its slope + direction)
 Click a Pulse/Filter step..Select it (bright outline)
 Insert / Delete.........Add a step after / remove the selected step
-Drag the loop line......Move the program's loop-back point
+Drag the loop grip......Move the loop-back point (top strip of the band)
 Drag the Filter res line..Set the config row's resonance (0-F)
 Click the Filter [mode] chip..Cycle LP / BP / HP combos (recolours the fill)
-Ctrl-Z / Ctrl-Y.........Undo / redo the edit
-(Pointer rows -- Waveform / Wave / Pulse / Filter ptr -- are
- display-only; the sweeps are edited by dragging their bands.)",
+Ctrl-Z / Ctrl-Y.........Undo / redo the edit",
 
 "`+1Press F12 again to see the global help.
+
+(Pointer rows -- Waveform / Wave / Pulse / Filter ptr -- are
+ display-only; the sweeps are edited by dragging their bands.)
 
 `+dView / zoom (mouse-first; the graphs zoom + pan)
 
