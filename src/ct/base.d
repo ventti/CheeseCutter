@@ -1084,7 +1084,12 @@ class Song {
 		}
 
 		int seekTableEnd() {
-			for(int i = 0x3c; i >= 0; i -= 4) {
+			// The pulse/filter SweepTable is 64 rows x 4 bytes (data.length == 256), so scan
+			// from the LAST row (byte 0xfc = row 63's b3) down. Historically this stopped at
+			// 0x3c (row 15), which under-reported the end for tables using rows >=16 and made
+			// callers (fork, insertInstrument) allocate a colliding base -> table corruption
+			// + a "forked" copy that still shared rows.
+			for(int i = 0xfc; i >= 0; i -= 4) {
 				if(data[i + 3] > 0) {
 					return i / 4 + 1;
 				}
