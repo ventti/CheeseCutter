@@ -791,9 +791,6 @@ class SoundEditor : Window, Undoable {
 		drawBandAxis(g, 5);
 		drawWaveBand(ins, g);
 
-		// §20 P4b-2 bright outline on the selected pulse/filter step (Ins/Del target).
-		drawSweepSelection(ins, g);
-
 		// §13.4 restart marker: a vertical line at the START of the restart phase
 		// (frame -restartFrames, the actual hard/soft/3-frame restart length for this
 		// instrument's col2 type), in a colour DISTINCT from the red trigger divider
@@ -1729,27 +1726,6 @@ class SoundEditor : Window, Undoable {
 		retriggerIfSounding();
 	}
 
-	// §20 P4b-2 draw a bright outline around the selected step's frame span in its band,
-	// so the click target Ins/Del acts on is unmistakable. Uses the sim's rowOf to find
-	// the first contiguous run of the selected row on the shared frame axis. Clears the
-	// selection if the row is no longer part of the instrument's program (e.g. deleted).
-	private void drawSweepSelection(int ins, ref Geo g) {
-		if(selectedSweepTable < 0 || selectedSweepRow < 0) return;
-		int band = (selectedSweepTable == 0) ? 3 : 4;
-		int col = (selectedSweepTable == 0) ? 5 : 4;
-		int startRow = song.instrumentTable[ins + col * 48];
-		SweepSim s = (selectedSweepTable == 0) ? simPulse(startRow) : simFilter(startRow);
-		int f0 = -1, f1 = -1;
-		foreach(f, r; s.rowOf) {
-			if(r == selectedSweepRow) { if(f0 < 0) f0 = cast(int)f; f1 = cast(int)f + 1; }
-			else if(f0 >= 0) break;
-		}
-		if(f0 < 0) return;                       // selected row not in the current program
-		int topPx, botPx; bandBox(g, band, topPx, botPx);
-		int xa = xForFrame(g, f0), xb = xForFrame(g, f1);
-		if(xb <= xa) xb = xa + 1;
-		video.olRect(xa, topPx, xb - xa, botPx - topPx, COL_STEPSEL);
-	}
 
 	private void clearSweepSelection() {
 		selectedSweepTable = -1;
@@ -1824,72 +1800,83 @@ class SoundEditor : Window, Undoable {
 		return true;
 	}
 
-	// §21 P4c hit-test a step-box EDGE at press (x,y screen cells). The RIGHT edge resizes
-	// THIS step; the LEFT edge resizes the PREVIOUS step (their shared boundary). Returns
-	// the row whose b0 the drag edits + the FIXED frame that row's box starts at, or false.
-	private bool sweepBoxEdgeGrab(int ins, ref Geo g, int x, int y, out int table, out int row, out int anchorF) {
-		table = -1; row = -1; anchorF = 0;
-		int px = x * FONT_X, py = y * FONT_Y;
-		if(px < g.plotX0px || px >= g.plotX0px + g.plotWpx) return false;
-		int tb;
-		if(py >= g.bandTopPx[3] && py < g.bandTopPx[4]) tb = 0;
-		else if(py >= g.bandTopPx[4] && py < g.bandTopPx[5]) tb = 1;
-		else return false;
-		// §21 P4c leave the band's TOP strip to the loop grip (they share step-boundary X).
-		if(py < g.bandTopPx[tb == 0 ? 3 : 4] + LOOP_GRIP_PX) return false;
-		int cur = sweepRowAtPress(tb, g, x);
-		if(cur < 0) return false;
-		int f0, f1, xa, xb, sy0, sy1;
-		if(!sweepStepGeom(tb, ins, cur, g, f0, f1, xa, xb, sy0, sy1)) return false;
-		int mx = x * FONT_X + FONT_X / 2;
-		// RIGHT edge -> resize THIS step.
-		if(sweepRowResizable(tb, cur) && abs(mx - xb) <= BOX_HIT_PX) {
-			table = tb; row = cur; anchorF = f0; return true;
+	// §21 P4c(v2) Begin editing the PERSISTENTLY-SELECTED step's box at press (x,y), if the
+	// press lands on one of its handles. ALL sweep edits are anchored to the selected step
+	// (you click a step to select it, then edit it) so the edit focus never swaps to a
+	// neighbour mid-gesture — the erratic behaviour of hit-testing the step under the cursor.
+	// Priority: END dot (slope) -> START dot (level) -> right EDGE (duration) -> body (level).
+	// Returns true if a drag was started.
+	private bool beginSelectedStepDrag(int ins, ref Geo g, int x, int y) {
+		int t = selectedSweepTable, r = selectedSweepRow;
+		if((t != 0 && t != 1) || r < 1 || r >= 0x40) return false;
+		int f0, f1, xa, xb, syS, syE;
+		if(!sweepStepGeom(t, ins, r, g, f0, f1, xa, xb, syS, syE)) return false;
+		int band = (t == 0) ? 3 : 4;
+		int px = x * FONT_X + FONT_X / 2, py = y * FONT_Y + FONT_Y / 2;
+		if(py < g.bandTopPx[band] || py >= g.bandTopPx[band + 1]) return false;   // wrong band
+		if(px < xa - BOX_HIT_PX || px > xb + BOX_HIT_PX) return false;            // outside box
+		bool resizable = sweepRowResizable(t, r);
+		int belowGrip = g.bandTopPx[band] + LOOP_GRIP_PX;   // top strip belongs to the loop grip
+		if(resizable && nearHandle(px, py, xb, syE)) {       // END dot -> slope b1 (+ direction)
+			clickWasButton = true; sweepEndDragging = true;
+			sweepEndTable = t; sweepEndRow = r; sweepEndIsEnd = true; sweepEndMoved = false;
+			return true;
 		}
-		// LEFT edge -> resize the PREVIOUS step (the row emitted just before this span).
-		if(f0 >= 1 && abs(mx - xa) <= BOX_HIT_PX) {
-			int prev = sweepRowAtPress(tb, g, cast(int)((xForFrame(g, f0 - 1)) / FONT_X));
-			if(prev >= 1 && prev != cur && sweepRowResizable(tb, prev)) {
-				int pf0, pf1, pxa, pxb, ps0, ps1;
-				if(sweepStepGeom(tb, ins, prev, g, pf0, pf1, pxa, pxb, ps0, ps1)) {
-					table = tb; row = prev; anchorF = pf0; return true;
-				}
-			}
+		if(resizable && nearHandle(px, py, xa, syS)) {       // START dot -> init level b2
+			clickWasButton = true; sweepEndDragging = true;
+			sweepEndTable = t; sweepEndRow = r; sweepEndIsEnd = false; sweepEndMoved = false;
+			return true;
+		}
+		if(resizable && abs(px - xb) <= BOX_HIT_PX && py >= belowGrip) {   // right EDGE -> duration
+			clickWasButton = true; sweepDurDragging = true;
+			sweepDurTable = t; sweepDurRow = r; sweepDurAnchorF = f0; sweepDurMoved = false;
+			return true;
+		}
+		if(px > xa && px < xb && py >= belowGrip) {          // BODY -> level b2 (coarse translate)
+			clickWasButton = true; sweepDragging = true;
+			sweepTable = t; sweepRow = r; sweepMoved = false;
+			return true;
 		}
 		return false;
 	}
 
-	// §21 P4c draw the interactive step box for the hovered (or currently-dragged) step: a
-	// subtle outline with LEFT/RIGHT duration edges and START/END value handles, each YELLOW
-	// when the pointer is over its grab zone or a drag is active on it.
+	// §21 P4c(v2) draw the interactive step box. A faint outline marks the HOVERED step (a
+	// "click to select" hint); the SELECTED step gets a bright outline plus its editable
+	// handles — the RIGHT edge (duration) and the START/END value dots — each YELLOW while
+	// the pointer hovers its grab zone or a drag on it is active. All edits target the
+	// SELECTED step (§ beginSelectedStepDrag) so focus never swaps to a neighbour.
 	private void drawSweepStepBox(int ins, ref Geo g) {
-		int table = -1, row = -1;
-		bool dur = sweepDurDragging, endd = sweepEndDragging;
-		if(dur) { table = sweepDurTable; row = sweepDurRow; }
-		else if(endd) { table = sweepEndTable; row = sweepEndRow; }
-		else if(!hoverSweepStep(g, table, row)) return;
-		int f0, f1, xa, xb, syS, syE;
-		if(!sweepStepGeom(table, ins, row, g, f0, f1, xa, xb, syS, syE)) return;
-		int band = (table == 0) ? 3 : 4;
-		int topPx, botPx; bandBox(g, band, topPx, botPx);
-		video.olRect(xa, topPx, xb - xa, botPx - topPx, COL_BOX_IDLE);
 		int hx = hovering ? hoverCellX * FONT_X + FONT_X / 2 : -9999;
 		int hy = hovering ? hoverCellY * FONT_Y + FONT_Y / 2 : -9999;
+		// Faint hint on the hovered-but-unselected step.
+		{
+			int ht, hr;
+			if(hoverSweepStep(g, ht, hr) && !(ht == selectedSweepTable && hr == selectedSweepRow)) {
+				int a, b, xa, xb, s0, s1;
+				if(sweepStepGeom(ht, ins, hr, g, a, b, xa, xb, s0, s1)) {
+					int bd = (ht == 0) ? 3 : 4;
+					int tp, bp; bandBox(g, bd, tp, bp);
+					video.olRect(xa, tp, xb - xa, bp - tp, COL_BOX_IDLE);
+				}
+			}
+		}
+		int t = selectedSweepTable, r = selectedSweepRow;
+		if((t != 0 && t != 1) || r < 1 || r >= 0x40) return;
+		int f0, f1, xa, xb, syS, syE;
+		if(!sweepStepGeom(t, ins, r, g, f0, f1, xa, xb, syS, syE)) return;
+		int band = (t == 0) ? 3 : 4;
+		int topPx, botPx; bandBox(g, band, topPx, botPx);
+		video.olRect(xa, topPx, xb - xa, botPx - topPx, COL_STEPSEL);   // selected outline
 		bool inY = hy >= topPx && hy < botPx;
-		bool resizable = sweepRowResizable(table, row);
-		// RIGHT edge (resizes this step): hot while dragging it, or when hovered near.
-		bool rHot = dur || (inY && abs(hx - xb) <= BOX_HIT_PX);
+		bool resizable = sweepRowResizable(t, r);
+		// RIGHT edge (duration): hot while resizing, or when hovered near.
+		bool rHot = sweepDurDragging || (inY && abs(hx - xb) <= BOX_HIT_PX);
 		if(resizable)
-			video.olVLine(xb, topPx, botPx, rHot ? COL_BOX_HOT : COL_BOX_IDLE);
-		// LEFT edge (resizes the previous step): hot only on hover (a drag on it redraws as
-		// the previous step's RIGHT edge above).
-		bool lHot = !dur && !endd && inY && abs(hx - xa) <= BOX_HIT_PX && f0 >= 1;
-		video.olVLine(xa, topPx, botPx, lHot ? COL_BOX_HOT : COL_BOX_IDLE);
-		// §21 P4c value ENDPOINT handles (sweep rows only): START (left, init) + END (right,
-		// ramp end). Yellow while dragging that end, or when the pointer hovers its square.
+			video.olVLine(xb, topPx, botPx, rHot ? COL_BOX_HOT : COL_STEPSEL);
+		// START (init b2) + END (slope b1) value dots.
 		if(resizable) {
-			bool sHot = (endd && !sweepEndIsEnd) || (inY && nearHandle(hx, hy, xa, syS));
-			bool eHot = (endd &&  sweepEndIsEnd) || (inY && nearHandle(hx, hy, xb, syE));
+			bool sHot = (sweepEndDragging && !sweepEndIsEnd) || (inY && nearHandle(hx, hy, xa, syS));
+			bool eHot = (sweepEndDragging &&  sweepEndIsEnd) || (inY && nearHandle(hx, hy, xb, syE));
 			video.olFillRect(xa - 2, syS - 2, 5, 5, sHot ? COL_BOX_HOT : COL_HEAD);
 			video.olFillRect(xb - 2, syE - 2, 5, 5, eHot ? COL_BOX_HOT : COL_HEAD);
 		}
@@ -1924,47 +1911,6 @@ class SoundEditor : Window, Undoable {
 		foreach(f, r; s.rowOf) if(r == row) { f0 = cast(int)f; break; }
 		if(f0 <= 0) return (table == 0) ? 0x800 : 0;
 		return s.val[f0 - 1];
-	}
-
-	// §21 P4c hit-test a step's value ENDPOINT handle at press (x,y screen cells): the
-	// START (left, init) or END (right, ramp end) square. Iterates the program's distinct
-	// SWEEP rows and picks the nearest handle — robust to the frame-rounding that makes a
-	// boundary press resolve to the wrong (adjacent) row. On an exact coincidence (a step's
-	// END meets the next step's inherited START), the earlier row's END wins (tilt the
-	// incoming ramp). Config rows have no ramp and are skipped.
-	private bool sweepEndpointGrab(int ins, ref Geo g, int x, int y, out int table, out int row, out bool isEnd) {
-		table = -1; row = -1; isEnd = false;
-		// Cell CENTRE for the band test: a high/low handle sits in the band's edge cell whose
-		// top/bottom lies outside the band, but its centre is inside.
-		int pyc = y * FONT_Y + FONT_Y / 2;
-		int tb;
-		if(pyc >= g.bandTopPx[3] && pyc < g.bandTopPx[4]) tb = 0;
-		else if(pyc >= g.bandTopPx[4] && pyc < g.bandTopPx[5]) tb = 1;
-		else return false;
-		int px = x * FONT_X + FONT_X / 2, py = pyc;
-		int col = (tb == 0) ? 5 : 4;
-		int startRow = song.instrumentTable[ins + col * 48];
-		SweepSim s = (tb == 0) ? simPulse(startRow) : simFilter(startRow);
-		bool[0x40] seen;
-		int bestRow = -1, bestD = int.max; bool bestEnd = false;
-		foreach(r; s.rowOf) {
-			if(r < 1 || r >= 0x40 || seen[r]) continue;
-			seen[r] = true;
-			if(!sweepRowResizable(tb, r)) continue;
-			int f0, f1, xa, xb, sy0, sy1;
-			if(!sweepStepGeom(tb, ins, r, g, f0, f1, xa, xb, sy0, sy1)) continue;
-			if(nearHandle(px, py, xa, sy0)) {
-				int d = abs(px - xa) + abs(py - sy0);
-				if(d < bestD) { bestD = d; bestRow = r; bestEnd = false; }
-			}
-			if(nearHandle(px, py, xb, sy1)) {
-				int d = abs(px - xb) + abs(py - sy1);
-				if(d < bestD) { bestD = d; bestRow = r; bestEnd = true; }
-			}
-		}
-		if(bestRow < 0) return false;
-		table = tb; row = bestRow; isEnd = bestEnd;
-		return true;
 	}
 
 	// §21 P4c a value-endpoint handle grab zone: tight in X (it sits on the box edge) but a
@@ -3275,33 +3221,15 @@ class SoundEditor : Window, Undoable {
 				return;
 			}
 		}
-		// §21 P4c a value ENDPOINT handle grab starts a ramp drag (START=init b2, END=slope
-		// b1). Checked BEFORE sweepBandAt (which gates on the cell's TOP edge and would miss a
-		// high/low handle sitting in the band's top/bottom cell) and before the loop/edges so
-		// a precise corner-handle grab always wins over the lines that pass through it.
-		{
-			int nt, nr; bool nEnd;
-			if(sweepEndpointGrab(clampedIns(), g, x, y, nt, nr, nEnd)) {
-				clickWasButton = true;
-				sweepEndDragging = true;
-				sweepEndTable = nt;
-				sweepEndRow = nr;
-				sweepEndIsEnd = nEnd;
-				sweepEndMoved = false;       // shared check + snapshot on first drag tick
-				selectedSweepTable = nt;
-				selectedSweepRow = nr;
-				return;
-			}
-		}
-		// §20 P4b-1: a vertical grab in the Pulse or Filter band begins a LEVEL drag of
-		// the SweepTable row active at the grabbed frame. Checked AFTER the ADSR handles /
-		// scrollbar / zoom buttons (above), before the plot drag-select (below).
+		// §21 P4c(v2) All pulse/filter step edits are anchored to the PERSISTENTLY-SELECTED
+		// step: if the press lands on the selected step's box handles, edit it (stable focus,
+		// no swapping to neighbours). Checked before sweepBandAt (its cell-top gate misses a
+		// handle in the band's top/bottom cell) and before the loop grip.
+		if(beginSelectedStepDrag(clampedIns(), g, x, y)) return;
+		// §20 P4b-1 otherwise, in a sweep band: grab the loop line, else SELECT the step
+		// under the cursor (a click selects; you then edit it via its box handles above).
 		int sb = sweepBandAt(g, x, y);
 		if(sb >= 0) {
-			// §20 P4b-2 loop-marker drag: if the press grabs the subtle loop line (or a
-			// stopping program's end marker) start a loop-back drag, not a level edit. The
-			// shared check + prompt happens on the first drag tick (not here), so a plain
-			// click never pops a modal.
 			int lc = sweepLoopHandleAt(sb, g, x, y);
 			if(lc >= 0) {
 				clickWasButton = true;   // this press never starts/clears a selection
@@ -3311,38 +3239,17 @@ class SoundEditor : Window, Undoable {
 				sweepLoopMoved = false;
 				return;
 			}
-			// §21 P4c a step-box EDGE grab starts a DURATION drag (resize the window),
-			// hit-tested BEFORE the body level drag so grabbing the edge never edits level.
-			{
-				int et, er, ea;
-				if(sweepBoxEdgeGrab(clampedIns(), g, x, y, et, er, ea)) {
-					clickWasButton = true;
-					sweepDurDragging = true;
-					sweepDurTable = et;
-					sweepDurRow = er;
-					sweepDurAnchorF = ea;
-					sweepDurMoved = false;       // shared check + snapshot on first drag tick
-					selectedSweepTable = et;     // keep the resized step highlighted
-					selectedSweepRow = er;
-					return;
-				}
-			}
 			int row = sweepRowAtPress(sb, g, x);
 			if(row >= 0) {
 				clickWasButton = true;   // this press never starts/clears a plot selection
-				// §20 P4b-2 SELECT the step immediately (non-mutating; selecting in one
-				// band clears the other). A vertical DRAG turns into a level edit; a plain
-				// click (no motion) leaves just this selection.
-				selectedSweepTable = sb;
+				selectedSweepTable = sb; // select it; edits happen via the box handles
 				selectedSweepRow = row;
-				sweepDragging = true;
-				sweepTable = sb;
-				sweepRow = row;
-				sweepMoved = false;      // shared check + snapshot on the first drag tick
 				return;
 			}
 		}
-		// §17.2 begin a drag-select when the press lands in the plot; else clear.
+		// §17.2 empty plot area: clear the step selection, then begin a tick-snapped drag-
+		// select (or clear it).
+		clearSweepSelection();
 		if(inPlotCell(g, x, y)) {
 			selecting = true;
 			dragMoved = false;
