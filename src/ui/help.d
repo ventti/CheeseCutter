@@ -216,6 +216,8 @@ Click a Pulse/Filter step..SELECT it (bright box). The edits below all
   Drag inside its box........Set the level (coarse)
   (edges + dots go YELLOW when grabbable. A shared program asks
    each edit: Y = fork a private copy, N = edit the shared rows.)
+Shift-click a 2nd step..Select a RANGE; a drag on it sets the shared
+                        join(s) between the blocks to one value
 Insert / Delete.........Add a step after / remove the selected step
 Drag the loop grip......Move the loop-back point (top strip of the band)
 Drag the Filter res line..Set the config row's resonance (0-F)

@@ -312,6 +312,12 @@ class SoundEditor : Window, Undoable {
 	// band clears the other; switching instrument clears it (the row index is table-local).
 	private int selectedSweepTable = -1;
 	private int selectedSweepRow = -1;
+	// §21 P4c(v3) MULTI-block selection: left-click sets the anchor (selectedSweepRow) and
+	// this extent to the same row; Shift-left-click sets the extent to another block, so the
+	// consecutive program steps between anchor and extent are all selected. A drag on a
+	// multi-selection sets the shared JOIN(s) between those blocks to one value (each join:
+	// left block's END + right block's START meet at the dragged level).
+	private int selectedSweepRowEnd = -1;
 	// §20 P4b-2 LOOP-MARKER drag: grabbing the subtle loop line (or, for a stopping
 	// program, its end marker) drags the program's loop-BACK point. sweepLoopCloseRow =
 	// the row whose b3 jump we rewrite (the loop-closing / terminal row); dragging sets it
@@ -350,6 +356,10 @@ class SoundEditor : Window, Undoable {
 	private int  sweepEndRow   = -1;
 	private bool sweepEndIsEnd = false;
 	private bool sweepEndMoved = false;
+	//  - JOIN drag (only when a MULTI-block range is selected): sets every shared boundary
+	//    within the selected range to one value (left block END + right block START = level).
+	private bool sweepJoinDragging = false;
+	private bool sweepJoinMoved = false;
 	// §20 P4b-3 the filter mode chip cycles through the LP/BP/HP combos (§10.1) writing the
 	// first config row's b0 mode bits (0x70). This is the requested cycle order.
 	private static immutable int[7] FILTER_MODE_CYCLE =
@@ -1395,11 +1405,14 @@ class SoundEditor : Window, Undoable {
 		}
 		t[base * 4 .. base * 4 + count * 4] = buf[];
 		song.instrumentTable[ins + col * 48] = cast(ubyte)newRow[startRow];
-		// §20 P4b-2 keep the selected step pointing at the SAME step in the private copy
-		// (its row index moved with the fork), so a post-fork Ins/Del acts on it.
-		if(selectedSweepTable == table && selectedSweepRow >= 0 && selectedSweepRow < 0x40
-				&& newRow[selectedSweepRow] >= 0)
-			selectedSweepRow = newRow[selectedSweepRow];
+		// §20 P4b-2 keep the selection (anchor + multi-block extent) pointing at the SAME
+		// steps in the private copy (their row indices moved with the fork).
+		if(selectedSweepTable == table) {
+			if(selectedSweepRow >= 0 && selectedSweepRow < 0x40 && newRow[selectedSweepRow] >= 0)
+				selectedSweepRow = newRow[selectedSweepRow];
+			if(selectedSweepRowEnd >= 0 && selectedSweepRowEnd < 0x40 && newRow[selectedSweepRowEnd] >= 0)
+				selectedSweepRowEnd = newRow[selectedSweepRowEnd];
+		}
 		retriggerIfSounding();
 		return true;
 	}
@@ -1730,6 +1743,53 @@ class SoundEditor : Window, Undoable {
 	private void clearSweepSelection() {
 		selectedSweepTable = -1;
 		selectedSweepRow = -1;
+		selectedSweepRowEnd = -1;
+	}
+
+	// §21 P4c(v3) the program's distinct step rows in playback (chain) order — the basis for
+	// "consecutive blocks": a multi-selection is a contiguous slice of this list.
+	private int[] sweepProgramSteps(int table, int ins) {
+		int col = (table == 0) ? 5 : 4;
+		int startRow = song.instrumentTable[ins + col * 48];
+		SweepSim s = (table == 0) ? simPulse(startRow) : simFilter(startRow);
+		int[] steps; bool[0x40] seen;
+		foreach(r; s.rowOf)
+			if(r >= 1 && r < 0x40 && !seen[r]) { seen[r] = true; steps ~= r; }
+		return steps;
+	}
+
+	// True while a MULTI-block range (anchor != extent, both in the current program) is
+	// selected. Then a drag sets the shared join(s), not a single step's handle.
+	private bool sweepMultiSelected() {
+		return selectedSweepTable >= 0 && selectedSweepRow >= 1 && selectedSweepRowEnd >= 1
+			&& selectedSweepRowEnd != selectedSweepRow;
+	}
+
+	// The selected consecutive rows (anchor..extent inclusive) in program order, or [] if
+	// the range is invalid (rows no longer adjacent in the program, etc.).
+	private int[] sweepSelectedRange(int ins) {
+		if(selectedSweepTable < 0) return [];
+		int[] steps = sweepProgramSteps(selectedSweepTable, ins);
+		int ia = -1, ib = -1;
+		foreach(i, r; steps) { if(r == selectedSweepRow) ia = cast(int)i; if(r == selectedSweepRowEnd) ib = cast(int)i; }
+		if(ia < 0 || ib < 0) return [];
+		if(ia > ib) { int t = ia; ia = ib; ib = t; }
+		return steps[ia .. ib + 1];
+	}
+
+	// §21 P4c(v3) pixel span of the selected multi-block range: xa = first block's left edge,
+	// xb = last block's right edge, band = its graph band. false if not a valid multi-range.
+	private bool sweepSelectionSpan(int ins, ref Geo g, out int xa, out int xb, out int band) {
+		xa = xb = band = 0;
+		int[] range = sweepSelectedRange(ins);
+		if(range.length < 2) return false;
+		int f0, f1, a, b, s0, s1;
+		if(!sweepStepGeom(selectedSweepTable, ins, range[0], g, f0, f1, a, b, s0, s1)) return false;
+		xa = a;
+		if(!sweepStepGeom(selectedSweepTable, ins, range[$ - 1], g, f0, f1, a, b, s0, s1)) return false;
+		xb = b;
+		band = (selectedSweepTable == 0) ? 3 : 4;
+		return true;
 	}
 
 	// §21 P4c ---- interactive step BOX: duration (edges) + ramp (endpoints) ----
@@ -1860,6 +1920,25 @@ class SoundEditor : Window, Undoable {
 				}
 			}
 		}
+		// §21 P4c(v3) MULTI-block selection: outline the whole range and mark each shared
+		// JOIN (at the left block's end value). A drag anywhere on the range sets the joins,
+		// so the markers light YELLOW while the pointer is over it or a join drag is active.
+		if(sweepMultiSelected()) {
+			int rxa, rxb, rband;
+			if(sweepSelectionSpan(ins, g, rxa, rxb, rband)) {
+				int tp, bp; bandBox(g, rband, tp, bp);
+				video.olRect(rxa, tp, rxb - rxa, bp - tp, COL_STEPSEL);
+				bool joinHot = sweepJoinDragging
+					|| (hovering && hx >= rxa - BOX_HIT_PX && hx <= rxb + BOX_HIT_PX && hy >= tp && hy < bp);
+				int[] range = sweepSelectedRange(ins);
+				foreach(i; 0 .. cast(int)range.length - 1) {
+					int a0, a1, aa, ab, as0, as1;
+					if(!sweepStepGeom(selectedSweepTable, ins, range[i], g, a0, a1, aa, ab, as0, as1)) continue;
+					video.olFillRect(ab - 2, as1 - 2, 5, 5, joinHot ? COL_BOX_HOT : COL_HEAD);
+				}
+			}
+			return;
+		}
 		int t = selectedSweepTable, r = selectedSweepRow;
 		if((t != 0 && t != 1) || r < 1 || r >= 0x40) return;
 		int f0, f1, xa, xb, syS, syE;
@@ -1930,28 +2009,21 @@ class SoundEditor : Window, Undoable {
 		return b2;
 	}
 
-	// §21 P4c apply a value-endpoint drag. START: set the init/enter value (b2), which
-	// translates the whole segment. END: set the ramp slope (b1) + direction so the ramp
-	// ENDS at the pointer value, keeping the entering value fixed (a tilt).
-	private void sweepEndDragUpdate(ref Geo g, int celly) {
-		int table = sweepEndTable, row = sweepEndRow;
-		if(row < 1 || row >= 0x40) return;
-		int band = (table == 0) ? 3 : 4;
-		int maxVal = (table == 0) ? 4095 : 2047;
-		int topPx, botPx; bandBox(g, band, topPx, botPx);
-		int h = botPx - topPx; if(h < 1) h = 1;
-		int py = celly * FONT_Y + FONT_Y / 2;
-		int target = clampInt(cast(int)lround(cast(double)(botPx - py) * maxVal / h), 0, maxVal);
+	// §21 P4c set a step's START value = its init byte b2 (avoids the 0xff inherit sentinel).
+	private void setStepStartValue(int table, int row, int v) {
 		ubyte[] t = (table == 0) ? song.pulseTable : song.filterTable;
-		if(!sweepEndIsEnd) {
-			// START: rewrite the init byte b2 (avoiding the 0xff "inherit" sentinel).
-			t[row * 4 + 2] = encodeInitB2(table, target);
-			return;
-		}
-		// END: slope so entering + ramp == target.
+		if(row < 1 || row >= 0x40) return;
+		t[row * 4 + 2] = encodeInitB2(table, v);
+	}
+
+	// §21 P4c set a step's END value by choosing its ramp slope (b1) + direction so that
+	// entering + ramp == v, keeping the entering value fixed (a tilt). Sweep rows only.
+	private void setStepEndValue(int table, int row, int v) {
+		if(!sweepRowResizable(table, row)) return;
+		ubyte[] t = (table == 0) ? song.pulseTable : song.filterTable;
 		int entering = sweepStepEnterVal(table, row);
 		ubyte b0 = t[row * 4];
-		int d = target - entering;
+		int d = v - entering;
 		if(table == 0) {
 			int n = (b0 & 0x7f) + 1;                       // pulse ramps n times
 			int mag = clampInt(cast(int)lround(cast(double)(d < 0 ? -d : d) / n), 0, 0xff);
@@ -1961,6 +2033,38 @@ class SoundEditor : Window, Undoable {
 			int nf = b0 & 0x7f; if(nf < 1) nf = 1;         // filter ramps nf times, delta=2*b1
 			int sgn = clampInt(cast(int)lround(cast(double)d / (2 * nf)), -128, 127);
 			t[row * 4 + 1] = cast(ubyte)(sgn & 0xff);      // signed slope in b1
+		}
+	}
+
+	// Map a cell row to a band value (0..maxVal), inverting the band's Y axis.
+	private int sweepValueForCell(int table, ref Geo g, int celly) {
+		int band = (table == 0) ? 3 : 4;
+		int maxVal = (table == 0) ? 4095 : 2047;
+		int topPx, botPx; bandBox(g, band, topPx, botPx);
+		int h = botPx - topPx; if(h < 1) h = 1;
+		int py = celly * FONT_Y + FONT_Y / 2;
+		return clampInt(cast(int)lround(cast(double)(botPx - py) * maxVal / h), 0, maxVal);
+	}
+
+	// §21 P4c apply a value-endpoint drag. START: set init b2 (translate). END: set slope
+	// b1 + direction so the ramp ENDS at the pointer value (tilt).
+	private void sweepEndDragUpdate(ref Geo g, int celly) {
+		int v = sweepValueForCell(sweepEndTable, g, celly);
+		if(sweepEndIsEnd) setStepEndValue(sweepEndTable, sweepEndRow, v);
+		else setStepStartValue(sweepEndTable, sweepEndRow, v);
+	}
+
+	// §21 P4c(v3) apply a JOIN drag over the selected multi-block range: every shared
+	// boundary between consecutive selected blocks meets at the dragged value — the left
+	// block's END and the right block's START both become v.
+	private void sweepJoinDragUpdate(ref Geo g, int celly) {
+		int ins = clampedIns();
+		int[] range = sweepSelectedRange(ins);
+		if(range.length < 2) return;
+		int v = sweepValueForCell(selectedSweepTable, g, celly);
+		foreach(i; 0 .. cast(int)range.length - 1) {
+			setStepEndValue(selectedSweepTable, range[i], v);       // left block ends at v
+			setStepStartValue(selectedSweepTable, range[i + 1], v); // right block starts at v
 		}
 	}
 
@@ -3221,14 +3325,40 @@ class SoundEditor : Window, Undoable {
 				return;
 			}
 		}
-		// §21 P4c(v2) All pulse/filter step edits are anchored to the PERSISTENTLY-SELECTED
-		// step: if the press lands on the selected step's box handles, edit it (stable focus,
-		// no swapping to neighbours). Checked before sweepBandAt (its cell-top gate misses a
-		// handle in the band's top/bottom cell) and before the loop grip.
-		if(beginSelectedStepDrag(clampedIns(), g, x, y)) return;
-		// §20 P4b-1 otherwise, in a sweep band: grab the loop line, else SELECT the step
-		// under the cursor (a click selects; you then edit it via its box handles above).
 		int sb = sweepBandAt(g, x, y);
+		// §21 P4c(v3) SHIFT-click extends a multi-block selection (anchor..this) in the same
+		// program — the consecutive blocks between them. No drag; the join edit is a separate
+		// drag on the range.
+		if((SDL_GetModState() & KMOD_SHIFT) && sb >= 0 && selectedSweepTable == sb
+				&& selectedSweepRow >= 1) {
+			int row = sweepRowAtPress(sb, g, x);
+			if(row >= 1) {
+				clickWasButton = true;
+				selectedSweepRowEnd = row;
+				return;
+			}
+		}
+		// §21 P4c(v3) with a MULTI-block range selected, a drag anywhere on it sets the shared
+		// JOIN(s) between the blocks to one value (checked before the single-step handles).
+		if(sweepMultiSelected()) {
+			int jxa, jxb, jband;
+			if(sweepSelectionSpan(clampedIns(), g, jxa, jxb, jband)) {
+				int px = x * FONT_X + FONT_X / 2, py = y * FONT_Y + FONT_Y / 2;
+				if(px >= jxa - BOX_HIT_PX && px <= jxb + BOX_HIT_PX
+						&& py >= g.bandTopPx[jband] && py < g.bandTopPx[jband + 1]) {
+					clickWasButton = true;
+					sweepJoinDragging = true;
+					sweepJoinMoved = false;
+					return;
+				}
+			}
+		}
+		// §21 P4c(v2) SINGLE-step edits are anchored to the selected step's box handles: if
+		// the press lands on one, edit it (stable focus, no swapping). Checked before
+		// sweepBandAt (whose cell-top gate misses a handle in the band's top/bottom cell).
+		if(!sweepMultiSelected() && beginSelectedStepDrag(clampedIns(), g, x, y)) return;
+		// §20 otherwise, in a sweep band: grab the loop line, else SELECT (single) the step
+		// under the cursor (a click selects; you then edit it via its box handles).
 		if(sb >= 0) {
 			int lc = sweepLoopHandleAt(sb, g, x, y);
 			if(lc >= 0) {
@@ -3242,8 +3372,9 @@ class SoundEditor : Window, Undoable {
 			int row = sweepRowAtPress(sb, g, x);
 			if(row >= 0) {
 				clickWasButton = true;   // this press never starts/clears a plot selection
-				selectedSweepTable = sb; // select it; edits happen via the box handles
+				selectedSweepTable = sb; // fresh single selection (anchor == extent)
 				selectedSweepRow = row;
+				selectedSweepRowEnd = row;
 				return;
 			}
 		}
@@ -3335,6 +3466,22 @@ class SoundEditor : Window, Undoable {
 				snapshotAllTables(false); sweepEndMoved = true;
 			}
 			sweepEndDragUpdate(g, y);
+			return;
+		}
+		// §21 P4c(v3) JOIN drag over a multi-block selection: first tick runs the shared
+		// check, else snapshot, then set every shared join in the range to the pointer value.
+		if(sweepJoinDragging) {
+			Geo g = layout();
+			if(!sweepJoinMoved) {
+				int ins = clampedIns();
+				if(sweepProgramShared(selectedSweepTable, ins) && !sweepDragAuthorized(selectedSweepTable, ins)) {
+					promptSweepFork(selectedSweepTable, ins);
+					sweepJoinDragging = false;
+					return;
+				}
+				snapshotAllTables(false); sweepJoinMoved = true;
+			}
+			sweepJoinDragUpdate(g, y);
 			return;
 		}
 		// §21 P4c DURATION (box-edge) drag: on the first tick run the §20.2 shared check
@@ -3437,6 +3584,14 @@ class SoundEditor : Window, Undoable {
 			clickWasButton = false;
 			if(sweepEndMoved) retriggerIfSounding();
 			sweepEndMoved = false;
+			return;
+		}
+		// §21 P4c(v3) end a JOIN drag: make the new join(s) audible once.
+		if(sweepJoinDragging) {
+			sweepJoinDragging = false;
+			clickWasButton = false;
+			if(sweepJoinMoved) retriggerIfSounding();
+			sweepJoinMoved = false;
 			return;
 		}
 		// §21 P4c end a duration (box-edge) drag: make the new window audible once.
