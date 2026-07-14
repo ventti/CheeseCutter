@@ -19,11 +19,31 @@
 # - libcurl   macOS: bundled | Linux: libcurl*-dev | Windows: mingw-w64-x86_64-curl
 # - make/gcc/g++  macOS: xcode-select --install
 
+# Task catalog: local file-task dirs (kept so file tasks stay discoverable) plus
+# the remote release toolkit (github.com/superteppo/release-scripts). Pin `ref`
+# to an exact release (e.g. ref=v1.4.0) for reproducible CI; `main` tracks latest.
+[task_config]
+includes = [
+  "mise-tasks",
+  ".mise-tasks",
+  ".mise/tasks",
+  ".config/mise/tasks",
+  "mise/tasks",
+  "git::https://github.com/superteppo/release-scripts.git//mise-tasks?ref=main"
+]
+
 [env]
 # Set library path for macOS builds (adjust if needed based on your architecture)
 # Apple Silicon (M1/M2/M3): /opt/homebrew/lib
 # Intel Mac: /usr/local/lib
 LIBSPATH = "/opt/homebrew/lib"
+
+# Release toolkit (release:*) version ownership. The root `Version` file is the
+# single source of truth (string-imported at build time as com.util.APP_VERSION),
+# so the release task reads and writes it. Tags in this fork use the `ext-v` prefix.
+RELEASE_GET_VERSION = "cat Version"
+RELEASE_SET_VERSION = "printf '%s\\n' \"$RELEASE_VERSION\" > Version"
+RELEASE_TAG_PREFIX = "ext-v"
 
 [tasks.build]
 description = "Build CheeseCutter for current platform (also refreshes doc/ARCHITECTURE.md)"
@@ -75,7 +95,9 @@ fi
 ./ccutter $*
 """
 
-[tasks.release]
+# Renamed from [tasks.release] so the release toolkit (release:*) can own the
+# bare `release` task name. This builds the optimized/stripped local binary.
+[tasks.build-release]
 description = "Build release version of CheeseCutter"
 run = """
 #!/usr/bin/env bash
