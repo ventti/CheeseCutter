@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+# Visual-regression failure output (actual frame + diff mask), written by
+# tests/visual_regression.py; uploaded as a CI artifact, never committed.
+_artifacts/

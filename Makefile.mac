@@ -58,9 +58,54 @@ debug:
 # Headless editor driver for agents (see .claude/skills/run-cheesecutter).
 # Reuses every editor object except main.o (driver.d is module `main`).
 DRIVER = .claude/skills/run-cheesecutter/driver.d
-ccdriver: $(C64OBJS) $(filter-out src/main.o,$(OBJS)) $(CXX_OBJS) $(C_OBJS)
+ccdriver: $(DRIVER) $(C64OBJS) $(filter-out src/main.o,$(OBJS)) $(CXX_OBJS) $(C_OBJS)
 	$(DC) $(DFLAGS) -d -O2 -c -of=$(DRIVER:.d=.o) $(DRIVER)
 	$(CC) $(DLINK) -Wl,$(LDFLAGS) -o $@ $(filter-out src/main.o,$(OBJS)) $(DRIVER:.d=.o) $(CXX_OBJS) $(C_OBJS) $(LIBS) $(FRAMEWORKS)
+
+.PHONY: test-sound-editor
+test-sound-editor: ccdriver
+	$(PYTHON) -m unittest discover -v -s tests
+
+# --- Layer-5 sanitizer build (see .claude/skills/sdl2-ui-debug-qa) ------------
+# Rebuild the ccdriver harness under AddressSanitizer and run the same headless
+# corpus, catching memory bugs the functional and visual layers never will.
+#
+# Three non-obvious constraints, all learned the hard way:
+#  1. Instrument ONLY the D code (DFLAGS) — the Sound Editor / UI under active
+#     development. Leave the mature reSID C++ DSP UNinstrumented: its per-sample
+#     inner loop under ASan is pathologically slow (a real-SID-render test went
+#     from seconds to ~5 minutes), turning CI into hours of timeouts without
+#     finding anything the D-side instrumentation doesn't.
+#  2. Even with C++ uninstrumented, the link must still supply the LLVM
+#     compiler-rt ASan runtime the D (ldc) objects need — and it must be ldc's
+#     LLVM version, NOT Apple clang's (their `__asan_version_mismatch_check_*`
+#     symbols are incompatible). So link via the matching Homebrew LLVM clang
+#     (llvm@20, falling back to llvm).
+#  3. Do NOT add ASan to CFLAGS — those C objects also build the host `mkplayer`
+#     codegen tool, and an instrumented mkplayer hangs while assembling player.bin.
+# ldc2 spells the frame-pointer flag --frame-pointer=all (clang: -fno-omit-...).
+SAN_D_FLAGS   ?= -fsanitize=address --frame-pointer=all
+SAN_LLVM_PREFIX := $(shell brew --prefix llvm@20 2>/dev/null || brew --prefix llvm 2>/dev/null)
+SAN_CC  := $(SAN_LLVM_PREFIX)/bin/clang
+SAN_CXX := $(SAN_LLVM_PREFIX)/bin/clang++
+.PHONY: sanitize-asan sanitize-smoke
+sanitize-asan:
+	@test -x "$(SAN_CC)" || { echo "LLVM clang not found ($(SAN_CC)); run: brew install llvm@20" >&2; exit 1; }
+	$(MAKE) -f Makefile.mac clean
+	$(MAKE) -f Makefile.mac ccdriver \
+	  CC='$(SAN_CC)' CXX='$(SAN_CXX)' \
+	  DFLAGS='$(DFLAGS) $(SAN_D_FLAGS)' \
+	  DLINK='$(DLINK) -fsanitize=address'
+
+# Build the instrumented ccdriver and drive ONE broad editor session through it.
+# NOT the full corpus: the D-side instrumentation is ~80x slower here (a ~1s
+# session takes ~90s under ASan), so the ~115-test suite would run for hours and
+# re-verify numerics the release-binary `test` target already covers. This is a
+# memory-safety smoke — wired into CI as a manual, non-blocking job only.
+# For deeper work, run your own specific repro through ./ccdriver after
+# `sanitize-asan` (slowness is acceptable for a one-off root-cause).
+sanitize-smoke: sanitize-asan
+	$(PYTHON) tests/asan_smoke.py
 
 # Regenerate the man page and keyboard reference from the tool itself
 # (single source of truth: src/main.d cliOptions() and the com.shortcuts registry).
@@ -139,5 +184,3 @@ src/ui/ui.o: src/ui/help.o
 
 %.o: %.d
 	$(COMPILE.d) $<
-
-

@@ -1,0 +1,1 @@
+"""CheeseCutter automated tests."""

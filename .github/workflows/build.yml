@@ -5,12 +5,16 @@ on:
     branches: [develop, master]
     paths:
       - "src/**"
+      - "tests/**"
       - "Makefile*"
+      - ".claude/skills/run-cheesecutter/driver.d"
       - ".github/workflows/build.yml"
   pull_request:
     paths:
       - "src/**"
+      - "tests/**"
       - "Makefile*"
+      - ".claude/skills/run-cheesecutter/driver.d"
       - ".github/workflows/build.yml"
   # Publishing a release rebuilds from the tagged commit and attaches the
   # per-platform binaries to that release (see the "release" job).
@@ -113,6 +117,50 @@ jobs:
         with:
           name: cheesecutter-macos
           path: CheeseCutter-Extended.app
+
+  # Headless regression suite: build the ccdriver harness and run the Sound
+  # Editor tests (layers 1-3) plus the tolerance-based visual-regression
+  # checkpoints (layer 4). Runs on macOS to match the platform the baselines
+  # were generated on (see tests/visual_regression.py).
+  test:
+    name: Headless tests (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install ldc sdl2
+
+      - name: Build ccdriver + run suite
+        run: make -f Makefile.mac test-sound-editor LIBSPATH="$(brew --prefix)/lib"
+
+      - name: Upload failure artifacts (visual diffs, etc.)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-artifacts
+          path: tests/_artifacts
+          if-no-files-found: ignore
+
+  # Sanitizer smoke (layer 5) — MANUAL only. The D-side ASan instrumentation is
+  # ~80x slower here (a ~1s session takes ~90s), so this drives ONE broad editor
+  # session through an instrumented ccdriver rather than the full corpus, and is
+  # gated to workflow_dispatch so it never blocks a PR. Uses the LLVM-matched
+  # clang (see the sanitize-asan Makefile target) so the D (ldc) objects' ASan
+  # runtime resolves. Run it from the Actions tab when memory-safety matters.
+  sanitize:
+    name: Sanitizer smoke (macOS, ASan, manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install ldc sdl2 llvm@20
+
+      - name: Build instrumented ccdriver + run ASan smoke
+        run: make -f Makefile.mac sanitize-smoke LIBSPATH="$(brew --prefix)/lib"
 
   # On a published release, gather the three platform builds, package them with
   # versioned names and attach them to that release.
