@@ -20,11 +20,28 @@ import derelict.sdl2.sdl;
 import std.stdio;
 
 enum Status { Stop, Play, Keyjam };
+
+int fixedGateExpiresAfter(int ticks) pure nothrow @safe {
+	return ticks < 1 ? 1 : ticks;
+}
+
+// R41 timing contract: arming N ticks must keep the gate high for exactly N player
+// calls, independently of when the physical key is released.
+static assert(fixedGateExpiresAfter(1) == 1);
+static assert(fixedGateExpiresAfter(40) == 40);
 shared private int playstatus;
 // Bumped on every keyjam/preview note-on (playNote). The oscilloscope watches it
 // to know when to re-capture: in keyjam mode it freezes the played note's
 // waveform and holds it until the next note bumps this counter. UI-thread only.
 __gshared int keyjamNoteTrigger;
+// Sound-Editor-only one-shot gate clock. It advances in audio.callback.audio_frame,
+// i.e. at the same player-tick rate as the tables and graph recordings. Classic
+// keyjam never arms it and therefore retains key-release gate behavior.
+__gshared private int fixedGateTicksRemaining;
+__gshared private int fixedGateVoice;
+__gshared private int fixedGateInstrument;
+__gshared private bool fixedGateStarted;
+__gshared private bool fixedGateForceLow;
 shared int[3] muted;
 int usefp = 1, sidtype, interpolate = 1, badline, ntsc;
 __gshared Filterparams curfp;
@@ -40,6 +57,79 @@ bool isPlaying() nothrow {
 
 bool keyjamEnabled() nothrow {
 	return playstatus == Status.Keyjam;
+}
+
+void cancelFixedKeyjamGate() nothrow {
+	fixedGateTicksRemaining = 0;
+	fixedGateStarted = false;
+	fixedGateForceLow = false;
+}
+
+void armFixedKeyjamGate(int ticks, int voice, int instrument) nothrow {
+	// The audio callback treats a non-zero remaining count as the publication flag.
+	// Publish it last so it can never observe a fresh count with stale routing data.
+	fixedGateVoice = voice < 0 ? 0 : (voice > 2 ? 2 : voice);
+	fixedGateInstrument = instrument < 0 ? 0 : instrument;
+	fixedGateStarted = false;
+	fixedGateForceLow = false;
+	fixedGateTicksRemaining = fixedGateExpiresAfter(ticks);
+}
+
+int fixedKeyjamGateRemaining() nothrow {
+	return fixedGateTicksRemaining;
+}
+
+// Called once after each keyjam player call and visualizer sample. Consequently an
+// N-tick gate records N high samples; the key-off becomes visible at sample N.
+private void issueFixedKeyoff() nothrow {
+	fixedGateForceLow = true;
+	try {
+		song.cpu.reset();
+		song.cpu.regs.a = NOTE_KEYOFF;
+		song.cpu.regs.x = cast(ubyte)fixedGateVoice;
+		song.cpu.regs.y = cast(ubyte)fixedGateInstrument;
+		if(song.ver > 8)
+			song.memspace[song.offsets[Offsets.SHTRANS] + fixedGateVoice] = 0;
+		ushort call = song.ver > 7 ? song.offsets[Offsets.Subnoteplay] : 0x1009;
+		cpuCall(call, false);
+		if(audio.remote.isActive()) {
+			audio.remote.ensureLoaded(song);
+			audio.remote.cmdKeyjam(song, NOTE_KEYOFF, fixedGateVoice, fixedGateInstrument);
+		}
+	} catch(Exception) {
+		// Match the realtime callback's fail-closed behavior: the clock is already
+		// disarmed, so a malformed/unsupported player cannot repeatedly throw here.
+		cancelFixedKeyjamGate();
+	}
+}
+
+// Called after the player tick and before its SID shadow is recorded. The normal
+// KEYOFF command still updates player state (and remote hardware), while this mask
+// hides its fixed restart-pipeline latency from the local, user-visible gate span.
+void applyFixedKeyjamGateMask() nothrow {
+	if(fixedGateForceLow)
+		song.sidbuf[fixedGateVoice * 7 + 4] &= 0xfe;
+}
+
+void advanceFixedKeyjamGate() nothrow {
+	if(fixedGateTicksRemaining <= 0) return;
+	if(playstatus != Status.Keyjam) { cancelFixedKeyjamGate(); return; }
+	// Restart pre-roll is not sustain time: begin on the first actual gate-high sample.
+	if(!fixedGateStarted) {
+		if((song.sidbuf[fixedGateVoice * 7 + 4] & 1) == 0) return;
+		fixedGateStarted = true;
+	}
+	if(--fixedGateTicksRemaining > 0) return;
+	issueFixedKeyoff();
+}
+
+// Sound Editor note-on + one-shot arming is one audio-device transaction. This
+// prevents the realtime callback from consuming an unarmed note-on tick.
+void playNoteOnVoiceWithFixedGate(Element emt, int voice, int ticks) {
+	SDL_LockAudio();
+	scope(exit) SDL_UnlockAudio();
+	playNoteImpl(emt, true, voice);
+	armFixedKeyjamGate(ticks, voice, emt.instr.value);
 }
 
 void init() {
@@ -78,14 +168,23 @@ void toggleSIDModel() {
 	setSidModel(sidtype ^ 1);
 }
 
-void playNote(Element emt) {
+private void playNoteImpl(Element emt, bool notifyRemote, int voiceOverride = -1) {
 	if(playstatus == Status.Play) return;
-	keyjamNoteTrigger++;   // signal the oscilloscope to re-capture this note
-	int v = seq.sequencer.activeVoiceNum;
+	if(emt.note.value >= 3) {
+		cancelFixedKeyjamGate();
+		keyjamNoteTrigger++; // signal a genuinely new/re-rendered note (not key-off)
+	}
+	int v = voiceOverride >= 0 && voiceOverride < 3
+		? voiceOverride : seq.sequencer.activeVoiceNum;
 	// Start a fresh recording only on an actual struck note (>=3); a keyoff (1),
 	// keyon (2) or rest (0) keeps recording into the current note so the release
 	// tail is captured rather than starting a new (empty) recording.
 	if(emt.note.value >= 3) {
+		// captureBlock samples the previous tick's SID shadow before audio_frame runs.
+		// Clear a stale gate from an earlier note/voice so every fresh capture begins
+		// with honest restart pre-roll instead of a one-sample false onset.
+		audio.audio.sidreg[v * 7 + 4] = cast(char)(audio.audio.sidreg[v * 7 + 4] & 0xfe);
+		audio.visualizer.beginVoiceRecording(v);
 		audio.audio.captureStart(v);   // record this note for the oscilloscope view
 		audio.audio.captureInstr = emt.instr.value;  // remember which instrument, so the
 		                               // Sound Editor can bind the recording to it
@@ -114,11 +213,19 @@ void playNote(Element emt) {
 	cpuCall(call,true);
 	playstatus = Status.Keyjam;
 
-	if(audio.remote.isActive()) {
+	if(notifyRemote && audio.remote.isActive()) {
 		audio.remote.ensureLoaded(song);
 		audio.remote.cmdKeyjam(song, emt.note.value, v, emt.instr.value);
 	}
 }
+
+void playNote(Element emt) { playNoteImpl(emt, true); }
+void playNoteOnVoice(Element emt, int voice) { playNoteImpl(emt, true, voice); }
+
+// Local-only note setup for an offline reSID preview. The caller pauses SDL output;
+// suppressing the remote command keeps hardware backends silent as well.
+void playNoteSilent(Element emt) { playNoteImpl(emt, false); }
+void playNoteSilentOnVoice(Element emt, int voice) { playNoteImpl(emt, false, voice); }
 
 void playRow(Voice[] voices) {
 	if(playstatus == Status.Play) return;
@@ -184,6 +291,7 @@ void start() {
 }
 
 void stop() nothrow {
+	cancelFixedKeyjamGate();
 	playstatus = Status.Stop;
 	muteSID(1,1,1);
 	audio.audio.captureStop();   // end any keyjam note recording
@@ -312,6 +420,7 @@ short[] renderPcm(int subtune1based, int durationSec, int sampleRate = 0) {
 	while(pcm.length < target) {
 		int n = sid_fillbuffer(tmp.ptr, interval, audio.callback.cyclesPerFrame);
 		pcm ~= tmp[0 .. n];
+		audio.callback.recordRenderedSidTick();
 		audio_frame();
 	}
 	playstatus = Status.Stop;
@@ -412,4 +521,3 @@ private void muteSID(int v1, int v2, int v3 ) nothrow {
 	if(v2) song.sidbuf[7 + 4] = 0x08;
 	if(v3) song.sidbuf[14 + 4]= 0x08;
 }
-

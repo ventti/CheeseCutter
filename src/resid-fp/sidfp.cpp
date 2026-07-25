@@ -173,6 +173,11 @@ reg8 SIDFP::read(reg8 offset)
   }
 }
 
+reg8 SIDFP::readENV(reg8 voice_num)
+{
+  return voice_num < 3 ? voice[voice_num].envelope.readENV() : 0;
+}
+
 
 // ----------------------------------------------------------------------------
 // Write registers.

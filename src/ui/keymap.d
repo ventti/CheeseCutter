@@ -531,6 +531,10 @@ private void invokeKey(UI ui, int key, int mods, int unicode = 0) {
 	ui.toplevel.keypress(Keyinfo(key, mods, unicode));
 }
 
+private ActionCallback invokeKeyAction(UI ui, int key, int mods) {
+	return { invokeKey(ui, key, mods); };
+}
+
 /**
  * Register context-specific command shortcuts. Each is registered under a
  * non-global context; dispatch resolves the active context (pushed as the
@@ -547,6 +551,66 @@ void registerContextShortcuts(UI ui) {
 	void invokeKey(int key, int mods, int unicode = 0) {
 		.invokeKey(ui, key, mods, unicode);
 	}
+
+	// --- Visual Sound Editor controls (R59) ---
+	// Context bindings win over similarly-shaped sequencer/global commands and
+	// redispatch straight to SoundEditor.keypress, the same implementation used by
+	// the labelled mouse buttons.
+	void se(string id, string description, int key, int mods = 0) {
+		string actionId = id.dup;
+		sm.register(id, C.soundEditor, "Sound Editor controls", description, key, mods,
+			invokeKeyAction(ui, key, mods), "", {
+				return ui.toplevel.soundEditorActive
+					&& ui.toplevel.soundEditor.commandEnabled(actionId);
+			});
+	}
+	se("se_zoom_out", "Zoom out", SDLK_o, KMOD_CTRL | KMOD_SHIFT);
+	se("se_zoom_in", "Zoom in", SDLK_i, KMOD_CTRL | KMOD_SHIFT);
+	se("se_fit", "Fit the full sound", SDLK_a, KMOD_CTRL | KMOD_SHIFT);
+	se("se_selection", "Zoom to the time selection", SDLK_g, KMOD_CTRL | KMOD_SHIFT);
+	se("se_add", "Insert the selected programme row", SDLK_j, KMOD_CTRL | KMOD_SHIFT);
+	se("se_delete", "Delete the selected programme row", SDLK_d, KMOD_CTRL | KMOD_SHIFT);
+	se("se_stop", "Stop the selected programme", SDLK_s, KMOD_CTRL | KMOD_SHIFT);
+	se("se_type", "Toggle Filter sweep/config row type", SDLK_t, KMOD_CTRL);
+	se("se_carry", "Toggle selected sweep carry value", SDLK_i, KMOD_CTRL);
+	se("se_new", "Create a new private sound", SDLK_n, KMOD_CTRL | KMOD_SHIFT);
+	se("se_wave_prev", "Select the previous wave row", SDLK_PAGEUP, KMOD_SHIFT);
+	se("se_wave_next", "Select the next wave row", SDLK_PAGEDOWN, KMOD_SHIFT);
+	se("se_wave_1", "Edit selected wave byte 1", SDLK_1, KMOD_CTRL | KMOD_SHIFT);
+	se("se_wave_2", "Edit selected wave byte 2", SDLK_2, KMOD_CTRL | KMOD_SHIFT);
+	se("se_wave_loop", "Set the wave loop target", SDLK_l, KMOD_CTRL);
+	se("se_res_down", "Decrease Filter resonance", SDLK_3, KMOD_CTRL | KMOD_SHIFT);
+	se("se_res_up", "Increase Filter resonance", SDLK_4, KMOD_CTRL | KMOD_SHIFT);
+	se("se_lp", "Toggle Filter low-pass", SDLK_l, KMOD_CTRL | KMOD_SHIFT);
+	se("se_bp", "Toggle Filter band-pass", SDLK_b, KMOD_CTRL | KMOD_SHIFT);
+	se("se_hp", "Toggle Filter high-pass", SDLK_h, KMOD_CTRL | KMOD_SHIFT);
+	se("se_route", "Cycle Filter channel route", SDLK_r, KMOD_CTRL | KMOD_SHIFT);
+	se("se_linked", "Toggle linked programme edits", SDLK_e, KMOD_CTRL | KMOD_SHIFT);
+	se("se_start_down", "Decrease selected sweep start value", SDLK_5, KMOD_CTRL | KMOD_SHIFT);
+	se("se_start_up", "Increase selected sweep start value", SDLK_6, KMOD_CTRL | KMOD_SHIFT);
+	se("se_end_down", "Decrease selected sweep end value", SDLK_7, KMOD_CTRL | KMOD_SHIFT);
+	se("se_end_up", "Increase selected sweep end value", SDLK_8, KMOD_CTRL | KMOD_SHIFT);
+	se("se_duration_down", "Decrease selected sweep duration", SDLK_9, KMOD_CTRL | KMOD_SHIFT);
+	se("se_duration_up", "Increase selected sweep duration", SDLK_0, KMOD_CTRL | KMOD_SHIFT);
+	se("se_octave_down", "Decrease keyjam octave", SDLK_PAGEDOWN, KMOD_CTRL | KMOD_SHIFT);
+	se("se_octave_up", "Increase keyjam octave", SDLK_PAGEUP, KMOD_CTRL | KMOD_SHIFT);
+	se("se_instrument_prev", "Select previous instrument", SDLK_PAGEUP, KMOD_CTRL);
+	se("se_instrument_next", "Select next instrument", SDLK_PAGEDOWN, KMOD_CTRL);
+	// Allowed legacy aliases follow the portable primary in generated docs.
+	sm.bindAlias("se_fit", SDLK_HOME, 0);
+	sm.bindAlias("se_selection", SDLK_END, 0);
+	sm.bindAlias("se_add", SDLK_INSERT, 0);
+	sm.bindAlias("se_delete", SDLK_DELETE, 0);
+	sm.bindAlias("se_octave_down", SDLK_KP_DIVIDE, 0);
+	sm.bindAlias("se_octave_up", SDLK_KP_MULTIPLY, 0);
+	sm.bindAlias("se_instrument_prev", SDLK_KP_MINUS, 0);
+	sm.bindAlias("se_instrument_next", SDLK_KP_PLUS, 0);
+	sm.setCategory("se_new", "Sound");
+	sm.setCategory("se_wave_1", "Sound");
+	sm.setCategory("se_wave_2", "Sound");
+	sm.setMenuLabel("se_new", "New sound");
+	sm.setMenuLabel("se_wave_1", "Edit wave byte 1...");
+	sm.setMenuLabel("se_wave_2", "Edit wave byte 2...");
 
 	// --- Sequencer (common to note/track/overview columns) ---
 	sm.register("seq_song_start", C.sequencer, "Navigation",

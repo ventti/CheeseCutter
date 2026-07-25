@@ -166,7 +166,7 @@ Ctrl-Alt-3..............Swap voice's track with voice 3's tracks from crsr down
 "]);
 
 
-// Three pages (SPACE / F12-again cycles). Each MUST fit the help window (~34 lines
+// Five pages (SPACE / F12-again cycles). Each MUST fit the help window (~34 lines
 // before the render clamp); an over-long single page overflows the screen and its
 // tail is silently dropped (and long enough would crash Screen.cprint) -- so keep
 // each page comfortably short and add a page rather than growing one past the fold.
@@ -188,11 +188,13 @@ Q W E R T Y U I O P.....Notes, base octave + 1
  S D   G H J
 Z X C V B N M...........Notes, base octave
 
-Keypad / *..............Lower / raise the base octave
+Ctrl-Shift-PgDn/PgUp...Lower / raise the base octave
+Keypad / *..............Legacy aliases
 
 `+dNavigation
 
-+ / - (or Keypad -/+)...Previous / next instrument
+Ctrl-PgUp/PgDn..........Previous / next instrument
+Keypad -/+..............Legacy aliases
 Up / Down...............Move the parameter cursor
 Ctrl-E..................Exit back to the classic editor",
 
@@ -206,22 +208,65 @@ Left / Right............Edit the selected parameter (- / +)
   Arpeggio speed...................nibble 0-F
   HR wave / HR SR..................byte 00-FF
 Drag ADSR handles.......Set A/D/S/R by dragging the curve markers
+						(A/R: left-right, D: both, S: up-down)
                         (drag the decay dot up/down for sustain; zoom
                         out to reach the release dot past the note)
-Click a Pulse/Filter step..SELECT it (bright box). The edits below all
-                        act on the SELECTED step, so focus stays put:
-  Its START dot (left).......Set the step's start level (pw / cutoff)
-  Its END dot (right)........Tilt the ramp (its slope + direction)
-  Its right edge.............Resize the step's window (duration)
-  Drag inside its box........Set the level (coarse)
-  (edges + dots go YELLOW when grabbable. A shared program asks
-   each edit: Y = fork a private copy, N = edit the shared rows.)
-Shift-click a 2nd step..Select a RANGE; a drag on it sets the shared
-                        join(s) between the blocks to one value
-Insert / Delete.........Add a step after / remove the selected step
-Drag the loop grip......Move the loop-back point (top strip of the band)
-Drag the Filter res line..Set the config row's resonance (0-F)
-Click the Filter [mode] chip..Cycle LP / BP / HP combos (recolours the fill)
+Pulse/Filter blocks use direct manipulation (the touched block becomes
+                        selected automatically):
+  Its START dot (up/down)....Set the step's start level (pw / cutoff)
+  Its END dot (up/down)......Tilt the ramp (takes priority over edge)
+    Drag beyond band.........Add/remove full value-range windings
+    Shift-drag END...........Set full signed speed range directly
+  Any point on right edge....Resize duration (cursor becomes <->)
+  Drag inside its box........Set pulse level / filter cutoff
+  (edges + dots go YELLOW when grabbable. Shared programmes copy
+   automatically; enable Linked edits to change every linked sound.)
+  Keyjam edits re-render from reSID on mouse-up; Fit stays unchanged.
+Shift-click a 2nd step..Select a RANGE; drag one shared join dot to
+                        adjust only its two adjacent selected blocks
+Drag empty Pulse/Filter...Create and edit the programme in one gesture
+Ctrl-Shift-E..............Toggle visible Linked edits mode
+Ctrl-Shift-J / Insert...Create a row after the selected row
+Ctrl-Shift-D / Delete...Remove the selected row
+Drag the loop grip......Move the loop-back point (top strip of the band)",
+
+"`+1Press F12 again to see the global help.  SPACE for more.
+
+`+dWave programme graph
+
+Drag a pitch row up/down...Change its note/arpeggio value; relative and
+                          absolute row encoding stays intact
+Drag a delay row left/right..Change delay 1-F; the edge follows the pointer
+Target and END rows........Protected from pitch/delay dragging
+Click a Wave bit lane......Toggle that producing row's SID control bit
+Drag across a bit lane.....Paint the same state without repeated toggles
+                            (unrepresentable W2 controls stay unchanged with a cue)
+Click trailing +...........Append a normal row before END/LOOP; its top cell
+                            stays separate from the terminal triangle
+                            (invalid programmes use Sound > New sound)
+Top > triangle (left edge)..Loop start; drag to a legal authored row
+Top < triangle (right edge).END/loop end; drag to set or retarget the loop
+                            (the triangle owns only the band's top cell)
+
+Shared Wave edits copy automatically; visible Linked edits mode is the only
+way to change every linked sound. Crossed rows paint as one undo step;
+reSID refreshes once on release, never during the drag.
+Fit includes authored Wave timing even after a shorter keyjam recording.",
+
+"`+1Press F12 again to see the global help.  SPACE for more.
+
+`+dPulse / Filter program controls
+
+Click Stop..............Make the selected program stop instead of loop
+Click Type..............Toggle selected Filter row: sweep / config
+Click Carry.............Toggle explicit start / inherit running value
+Drag the Filter res line..Set resonance (0-F) for that filter block;
+                        later blocks become constant CONFIG segments
+Click Filter LP/BP/HP...Toggle each mode bit (yellow on, gray off)
+Click Filter Route......Cycle voice 1/2/3/external-input routing mask
+Ctrl-Shift-5 / 6........Nudge selected step START down / up
+Ctrl-Shift-7 / 8........Nudge selected step END down / up
+Ctrl-Shift-9 / 0........Nudge selected step duration down / up
 Ctrl-Z / Ctrl-Y.........Undo / redo the edit",
 
 "`+1Press F12 again to see the global help.
@@ -232,11 +277,25 @@ Ctrl-Z / Ctrl-Y.........Undo / redo the edit",
 `+dView / zoom (mouse-first; the graphs zoom + pan)
 
 Drag on the plot........Mark a tick-snapped selection
-[-] [+] [Fit] [Sel].....Zoom out / in / whole note / to selection
+Dim vertical grid.......One track step: (speed+1) x multiplier ticks
+- / + / Fit / Selection...Zoom out / in / whole note / selection
 Scrollbar...............Drag the thumb to pan; click the track to page
 Shift-Left / Right......Pan the view (~1/4 window)
-Home / End..............Fit whole note / Zoom to selection
+Ctrl-Shift-A / G........Fit whole note / Zoom to selection
+Home / End..............Legacy aliases
 Backspace...............Clear the selection
+
+`+dButton shortcuts (also shown when hovering)
+
+Ctrl-Shift-O / I........Zoom out / in
+Ctrl-Shift-A / G........Fit / Selection
+Ctrl-Shift-J / D........Add / delete selected programme row
+Ctrl-Shift-S / Ctrl-T...Stop programme / toggle Filter row type
+Ctrl-I / Ctrl-Shift-N...Toggle Carry / create New private sound
+Shift-PgUp / PgDn.......Previous / next wave row
+Ctrl-Shift-1 / 2........Edit wave byte 1 / 2; Ctrl-L = set Loop
+Ctrl-Shift-3 / 4........Resonance down / up
+Ctrl-Shift-L/B/H/R......Toggle LP/BP/HP / cycle route
 
 `+dPlayback
 

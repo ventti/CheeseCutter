@@ -147,6 +147,7 @@ void renderKeyjamCapture(int ticks) {
 	for(int i = 0; i < ticks; i++) {   // captureBlock self-stops at the release tail
 		int t = sid_fillbuffer(mixbuf, interval, audio.callback.cyclesPerFrame);
 		captureBlock(mixbuf, t);
+		audio.callback.recordRenderedSidTick();
 		audio_frame();
 	}
 	SDL_UnlockAudio();
@@ -248,6 +249,7 @@ extern(C) {
 				assert(c > 0);
 				t = sid_fillbuffer(cast(short*)stream + total,
 								   c, 0);
+				audio.callback.recordRenderedSidTick();
 				(*callback)();
 				callbackCounter -= callbackInterval;
 				assert(callbackCounter + todo >= 0);
@@ -278,6 +280,7 @@ extern(C) {
 			t = sid_fillbuffer(mixbuf+bufferUsed, callbackInterval, cyclesPerFrame);
 			// Record the fresh block into the keyjam capture (samples + gate bit).
 			captureBlock(mixbuf + prevUsed, t);
+			audio.callback.recordRenderedSidTick();
 			bufferUsed += t;
 			(*callback)();
 		}

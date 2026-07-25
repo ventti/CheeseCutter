@@ -48,6 +48,8 @@ public:
   
   // Read/write registers.
   reg8 read(reg8 offset);
+  // Read one voice's raw 8-bit envelope counter, before FP DAC shaping/muting.
+  reg8 readENV(reg8 voice_num);
   void write(reg8 offset, reg8 value);
   void mute(reg8 channel, bool enable);
 

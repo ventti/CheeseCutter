@@ -6,6 +6,7 @@ Text-mode framebuffer — Video/Screen abstraction, character-cell rendering and
 
 module com.fb;
 import derelict.sdl2.sdl;
+import std.algorithm : max, min;
 import std.string : indexOf;
 import com.util;
 // The RGB table + semantic roles now live in com.palette (data-driven, loaded
@@ -187,6 +188,10 @@ abstract class Video {
 	// overlay, e.g. the Sound Editor's time-range selection wash. Trailing no-op
 	// virtual for vtable compatibility; only the SDL subclass blends.
 	void olFillRectA(int x, int y, int w, int h, int col, int alpha) {}
+	// Repaint the finished text grid over this device-pixel rectangle after all
+	// preceding overlay ops. Used by menus/dialogs so graphs remain visible around
+	// them without bleeding through their foreground chrome.
+	void olMaskRect(int x, int y, int w, int h) {}
 }
 
 class VideoStandard : Video {
@@ -316,7 +321,7 @@ class VideoStandard : Video {
 	// Rebuilt each frame by the caller (olClear + ol* ops). overlayActive forces
 	// a per-frame re-render like scopeActive, and the list is kept between frames
 	// so saveScreenshot() re-renders the same overlay. Device-pixel coords.
-	private enum OlKind { line, vline, hline, rect, fillrect, point }
+	private enum OlKind { line, vline, hline, rect, fillrect, point, maskrect }
 	private struct OlOp { OlKind kind; int a, b, c, d, col; int alpha = 255; }
 	private OlOp[] olOps;
 	private bool overlayActive;
@@ -342,6 +347,34 @@ class VideoStandard : Video {
 	}
 	override void olFillRectA(int x, int y, int w, int h, int col, int alpha) {
 		olOps ~= OlOp(OlKind.fillrect, x, y, w, h, col, alpha); overlayActive = true;
+	}
+	override void olMaskRect(int x, int y, int w, int h) {
+		olOps ~= OlOp(OlKind.maskrect, x, y, w, h, 0); overlayActive = true;
+	}
+
+	// Render one text cell exactly as renderGrid does. Kept as a helper so a mask op
+	// can restore foreground chrome after the pixel overlay has been composited.
+	private void drawGridCell(int x, int y) {
+		if(x < 0 || y < 0 || x >= screen.width || y >= screen.height) return;
+		Uint32 cell = screen.data[x + y * screen.width];
+		int glyph = cell & 255;
+		Uint8* bp = &font[glyph * 16];
+		Uint8 ufg = (cell >> 8) & 0xff;
+		Uint8 ubg = (cell >> 16) & 0xff;
+		if(keyjamBackground && ubg == 0) ubg = cast(ubyte)idx(Role.keyjamBg);
+		SDL_Rect cellRect = { x * FONT_X, y * FONT_Y, FONT_X, FONT_Y };
+		SDL_SetRenderDrawColor(renderer, PALETTE[ubg].r, PALETTE[ubg].g, PALETTE[ubg].b, 255);
+		SDL_RenderFillRect(renderer, &cellRect);
+		SDL_SetRenderDrawColor(renderer, PALETTE[ufg].r, PALETTE[ufg].g, PALETTE[ufg].b, 255);
+		int yy = y * FONT_Y;
+		foreach(c; 4 .. 4 + FONT_Y) {
+			int bits = bp[c - 4];
+			int xx = x * FONT_X;
+			foreach(bit; 0 .. FONT_X) {
+				if(bits & (0x80 >> bit)) SDL_RenderDrawPoint(renderer, xx + bit, yy);
+			}
+			yy++;
+		}
 	}
 
 	// Flush the overlay draw-list on top of the finished text grid.
@@ -373,6 +406,13 @@ class VideoStandard : Video {
 				break;
 			case OlKind.point:
 				SDL_RenderDrawPoint(renderer, op.a, op.b);
+				break;
+			case OlKind.maskrect:
+				int x0 = max(0, op.a / FONT_X);
+				int y0 = max(0, op.b / FONT_Y);
+				int x1 = min(screen.width,  (op.a + op.c + FONT_X - 1) / FONT_X);
+				int y1 = min(screen.height, (op.b + op.d + FONT_Y - 1) / FONT_Y);
+				foreach(y; y0 .. y1) foreach(x; x0 .. x1) drawGridCell(x, y);
 				break;
 			}
 		}

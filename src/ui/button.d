@@ -38,6 +38,11 @@ struct Button {
 	bool pressed;         // mouse button is held down on it (the "click" look)
 	bool active;          // persistent "on"/current-state indicator set by the owner
 	bool enabled = true;  // false = greyed out and not clickable
+	// Optional per-instance resting/on foreground overrides. Useful for compact bit
+	// toggles that remain clickable while visually off (e.g. dark-gray -> yellow).
+	int restingLabel = -1;
+	int activeLabel = -1;
+	int activeBackground = -1;
 
 	// True if screen cell (cx, cy) lies on this button.
 	bool contains(int cx, int cy) const {
@@ -50,8 +55,10 @@ struct Button {
 		if(!enabled)     { fg = idx(Role.buttonDisabledLabel); bg = idx(Role.buttonBg); }
 		else if(pressed) { fg = idx(Role.buttonPressLabel);    bg = idx(Role.buttonPressBg); }
 		else if(hovered) { fg = idx(Role.buttonHoverLabel);    bg = idx(Role.buttonHoverBg); }
-		else if(active)  { fg = idx(Role.buttonActiveLabel);   bg = idx(Role.buttonActiveBg); }
-		else             { fg = idx(Role.buttonLabel);         bg = idx(Role.buttonBg); }
+		else if(active)  { fg = activeLabel >= 0 ? activeLabel : idx(Role.buttonActiveLabel);
+		                    bg = activeBackground >= 0 ? activeBackground : idx(Role.buttonActiveBg); }
+		else             { fg = restingLabel >= 0 ? restingLabel : idx(Role.buttonLabel);
+		                    bg = idx(Role.buttonBg); }
 	}
 
 	// Render the label at [x0, row) in the current state's colors. All TEXT cells,

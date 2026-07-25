@@ -52,7 +52,8 @@ abstract class QueryDialogBase(T) : Window {
 	override void update() {
 		int x = cast(int)(screen.width / 2 - (frameWidth + 6)/2);
 		int y = cast(int)(screen.height / 2 - 11);
-		drawFrame(Rectangle(x, y, 5, frameWidth + 9));
+		area = Rectangle(x, y, 5, frameWidth + 9);
+		drawFrame(area);
 		screen.cprint(x + 4, y + 2, 15, 0, query);
 		input.setCoord(cast(int)(x + 4 + query.length), cast(int)( y + 2));
 	}
@@ -1110,7 +1111,8 @@ class ExportOptionsDialog : Window {
 		int h = cast(int)rows.length + 6;
 		int x = screen.width / 2 - (fw + 2) / 2;
 		int y = screen.height / 2 - h / 2;
-		drawFrame(Rectangle(x, y, h, fw + 2));
+		area = Rectangle(x, y, h, fw + 2);
+		drawFrame(area);
 		screen.cprint(x + 2, y, 1, 0, dlgTitle);
 		foreach(i, row; rows) {
 			int ry = y + 2 + cast(int)i;
@@ -1377,7 +1379,8 @@ class ModImportOptionsDialog : Window {
 		int h = cast(int)labels.length + 6;
 		int x = screen.width / 2 - (fw + 2) / 2;
 		int y = screen.height / 2 - h / 2;
-		drawFrame(Rectangle(x, y, h, fw + 2));
+		area = Rectangle(x, y, h, fw + 2);
+		drawFrame(area);
 		screen.cprint(x + 2, y, 1, 0, format(" Import ProTracker module (%d ch) ", channels));
 		foreach(i, lab; labels) {
 			int ry = y + 2 + cast(int)i;
@@ -1512,7 +1515,8 @@ class PropertiesDialog : Window {
 		int h = cast(int)rows.length + 6;
 		int x = screen.width / 2 - (fw + 2) / 2;
 		int y = screen.height / 2 - h / 2;
-		drawFrame(Rectangle(x, y, h, fw + 2));
+		area = Rectangle(x, y, h, fw + 2);
+		drawFrame(area);
 		screen.cprint(x + 2, y, 1, 0, " Properties ");
 		foreach(i, row; rows) {
 			int ry = y + 2 + cast(int)i;

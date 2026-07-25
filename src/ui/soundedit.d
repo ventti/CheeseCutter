@@ -42,20 +42,20 @@ DISPLAY-ONLY — the wave/pulse/filter PROGRAMS are edited via their graphs in P
 module ui.soundedit;
 
 import std.conv : to;
-import std.string : format, stripRight;
+import std.string : format, stripRight, leftJustify;
 import std.algorithm : max, min;
 import std.math : lround, log2, floor, ceil, abs;
 import derelict.sdl2.sdl;
 import com.fb : FONT_X, FONT_Y, keyjamBackground;
 import com.session : screen, video, state, song, mainui, insertUndo, UndoValue, Undoable;
-import com.shortcuts : Ctx;
+import com.shortcuts : Ctx, formatShortcuts;
 import com.palette : idx, Role, BaseColor;
 import ct.base : Song;
 static import ct.purge;
 import ui.window;
 import ui.input;
 import ui.button : Button;
-import ui.dialogs : ConfirmationDialog;
+import ui.dialogs : QueryDialog;
 import ui.ui : UI;
 import ui.menubar : MenuBar;
 import ui.palette : CommandPalette;
@@ -63,6 +63,28 @@ import ui.help;
 static import audio.player;
 static import audio.audio;
 static import audio.visualizer;
+
+extern(C) int sid_render_envelope_preview(ubyte attackDecay, ubyte sustainRelease,
+	int gateTicks, int multiplier, int restartTicks, ubyte* outTrace, int ticks) nothrow;
+
+int soundEditorStepTicks(int effectiveSpeed, int multiplier) pure nothrow @safe {
+	if(effectiveSpeed < 2) effectiveSpeed = 2;
+	if(multiplier < 1) multiplier = 1;
+	return (effectiveSpeed + 1) * multiplier;
+}
+
+int soundEditorDurationTicks(int value, bool rows, int effectiveSpeed, int multiplier)
+		pure nothrow @safe {
+	if(value < 1) value = 1;
+	return rows ? value * soundEditorStepTicks(effectiveSpeed, multiplier) : value;
+}
+
+// R40/R41 compile-time contracts. The implementation immediately below is deliberately
+// small and pure so the UI, headless usage driver and table-drag code share one definition
+// of Rows versus Ticks.
+static assert(soundEditorStepTicks(4, 2) == 10);
+static assert(soundEditorDurationTicks(4, true, 4, 2) == 40);
+static assert(soundEditorDurationTicks(4, false, 4, 2) == 4);
 
 // §16.2 REAL-TIME shared axis. The recorded bands (recAmp/recFreq/..), the Output
 // captureBuf and the playhead (recLen) are all indexed per PLAYER TICK, and the
@@ -80,17 +102,6 @@ private enum float SCREEN_FRAME_MS = 19.95f;   // PAL screen-frame period (ms)
 // knee on the sim/idle path. Real time, so it maps to the right number of ticks at
 // any multiplier (was a fixed 46-tick count = ~918 ms only correct at multiplier 1).
 private enum float NOMINAL_GATE_MS = 918.0f;
-// §19: exponential envelope level for the ADSR ESTIMATE curve, mirroring the
-// recording's exponential decay/release shape (audio.visualizer). frac 0->1 maps a
-// segment's progress to a level 1->0 with the same e^-5 curvature the recorder uses,
-// so the estimate curve, the hover Env% helper, and the recording all agree in shape.
-private float expEnvLevel(float frac) nothrow {
-	import std.math : exp;
-	if(frac <= 0.0f) return 1.0f;
-	if(frac >= 1.0f) return 0.0f;
-	immutable float e = exp(-5.0f);
-	return (exp(-5.0f * frac) - e) / (1.0f - e);
-}
 // §12.1: the post-trigger X span is no longer a fixed constant -- it AUTO-FITS the
 // note's full duration each frame (see SoundEditor.computeVisFrames). These are the
 // sane clamp bounds: a floor so a tiny sound isn't absurdly zoomed in, and a ceiling
@@ -172,6 +183,7 @@ private struct WaveSim {
 // across delay/unchanged rows), plus the frame the program loops back to.
 private struct WaveFrameSim {
 	int[] ctrlOf;       // effective control byte at each frame
+	int[] rowOf;        // wave-table row producing each frame
 	// §10.3 pitch program per frame from the wave-table transpose/arp column (wave1):
 	// transOf = the semitone value (relative offset, or the absolute note number when
 	// absOf is true); absOf = true when wave1 was an absolute tuning byte ($80+).
@@ -184,6 +196,46 @@ private struct WaveFrameSim {
 /// Full-screen visual Sound Editor (see module doc). v2 layout: left parameter
 /// column + stacked frame-aligned graph bands with one shared playhead + raw
 /// table-data strip. All read-only.
+// Stable, read-only state exposed for the headless usage tests.  Keep this
+// semantic (ticks/selection/source), rather than exposing rendering internals,
+// so tests describe what a user sees and can do.
+struct SoundEditorDebugState {
+	int tickMillis1000;
+	int trackStepTicks;
+	int visibleFrames;
+	int prerollTicks;
+	double viewStartTick, viewEndTick;
+	bool userZoomed, hasSelection, usesRecording;
+	int selectionStart, selectionEnd;
+	int cursorDirection;
+	int previewInstrument, previewNote;
+	bool durationRows;
+	int durationValue, gateHoldTicks, keyjamChannel;
+}
+
+struct SoundEditorControlDebug {
+	string actionId;
+	int x0, x1, row;
+	bool enabled;
+}
+
+struct SoundEditorWaveAddDebug {
+	bool visible, enabled;
+	int frame, x, y, close;
+	string reason;
+}
+
+struct SoundEditorWaveLoopDebug {
+	bool looped, stopped, startVisible, endVisible;
+	int startFrame, endFrame;
+	int startLeft, startRight, endLeft, endRight, top, bottom;
+}
+
+struct SoundEditorSweepLoopDebug {
+	bool looped, stopped, startVisible, endVisible;
+	int startLeft, startRight, endLeft, endRight, top, bottom;
+}
+
 class SoundEditor : Window, Undoable {
 	// All colours go through the semantic palette (com.palette): UI chrome via Role.*
 	// (idx), graph colours via named BaseColor.* — no magic indices anywhere.
@@ -204,11 +256,11 @@ class SoundEditor : Window, Undoable {
 	private enum int COL_TRACE    = BaseColor.lightgreen;
 	private enum int COL_LOOP     = BaseColor.orange;
 	private enum int COL_LOOPLINE = BaseColor.gray;
+	private enum int COL_TRACKSTEP = BaseColor.darkgray;
 	private enum int COL_PULSE_FILL = BaseColor.blue;
 	private enum int COL_PULSE_LINE = BaseColor.lightblue;
 	private enum int COL_FILT_LINE  = BaseColor.lightred;
 	private enum int COL_TRIGGER  = BaseColor.red;
-	private enum int COL_ESTIMATE = BaseColor.white;   // §19 white-dotted ADSR estimate
 	private enum int COL_STEPSEL  = BaseColor.white;   // §20 P4b-2 selected-step outline
 	private enum int COL_RESTART  = BaseColor.cyan;
 	private enum int COL_RSTFILL  = BaseColor.brown;
@@ -225,12 +277,12 @@ class SoundEditor : Window, Undoable {
 	private enum int COL_BOX_IDLE = BaseColor.gray;
 	private enum int COL_BOX_HOT  = BaseColor.yellow;
 	private enum int BOX_HIT_PX   = 5;   // horizontal grab zone around a box edge
+	private enum int DUR_HIT_PX   = FONT_X; // one text cell: mouse coordinates are cell-granular
 	private enum int END_HIT_PX   = 6;   // radius around a value endpoint handle
 	// §21 P4c loop lines usually sit ON a step boundary (a loop-back target = a step
 	// start), so the loop marker and a box edge share the same X. Split them by Y: the
 	// loop grip owns the TOP cell-ROW of the band, the resize edges everything below it.
 	// (Mouse input is cell-granular — 14px — so a sub-row strip would be unhittable.)
-	private enum int LOOP_GRIP_PX = FONT_Y;   // one character row (14px)
 
 	// §10.1 filter cutoff fill/line colour per active mode (b0 & 0x70), C64 palette
 	// indices in the standard order. -1 = no mode (filter off -> empty band).
@@ -253,6 +305,39 @@ class SoundEditor : Window, Undoable {
 		if(mode & 0x40) s ~= "HP";
 		return s.length ? s : "off";
 	}
+	// R58 uses one absolute cutoff axis. LP/BP/HP are response silhouettes around
+	// that same value, never separate value lanes.
+	struct FilterRegions {
+		int mode, cutoff, top, bottom, y;
+		bool lp, bp, hp;
+		int lpTop, lpBottom, bpTop, bpBottom, hpTop, hpBottom;
+	}
+	private int filterCutoffY(ref Geo g, int cutoff) {
+		int top, bottom; bandBox(g, 4, top, bottom);
+		int span = max(1, bottom - top - 1);
+		return bottom - 1 - cast(int)lround(
+			cast(double)clampInt(cutoff, 0, 2047) * span / 2047.0);
+	}
+	private int filterCutoffValue(ref Geo g, int cellY, bool clampValue = true) {
+		int top, bottom; bandBox(g, 4, top, bottom);
+		int span = max(1, bottom - top - 1);
+		int py = cellY * FONT_Y + FONT_Y / 2;
+		int value = cast(int)lround(cast(double)(bottom - 1 - py) * 2047 / span);
+		return clampValue ? clampInt(value, 0, 2047) : value;
+	}
+	private FilterRegions filterRegions(ref Geo g, int mode, int cutoff) {
+		FilterRegions r;
+		r.mode = mode & 0x70; r.cutoff = clampInt(cutoff, 0, 2047);
+		bandBox(g, 4, r.top, r.bottom);
+		r.y = filterCutoffY(g, r.cutoff);
+		r.lp = !!(r.mode & 0x10); r.bp = !!(r.mode & 0x20); r.hp = !!(r.mode & 0x40);
+		r.lpTop = r.y; r.lpBottom = r.bottom - 1;
+		int half = (r.bottom - r.top) / 6;
+		r.bpTop = max(r.top, r.y - half);
+		r.bpBottom = min(r.bottom - 1, r.y + half);
+		r.hpTop = r.top; r.hpBottom = r.y;
+		return r;
+	}
 
 	// §9.3 Wave band = 8 stacked SID control-bit lanes. Indexed by BIT NUMBER 0..7
 	// (b0 Gate .. b7 Noise); the lanes are stacked b7 at the TOP down to b0 at the
@@ -269,9 +354,17 @@ class SoundEditor : Window, Undoable {
 	// editable/write-back switch and the ADSR-curve mapping never use magic numbers.
 	private enum int ROW_ATTACK = 0, ROW_DECAY = 1, ROW_SUSTAIN = 2, ROW_RELEASE = 3,
 		ROW_WAVEFORM = 4, ROW_WAVEPTR = 5, ROW_PULSEPTR = 6, ROW_FILTPTR = 7,
-		ROW_RESTART = 8, ROW_GATE = 9, ROW_HRWAVE = 10, ROW_HRSR = 11;
-	private enum int PARAM_ROWS = 12;
+		ROW_RESTART = 8, ROW_GATE = 9, ROW_HRWAVE = 10, ROW_HRSR = 11,
+		ROW_JAMCHANNEL = 12, ROW_GATEHOLD = 13, ROW_DURATIONUNIT = 14;
+	private enum int PARAM_ROWS = 15;
 	private int paramCursor;
+	// R40/R41/R50: one explicit duration unit controls how sweep edges snap and how
+	// the fixed keyjam gate value is interpreted. Rows follow live speed/multiplier;
+	// Ticks are raw player calls. Defaulting to the legacy 50-tick authored preview
+	// preserves existing songs/gestures; the master flow explicitly selects 4 Rows.
+	private bool durationRows = false;
+	private int durationValue = 50;
+	private int keyjamChannel = 0;
 
 	// §19 P4a ADSR-curve drag: which handle (ADSR_*) the user grabbed on the ADSR band,
 	// and whether a handle drag is in progress. One insertUndo is taken at press
@@ -283,6 +376,15 @@ class SoundEditor : Window, Undoable {
 	private int  adsrHandle = -1;
 	private bool adsrMoved = false;    // a byte was actually written this gesture
 
+	// Silent pre-keyjam ADSR truth. The selected reSID backend renders this isolated
+	// trace; the cache changes only when its authored inputs change after a completed
+	// gesture. During a drag the previous trace remains visible and no render occurs.
+	private ubyte[] silentEnvPreview;
+	private int silentEnvGeneration = 0;
+	private int silentEnvIns = -1, silentEnvAd = -1, silentEnvSr = -1;
+	private int silentEnvGate = -1, silentEnvMult = -1, silentEnvBackend = -1;
+	private int silentEnvNote = -1;
+
 	// §20 P4b-1 pulse/filter program LEVEL drag: a vertical grab inside the Pulse
 	// (band 3) or Filter (band 4) plot region rewrites the SweepTable row active at
 	// the grabbed frame — its init byte b2 (pulse width 0..4095 nibble-swapped, or
@@ -293,17 +395,13 @@ class SoundEditor : Window, Undoable {
 	private int  sweepTable = -1;
 	private int  sweepRow = -1;
 	private bool sweepMoved = false;
-	// §20.2 shared-program fork prompt = WARN EVERY TIME. There is deliberately NO
-	// persistent "I already chose edit-shared" memory: every distinct edit of a shared
-	// program re-asks fork/edit-shared. Discrete edits (Ins/Del, mode chip) resolve the
-	// choice inside the dialog callback, so they need no state. A DRAG, however, can't
-	// pause mid-gesture for a modal: the first drag tick pops the prompt and cancels the
-	// drag, the user answers, then drags AGAIN to actually edit. This transient grant
-	// bridges only that answer->re-drag gap for ONE program, and is cleared on the next
-	// mouse release, so the following drag prompts afresh.
-	private bool sweepDragGrant;
-	private int sweepDragGrantTable = -1;
-	private int sweepDragGrantRow   = -1;
+	// Shared ownership is resolved non-modally on the first mutation: copy-on-write by
+	// default, or in-place only while the visible Linked edits mode is active.
+	// Copy-on-write is the safe default. Linked editing is explicit and scoped to the
+	// active sound; replacing one of its programmes or changing instrument resets it.
+	private int linkedEditKind = -1;   // 0 Pulse, 1 Filter, 2 Wave
+	private int linkedEditStart = -1;
+	private int[0x40] lastSweepForkMap;
 
 	// §20 P4b-2 SELECTED STEP: a plain CLICK (press+release, no motion) inside the Pulse
 	// (0) or Filter (1) band selects the SweepTable row active at that frame; a bright
@@ -335,6 +433,7 @@ class SoundEditor : Window, Undoable {
 	// b1 we edit; sweepResMoved gates the ONE undo snapshot per gesture (first drag tick).
 	private bool sweepResDragging = false;
 	private int  sweepResRow = -1;
+	private int  sweepResTargetRow = -1;
 	private bool sweepResMoved = false;
 
 	// §21 P4c step-BOX handles (ADSR-style, for the Pulse/Filter bands). A step is drawn
@@ -348,7 +447,19 @@ class SoundEditor : Window, Undoable {
 	private int  sweepDurTable = -1;
 	private int  sweepDurRow   = -1;
 	private int  sweepDurAnchorF = 0;
+	// Auto-Fit normally follows changing programme length. During one resize gesture
+	// that would move the axis between mouse-motion events and amplify/slow the next
+	// delta. Keep the press-time axis fixed until release so the edge follows the mouse.
+	private double sweepDurViewStart = 0, sweepDurViewEnd = 1;
+	private bool sweepDurViewLocked = false;
 	private bool sweepDurMoved = false;
+	private bool sweepDurUnitClipped = false;
+	// Preserve the authored (unwrapped) endpoint while a pulse duration changes. If the
+	// shorter duration would require an illegal slope, remember both values so mouse-up
+	// can explain the deterministic clamp instead of silently changing the graph shape.
+	private int  sweepDurTargetExit = 0;
+	private int  sweepDurLegalExit = 0;
+	private bool sweepDurClipped = false;
 	//  - ENDPOINT drag (a value handle at the step's start/end): START translates the
 	//    segment (init b2); END tilts it (slope b1 + direction). sweepEndIsEnd picks which.
 	private bool sweepEndDragging = false;
@@ -356,20 +467,44 @@ class SoundEditor : Window, Undoable {
 	private int  sweepEndRow   = -1;
 	private bool sweepEndIsEnd = false;
 	private bool sweepEndMoved = false;
-	//  - JOIN drag (only when a MULTI-block range is selected): sets every shared boundary
-	//    within the selected range to one value (left block END + right block START = level).
+	private int  sweepEndWinding = 0; // authored unwrapped exit minus visible wrapped exit
+	//  - JOIN drag (only when both adjacent blocks are selected): edits the one clicked
+	//    shared boundary (left END + right START), never unrelated joins in the range.
 	private bool sweepJoinDragging = false;
 	private bool sweepJoinMoved = false;
+	private int sweepJoinLeftRow = -1, sweepJoinRightRow = -1;
 	// §20 P4b-3 the filter mode chip cycles through the LP/BP/HP combos (§10.1) writing the
 	// first config row's b0 mode bits (0x70). This is the requested cycle order.
-	private static immutable int[7] FILTER_MODE_CYCLE =
-		[0x10, 0x20, 0x40, 0x30, 0x60, 0x50, 0x70];   // LP BP HP LP+BP BP+HP LP+HP all
+	// Wave control-bit editing is deliberately immediate: clicking a lane cell toggles
+	// that bit in the row producing the clicked frame. Unlike pulse/filter handles there
+	// is no separate selection gesture.
+	private static int decodeWaveControl(int raw, int carried) {
+		if(raw < 0x10) return carried;       // unchanged / delay override
+		if(raw >= 0xe0 && raw <= 0xef) return raw & 0x0f;
+		return raw;
+	}
+	private static ubyte encodeWaveControl(int ctrl) {
+		ctrl &= 0xff;
+		return cast(ubyte)(ctrl < 0x10 ? (0xe0 | ctrl) : ctrl);
+	}
+	private static bool representableWaveControl(int ctrl, out ubyte encoded) {
+		ctrl &= 0xff;
+		// $E0..$EF are the encoded-low form, while $F0..$FF are reserved.  A
+		// direct effective value in either range therefore has no lossless W2 byte.
+		if(ctrl >= 0xe0) { encoded = 0; return false; }
+		encoded = encodeWaveControl(ctrl);
+		return true;
+	}
 
 	// §11.2 the voice whose real recording feeds the bands this frame (-1 = none),
 	// and whether that voice actually has a recording (else the bands fall back to
 	// the dimmed table simulation). Recomputed at the top of update().
 	private int viewVoice = -1;
 	private bool useRec = false;
+	// Keep Fit stable across an edit-triggered reSID re-render. Cleared only by a new
+	// user-struck keyjam note, not by the internal preview render.
+	private int lockedKeyjamFit = 0;
+	private int seenKeyjamTrigger = 0;
 
 	// §14.1 mouse-hover probe: the last cell the pointer hovered (screen char-cells),
 	// and whether we have a hover position to consider. update() maps it to a frame
@@ -378,6 +513,200 @@ class SoundEditor : Window, Undoable {
 	// outside the plot region (so leaving the plot clears it).
 	private int hoverCellX = -1, hoverCellY = -1;
 	private bool hovering = false;
+	// Native Alt-H hover help owns the global status line. Keep the semantic target,
+	// not the pointer coordinates, so stationary motion never extends its timeout.
+	private string hoveredControlAction;
+	private static SDL_Cursor* sizeWeCursor;
+	private static SDL_Cursor* sizeNsCursor;
+	private static SDL_Cursor* sizeAllCursor;
+	private enum int CURSOR_NORMAL = 0, CURSOR_HORIZONTAL = 1,
+		CURSOR_VERTICAL = 2, CURSOR_BOTH = 3;
+	private int editCursor = CURSOR_NORMAL;
+
+	SoundEditorDebugState debugState() {
+		return SoundEditorDebugState(
+			cast(int)lround(tickMs * 1000.0), trackStepTicks(), visFrames,
+			prerollTicks, viewStartTick, viewEndTick, userZoomed,
+			hasSelection, useRec, selStartTick, selEndTick, editCursor,
+			inputKeyjam.previewInstrument(), inputKeyjam.previewNote(),
+			durationRows, durationValue, configuredGateTicks(), keyjamChannel + 1);
+	}
+
+	final bool commandEnabled(string actionId) {
+		int ins = clampedIns();
+		bool waveSelected = selectedWaveNormal(ins);
+		bool sweepSelected = selectedSweepTable >= 0 && selectedSweepRow >= 1;
+		bool filterSelected = selectedSweepTable == 1 && selectedSweepRow >= 1;
+		bool configSelected = filterSelected
+			&& (song.filterTable[selectedSweepRow * 4] & 0x80) != 0;
+		switch(actionId) {
+			case "se_zoom_out": case "se_zoom_in": case "se_fit": return true;
+			case "se_selection": return hasSelection;
+			case "se_add": return (sweepSelected && !sweepTableFull(selectedSweepTable))
+				|| waveSelected;
+			case "se_delete": return sweepSelected || waveSelected;
+			case "se_stop": return sweepSelected;
+			case "se_type": return filterSelected;
+			case "se_carry": return sweepSelected && !configSelected;
+			case "se_new": return song.tWave.seekTableEnd() + 7 <= 256
+				&& song.tPulse.seekTableEnd() <= 0x3e
+				&& song.tFilter.seekTableEnd() + 1 <= 0x3e;
+			case "se_wave_prev": return waveSelected
+				&& selectedWaveRow > song.instrumentTable[ins + 7 * 48];
+			case "se_wave_next": return waveSelected && selectedWaveRow + 1 <
+				waveCloseRow(song.instrumentTable[ins + 7 * 48]);
+			case "se_wave_1": case "se_wave_2": case "se_wave_loop": return waveSelected;
+			case "se_res_down": case "se_res_up": return configSelected;
+			case "se_lp": case "se_bp": case "se_hp": case "se_route":
+				return filterControlConfigRow(ins) >= 0;
+			case "se_start_down": case "se_start_up": case "se_end_down":
+			case "se_end_up": case "se_duration_down": case "se_duration_up":
+				return sweepSelected;
+			case "se_linked": return true;
+			case "se_octave_down": case "se_octave_up":
+			case "se_instrument_prev": case "se_instrument_next": return true;
+			default: return false;
+		}
+	}
+
+	private int selectedOwnershipKind(int ins) {
+		if(selectedSweepTable >= 0 && selectedSweepRow >= 1) return selectedSweepTable;
+		if(selectedWaveNormal(ins)) return 2;
+		return -1;
+	}
+	private int ownershipStart(int kind, int ins) {
+		if(kind == 0) return song.instrumentTable[ins + 5 * 48];
+		if(kind == 1) return song.instrumentTable[ins + 4 * 48];
+		if(kind == 2) return song.instrumentTable[ins + 7 * 48];
+		return -1;
+	}
+	private bool linkedEditActive(int kind, int ins) {
+		return kind >= 0 && linkedEditKind == 3 && linkedEditStart == ins;
+	}
+	private void toggleLinkedEdits() {
+		int ins = clampedIns();
+		if(linkedEditKind == 3 && linkedEditStart == ins)
+			linkedEditKind = linkedEditStart = -1;
+		else {
+			linkedEditKind = 3;
+			linkedEditStart = ins;
+		}
+		UI.statusline.display(linkedEditKind == 3 && linkedEditStart == ins
+			? "Linked edits active: all sounds using this programme will change."
+			: "Copy-on-write edits active.");
+	}
+	final string debugOwnershipMode() {
+		int ins = clampedIns();
+		return linkedEditKind == 3 && linkedEditStart == ins ? "linked" : "fork";
+	}
+
+	final SoundEditorControlDebug[] debugControls() {
+		Geo g = layout();
+		SoundEditorControlDebug[] result;
+		auto controls = zoomButtons(g);
+		// Enum values are stable action identities, not layout order. Report the
+		// controls in their visible left-to-right order so this semantic oracle
+		// verifies the same logical grouping a user sees.
+		bool[18] emitted;
+		foreach(_; 0 .. 18) {
+			int next = -1;
+			foreach(i, ref button; controls)
+				if(!emitted[i] && button.x0 >= 0
+						&& (next < 0 || button.x0 < controls[next].x0))
+					next = cast(int)i;
+			if(next < 0) break;
+			emitted[next] = true;
+			result ~= SoundEditorControlDebug(controlActionId(next),
+				controls[next].x0, controls[next].x1, controls[next].row,
+				controls[next].enabled);
+		}
+		if(filterModeChipVisible(g)) {
+			auto modes = filterModeButtons(clampedIns(), g);
+			static immutable string[3] ids = ["se_lp", "se_bp", "se_hp"];
+			foreach(i, ref button; modes)
+				result ~= SoundEditorControlDebug(ids[i], button.x0, button.x1,
+					button.row, button.enabled);
+		}
+		if(filterRouteChipVisible(g)) {
+			auto route = filterRouteButton(clampedIns(), g);
+			result ~= SoundEditorControlDebug("se_route", route.x0, route.x1, route.row,
+				route.enabled);
+		}
+		return result;
+	}
+
+	final SoundEditorWaveAddDebug debugWaveAdd() {
+		Geo g = layout();
+		return waveAddTarget(clampedIns(), g);
+	}
+
+	final SoundEditorWaveLoopDebug debugWaveLoopGeometry() {
+		Geo g = layout();
+		return waveLoopGeometry(clampedIns(), g);
+	}
+
+	final SoundEditorSweepLoopDebug debugSweepLoopGeometry(int table) {
+		SoundEditorSweepLoopDebug result;
+		if(table < 0 || table > 1) return result;
+		Geo g = layout();
+		int ins = clampedIns();
+		int start = song.instrumentTable[ins + (table == 0 ? 5 : 4) * 48];
+		SweepSim sim = table == 0 ? simPulse(start) : simFilter(start);
+		auto shape = sweepLoopGeometry(table, g, sim);
+		result.looped = shape.looped; result.stopped = shape.stopped;
+		result.startVisible = shape.startVisible; result.endVisible = shape.endVisible;
+		result.startLeft = shape.startLeft; result.startRight = shape.startRight;
+		result.endLeft = shape.endLeft; result.endRight = shape.endRight;
+		result.top = shape.top; result.bottom = shape.bottom;
+		return result;
+	}
+
+	struct EnvelopePreviewDebug {
+		int generation;
+		int note;
+		const(ubyte)[] envelope;
+	}
+
+	// Headless read-only oracle for the same production trace drawAdsrBand consumes.
+	final EnvelopePreviewDebug debugEnvelopePreview(int ticks) {
+		if(ticks < 1) ticks = 1;
+		if(ticks > MAX_CONTENT) ticks = MAX_CONTENT;
+		ensureSilentEnvelopePreview(ticks);
+		int n = min(ticks, cast(int)silentEnvPreview.length);
+		return EnvelopePreviewDebug(silentEnvGeneration, silentEnvNote,
+			silentEnvPreview[0 .. n]);
+	}
+
+	struct FilterStepDebug {
+		int row, mode, frame0, frame1, x0, x1, cutoff0, cutoff1, y0, y1, handles;
+	}
+	final FilterRegions debugFilterShape(int mode, int cutoff) {
+		Geo g = layout();
+		return filterRegions(g, mode, cutoff);
+	}
+	// Read-only oracle for the exact one-axis step geometry. Coordinates are UI cells
+	// so usage tests feed the single production handle back through hover/drag.
+	final FilterStepDebug[] debugFilterShapes() {
+		FilterStepDebug[] result;
+		int ins = clampedIns();
+		SweepSim s = simFilter(song.instrumentTable[ins + 4 * 48]);
+		Geo g = layout();
+		bool[0x40] seen;
+		foreach(index, row; s.rowOf) {
+			if(row < 1 || row >= 0x40 || seen[row]
+					|| (song.filterTable[row * 4] & 0x80)) continue;
+			seen[row] = true;
+			int a = cast(int)index, b = a + 1;
+			while(b < s.rowOf.length && s.rowOf[b] == row) ++b;
+			int mode = a < s.modeOf.length ? s.modeOf[a] & 0x70 : 0;
+			int ys = filterCutoffY(g, s.val[a]);
+			int ye = filterCutoffY(g, s.val[b - 1]);
+			result ~= FilterStepDebug(row, mode, a, b,
+				xForFrame(g, a) / FONT_X, xForFrame(g, b) / FONT_X,
+				s.val[a], s.val[b - 1], ys / FONT_Y, ye / FONT_Y, 1);
+		}
+		return result;
+	}
 
 	// §12 dynamic X window, computed ONCE per draw at the top of update() and threaded
 	// through xForFrame + every band so they all share the exact same zoom. visFrames
@@ -445,6 +774,33 @@ class SoundEditor : Window, Undoable {
 	// True while a held button (pressedBtn) still has the pointer over it — drag off
 	// and the pressed style drops (the release then cancels instead of firing).
 	private bool pressedOver = false;
+	// Filter-gutter buttons use the same arm-on-press / fire-on-release contract as
+	// the graph controls.  The semantic action id keeps layout, hover and release
+	// hit-testing independent of the currently rendered label.
+	private string pressedFilterAction = "";
+	private bool pressedFilterOver = false;
+	// Wave-program row selected by the graph control strip. This is an absolute
+	// wavetable row, matching $7F loop targets and the raw-table presentation.
+	private int selectedWaveRow = -1;
+	private bool waveGraphDragging = false;
+	private bool waveGraphMoved = false;
+	private bool waveGraphAuthorizing = false;
+	private int waveGraphRow = -1;
+	private int waveGraphField = 0; // 0 pitch (vertical), 1 delay (horizontal)
+	private int waveGraphAnchorX = 0, waveGraphAnchorValue = 0;
+	private bool waveLoopDragging = false;
+	private bool waveLoopAuthorizing = false;
+	private bool waveLoopMoved = false;
+	private int waveLoopCloseRow = -1;
+	private int waveLoopIns = -1;
+	// A control-lane drag is a paint gesture: its first cell chooses set/clear and every
+	// later cell receives that same value. This makes backtracking idempotent and gives
+	// the complete stroke one undo snapshot and one release-time preview refresh.
+	private bool waveBitPainting = false;
+	private bool waveBitChanged = false;
+	private bool waveBitDesired = false;
+	private int waveBitPaintIns = -1;
+	private int waveBitLastRow = -1, waveBitLastBit = -1;
 
 	// §17.4 horizontal-scrollbar drag state. A left-press ON the scrollbar row grabs
 	// the thumb; while dragging, the viewport start follows the pointer so the thumb
@@ -462,6 +818,42 @@ class SoundEditor : Window, Undoable {
 	this(Rectangle a) {
 		super(a);
 		inputKeyjam = new InputKeyjam();
+		inputKeyjam.setKeyjamVoice(keyjamChannel);
+		inputKeyjam.ensurePreviewBaseline(clampedIns());
+		inputKeyjam.setFixedGateTicks(configuredGateTicks());
+		seenKeyjamTrigger = audio.player.keyjamNoteTrigger;
+	}
+
+	// A newly opened Sound Editor always starts on the leftmost SID voice. The
+	// choice remains editable for the duration of that editor session.
+	void beginSession() {
+		keyjamChannel = 0;
+		selectedWaveRow = -1;
+		linkedEditKind = linkedEditStart = -1;
+		hoveredControlAction = "";
+		syncKeyjamConfiguration();
+	}
+
+	// Read-only semantic timing oracle used by the ordered headless usage test.
+	int[] debugWaveRows(int frames = 64) {
+		WaveFrameSim s = simWaveFrames(song.instrumentTable[clampedIns() + 7 * 48],
+			waveTimeForInstrument(clampedIns()));
+		return s.rowOf[0 .. min(frames, cast(int)s.rowOf.length)].dup;
+	}
+	int[] debugWaveControls(int frames = 64) {
+		WaveFrameSim s = simWaveFrames(song.instrumentTable[clampedIns() + 7 * 48],
+			waveTimeForInstrument(clampedIns()));
+		return s.ctrlOf[0 .. min(frames, cast(int)s.ctrlOf.length)].dup;
+	}
+	int[] debugWaveTranspose(int frames = 64) {
+		WaveFrameSim s = simWaveFrames(song.instrumentTable[clampedIns() + 7 * 48],
+			waveTimeForInstrument(clampedIns()));
+		return s.transOf[0 .. min(frames, cast(int)s.transOf.length)].dup;
+	}
+	int[2] debugWaveLoop() {
+		WaveFrameSim s = simWaveFrames(song.instrumentTable[clampedIns() + 7 * 48],
+			waveTimeForInstrument(clampedIns()));
+		return [s.loopFrame, s.loopPeriod];
 	}
 
 	override @property string contextId() { return Ctx.soundEditor; }
@@ -483,6 +875,13 @@ class SoundEditor : Window, Undoable {
 		int rawTopRow;          // top border row of the raw-data strip (cells)
 		int controlRow;         // §17.3 zoom-control button row (cells)
 		int scrollRow;          // reserved for the future horizontal scrollbar (blank)
+	}
+
+	private struct SweepLoopGeometry {
+		bool looped, stopped;
+		bool startVisible, endVisible;
+		int startLeft, startRight, endLeft, endRight;
+		int top, bottom;
 	}
 
 	private Geo layout() {
@@ -546,7 +945,7 @@ class SoundEditor : Window, Undoable {
 		int aF = cast(int)lround(ATTACK_TIME_MS[attack]         / tickMs);
 		int dF = cast(int)lround(DECAY_RELEASE_TIME_MS[decay]   / tickMs);
 		int rF = cast(int)lround(DECAY_RELEASE_TIME_MS[release] / tickMs);
-		int vf = aF + dF + nominalGateFrames + rF;
+		int vf = nominalGateFrames + rF;
 
 		// §15.2(1) Recorded extent FITS the window when we have real audio — the axis
 		// tracks the ACTUAL recording, NOT the (often huge) ADSR estimate. Do NOT max()
@@ -562,10 +961,71 @@ class SoundEditor : Window, Undoable {
 			else
 				vf = rl;                // still sounding: fit to the growing record head
 		}
+		// A vivid recording owns only the sampled trace, not the editor geometry. Keep
+		// every authored pulse/filter boundary reachable after keyjam too; otherwise a
+		// short release can truncate a longer program and make its later boxes vanish.
+		// This deliberately does not max against the nominal ADSR estimate above.
+		int pe = pulseProgramExtent(song.instrumentTable[ins + 5 * 48]);
+		if(pe > vf) vf = pe;
+		int fe = filterProgramExtent(song.instrumentTable[ins + 4 * 48]);
+		if(fe > vf) vf = fe;
+		int we = waveProgramExtent(song.instrumentTable[ins + 7 * 48], waveTimeForInstrument(ins));
+		if(we > vf) vf = we;
 
 		if(vf < MIN_VIS) vf = MIN_VIS;
 		if(vf > MAX_VIS) vf = MAX_VIS;
 		return vf;
+	}
+
+	private int pulseProgramExtent(int startRow) {
+		if(startRow <= 0 || startRow >= 0x40) return 0;
+		bool[0x40] visited;
+		int row = startRow, extent = 0;
+		while(row >= 1 && row < 0x40 && !visited[row]) {
+			visited[row] = true;
+			extent += (song.pulseTable[row * 4] & 0x7f) + 1;
+			int jump = song.pulseTable[row * 4 + 3];
+			if(jump == 0) row++;
+			else if(jump <= 0x3f) row = jump;
+			else break;
+		}
+		return extent;
+	}
+
+	private int filterProgramExtent(int startRow) {
+		if(startRow <= 0 || startRow >= 0x40) return 0;
+		bool[0x40] visited;
+		int row = startRow, extent = 0;
+		while(row >= 1 && row < 0x40 && !visited[row]) {
+			visited[row] = true;
+			ubyte b0 = song.filterTable[row * 4];
+			extent += (b0 & 0x80) ? 1 : (b0 & 0x7f) + 1;
+			int jump = song.filterTable[row * 4 + 3];
+			if(jump == 0) row++;
+			else if(jump <= 0x3f) row = jump;
+			else break;
+		}
+		return extent;
+	}
+
+	private int waveProgramExtent(int startRow, int waveTime) {
+		int close = waveCloseRow(startRow);
+		if(close < startRow) return 0;
+		WaveFrameSim s = simWaveFrames(startRow, waveTime, MAX_VIS);
+		if(s.loopFrame < 0) return 0;
+		if(song.waveTable[close] == 0x7f)
+			return s.loopFrame + max(1, s.loopPeriod);
+		// $7E emits no value. Its visual terminal cadence is the simulator period or
+		// the programme's longest explicit row-delay cadence, whichever is authored
+		// longer. This derives Wave A's four-tick tail from its $04 delay while a fresh
+		// one-row speed-0 programme remains exactly one tick; there is no fixed tail.
+		int terminalPeriod = s.loopPeriod;
+		foreach(row; startRow .. close) {
+			int delay = song.waveTable[row + 256];
+			if(delay >= 1 && delay <= 0x0f && delay > terminalPeriod)
+				terminalPeriod = delay;
+		}
+		return s.loopFrame + max(1, terminalPeriod);
 	}
 
 	// §17.3 Right-hand extent the viewport may zoom/scroll out to. Independent of the
@@ -579,7 +1039,7 @@ class SoundEditor : Window, Undoable {
 		int aF = cast(int)lround(ATTACK_TIME_MS[attack]       / tickMs);
 		int dF = cast(int)lround(DECAY_RELEASE_TIME_MS[decay]  / tickMs);
 		int rFmax = cast(int)lround(DECAY_RELEASE_TIME_MS[15]  / tickMs);
-		int cm = aF + dF + nominalGateFrames + rFmax;
+		int cm = nominalGateFrames + rFmax;
 		if(cm < visFrames) cm = visFrames;   // never narrower than the fitted note
 		if(cm > MAX_CONTENT) cm = MAX_CONTENT;
 		return cm;
@@ -663,9 +1123,8 @@ class SoundEditor : Window, Undoable {
 	// §13.1(b) The full TEXT backdrop of the Sound Editor: frame, title row (with the
 	// instrument NN + name, §13.3), Octave, param column, band text-labels, zoom scale
 	// label, the param/graph separator, and the raw-data strip. Emits NO overlay (ol*)
-	// pixels, so it is safe to draw as the sole backdrop under chromeActive() (behind a
-	// dialog/menu/palette). On the normal path the graph bands + axis lines + playhead
-	// are layered on top afterwards.
+	// pixels. Graph bands + axes + playhead are layered on top afterwards; foreground
+	// menus/dialogs mask only their own rectangles in com.fb.
 	private void drawTextChrome(int ins, ref Geo g) {
 		drawFrame(area);
 
@@ -690,16 +1149,24 @@ class SoundEditor : Window, Undoable {
 		if(cast(int)name.length > avail) name = name[0 .. avail];
 		screen.cprint(area.x + 2, area.y, COL_TITLE, 0, prefix ~ name ~ suffix);
 
-		// Octave kept in the row below (nothing else there now).
+		// Session audition state stays visible: selected SID voice, fixed gate duration,
+		// active unit and its resolved tick count. This is state, not a hidden preference.
 		screen.cprint(area.x + 2, area.y + 1, COL_LABEL, 0, "Octave");
 		screen.cprint(area.x + 9, area.y + 1, COL_VALUE, 0, format("%d", state.octave));
+		string hold = durationRows
+			? format("%d Rows = %d Ticks", durationValue, configuredGateTicks())
+			: format("%d Ticks", durationValue);
+		screen.cprint(area.x + 13, area.y + 1, COL_LABEL, 0, "Keyjam Ch");
+		screen.cprint(area.x + 23, area.y + 1, COL_VALUE, 0, format("%d", keyjamChannel + 1));
+		screen.cprint(area.x + 27, area.y + 1, COL_LABEL, 0, "Gate high");
+		screen.cprint(area.x + 37, area.y + 1, COL_VALUE, 0, hold);
 
 		// §12.2/§16.2 unobtrusive scale label so the current zoom is legible. Seconds
 		// use the REAL tick duration, so the same note reads the SAME seconds at any
 		// multiplier (visFrames doubles at mult=2, tickMs halves -> product constant).
 		float secs = visFrames * tickMs / 1000.0f;
 		screen.cprint(g.labelX, area.y + 2, COL_LABEL, 0,
-					  format("scale 0-%d f (~%.1fs)", visFrames, secs));
+					  format("scale 0-%d Ticks (~%.1fs)", visFrames, secs));
 
 		// Vertical separator between the param column and the graph stack.
 		for(int y = area.y + 2; y <= g.rawTopRow - 1; y++)
@@ -721,11 +1188,22 @@ class SoundEditor : Window, Undoable {
 	override void update() {
 		// v2: keep note routing but never the blue keyjam tint on this screen.
 		keyjamBackground = false;
+		if(mainui !is null && (mainui.dialogActive
+				|| (mainui.menubar !is null && mainui.menubar.active)
+				|| (mainui.palette !is null && mainui.palette.active)))
+			setEditCursor(CURSOR_NORMAL);
 		// We drive our own overlay each frame; make sure no stale single-slot scope
 		// trace lingers underneath the bands.
 		video.clearScopeTrace();
 
 		int ins = clampedIns();
+		inputKeyjam.ensurePreviewBaseline(ins);
+		inputKeyjam.setKeyjamVoice(keyjamChannel);
+		inputKeyjam.setFixedGateTicks(configuredGateTicks());
+		if(audio.player.keyjamNoteTrigger != seenKeyjamTrigger) {
+			seenKeyjamTrigger = audio.player.keyjamNoteTrigger;
+			lockedKeyjamFit = 0; // a genuinely new played note establishes a new scale
+		}
 
 		// §16.2 refresh the real-time axis unit from the live multiplier BEFORE any
 		// ms<->tick conversion (computeVisFrames, ADSR sim, scale label, probe) so
@@ -733,8 +1211,9 @@ class SoundEditor : Window, Undoable {
 		int mult = audio.audio.multiplier;
 		if(mult < 1) mult = 1;
 		tickMs = SCREEN_FRAME_MS / mult;
-		// estimate sustain hold, in axis units = 50 "frames" as shown on the scale
-		nominalGateFrames = 50;
+		// The estimate and silent reSID render use the same configured gate-high duration
+		// as an audible keyjam, so the authored ADSR curve and audition share one timeline.
+		nominalGateFrames = configuredGateTicks();
 
 		Geo g = layout();
 
@@ -748,7 +1227,7 @@ class SoundEditor : Window, Undoable {
 		// §12.1 auto-fit the shared X window to the note's full duration, ONCE per draw,
 		// then thread visFrames/totalFrames through xForFrame + every band so they all
 		// share the exact same zoom (they'd misalign if recomputed per band).
-		visFrames = computeVisFrames(ins);
+		visFrames = lockedKeyjamFit > 0 ? lockedKeyjamFit : computeVisFrames(ins);
 		contentMaxFrames = computeContentMax(ins);   // §17.3 zoom/scroll-out reaches the release tail
 		prerollTicks = restartFramesFor(ins);   // thin restart strip -> graphs start at the left edge
 		totalFrames = prerollTicks + visFrames;
@@ -756,24 +1235,13 @@ class SoundEditor : Window, Undoable {
 		// §17.1 refresh the viewport over the (possibly changed) note extent: keep the
 		// user's zoom until they hit Fit, else auto-fit to the whole note. Then derive
 		// the integer visible-frame bounds every band loop clips to.
-		if(userZoomed) clampViewport();
+		if(sweepDurDragging && sweepDurViewLocked) {
+			viewStartTick = sweepDurViewStart;
+			viewEndTick = sweepDurViewEnd;
+		} else if(userZoomed) clampViewport();
 		else fitViewport();
 		viewFrameLo = cast(int)floor(viewStartTick);
 		viewFrameHi = cast(int)ceil(viewEndTick) + 1;
-
-		// v3 (§8.1) / §13.1(b): higher-Z chrome (a modal dialog/pop-up, an open menu
-		// dropdown, or the command palette) must render UNOBSTRUCTED. The com.fb overlay
-		// is a post-composite PIXEL layer drawn on top of ALL text cells, so any graph
-		// pixels would bleed over that chrome. Yield the pixel layer (olClear + no ol*
-		// this frame) BUT still repaint the full TEXT chrome so the Sound Editor — never
-		// the classic tables or stale content — is the backdrop behind the dialog/menu.
-		// The chrome (drawMenu / dialog.update, both text) is drawn after us and shows
-		// cleanly over our text cells, exactly like the classic editor.
-		if(chromeActive()) {
-			video.olClear();
-			drawTextChrome(ins, g);
-			return;
-		}
 
 		// Rebuild the overlay draw-list from scratch (all bands + the playhead).
 		video.olClear();
@@ -794,12 +1262,19 @@ class SoundEditor : Window, Undoable {
 		drawAdsrBand(ins, g);
 		drawBandAxis(g, 2);
 		drawFreqBand(ins, g);
+		drawSelectedWaveRow(ins, g);
+		drawWaveAddTarget(ins, g);
+		drawWaveLoopIndicators(ins, g);
 		drawBandAxis(g, 3);
 		drawPulseBand(ins, g);
 		drawBandAxis(g, 4);
 		drawFilterBand(ins, g);
 		drawBandAxis(g, 5);
 		drawWaveBand(ins, g);
+
+		// Tracker-row grid sits above band fills but below the semantic markers
+		// (restart, note trigger, selection and playhead), so those remain dominant.
+		drawTrackStepGrid(g);
 
 		// §13.4 restart marker: a vertical line at the START of the restart phase
 		// (frame -restartFrames, the actual hard/soft/3-frame restart length for this
@@ -849,17 +1324,9 @@ class SoundEditor : Window, Undoable {
 		// §21 P4c interactive step box (duration edges + ramp handles) on the hovered step,
 		// drawn AFTER the probe so its YELLOW hot edge shows on top of the hover line.
 		drawSweepStepBox(ins, g);
-	}
-
-	// True while any higher-Z chrome is up (§8.1): a modal dialog/pop-up, an open
-	// menu dropdown, or the command palette. Used to yield the pixel overlay so the
-	// chrome renders unobstructed. All three are read-only queries.
-	private bool chromeActive() {
-		if(mainui is null) return false;
-		if(mainui.dialogActive) return true;
-		if(mainui.menubar !is null && mainui.menubar.active) return true;
-		if(mainui.palette !is null && mainui.palette.active) return true;
-		return false;
+		// Authored LOOP/END triangles are the final graph chrome.  Their one-cell filled
+		// silhouette must remain exact even when the closing step is selected.
+		drawSweepLoopIndicatorsForInstrument(ins, g);
 	}
 
 	// §11.2 Choose the voice whose real SID recording should drive the bands for the
@@ -898,7 +1365,8 @@ class SoundEditor : Window, Undoable {
 	// divider and the white playhead. Used in BOTH the recording and sim paths (the
 	// real audio repeats the looped section on the same period the sim computes).
 	private enum int MIN_LOOP_PX = 6;   // keep loop lines subtle: never closer than this
-	private void drawLoopLines(ref Geo g, int topPx, int botPx, int loopFrame, int period, int n) {
+	private void drawLoopLines(ref Geo g, int topPx, int botPx, int loopFrame, int period,
+			int n) {
 		// A period < 2 is a single-row "hold" (waveform sustained), not a repeating
 		// section worth marking — skip it so it doesn't draw a line every frame.
 		if(loopFrame < 0 || period < 2) return;
@@ -908,11 +1376,139 @@ class SoundEditor : Window, Undoable {
 			int x = xForFrame(g, f);
 			if(lastX > -1_000_000 && x - lastX < MIN_LOOP_PX) continue; // stay subtle, no comb
 			video.olVLine(x, topPx, botPx, COL_LOOPLINE);
-			// §21 P4c grab GRIP at the top: the loop is dragged from this top strip, leaving
-			// the rest of the line free for the step-box resize edges that share this X.
-			video.olFillRect(x - 1, topPx, 3, LOOP_GRIP_PX, COL_LOOP);
 			lastX = x;
 		}
+	}
+
+	private SweepLoopGeometry sweepLoopGeometry(int table, ref Geo g, ref SweepSim s) {
+		SweepLoopGeometry result;
+		int band = table == 0 ? 3 : 4;
+		int topPx, botPx; bandBox(g, band, topPx, botPx);
+		result.top = topPx;
+		result.bottom = min(botPx, topPx + FONT_Y);
+		result.looped = s.loopFrame >= 0 && s.loopPeriod >= 1;
+		result.stopped = !result.looped && s.stops
+			&& sweepProgramSteps(table, clampedIns()).length >= 2;
+		if(result.looped) {
+			int startFrame = s.loopFrame;
+			int endFrame = s.loopFrame + s.loopPeriod;
+			// xForFrame deliberately clamps to the viewport rails.  Gate the authored
+			// frame first so an off-screen triangle can never appear or become hittable
+			// at a rail merely because of that clamp.
+			if(frameInView(startFrame)) {
+				int startEdge = xForFrame(g, startFrame);
+				result.startLeft = startEdge;
+				result.startRight = startEdge + FONT_X;
+				result.startVisible = result.startRight > g.plotX0px
+					&& result.startLeft < g.plotX0px + g.plotWpx;
+			}
+			if(frameInView(endFrame)) {
+				int endEdge = xForFrame(g, endFrame);
+				result.endLeft = endEdge - FONT_X;
+				result.endRight = endEdge;
+				result.endVisible = result.endRight > g.plotX0px
+					&& result.endLeft < g.plotX0px + g.plotWpx;
+			}
+		} else if(result.stopped) {
+			int endFrame = min(cast(int)s.val.length, visFrames);
+			if(frameInView(endFrame)) {
+				int endEdge = xForFrame(g, endFrame);
+				result.endLeft = endEdge - FONT_X;
+				result.endRight = endEdge;
+				result.endVisible = result.endRight > g.plotX0px
+					&& result.endLeft < g.plotX0px + g.plotWpx;
+			}
+		}
+		return result;
+	}
+
+	private void drawFilledInwardTriangle(int left, int right, int top, int bottom,
+			bool pointsRight) {
+		int width = right - left, height = bottom - top;
+		if(width < 1 || height < 1) return;
+		int maxDistance = max(1, (height - 1) / 2);
+		foreach(dy; 0 .. height) {
+			int distance = min(dy, height - 1 - dy);
+			int reach = clampInt(cast(int)lround(
+				cast(double)distance * (width - 1) / maxDistance), 0, width - 1);
+			if(pointsRight) video.olHLine(left, left + reach, top + dy, COL_LOOP);
+			else video.olHLine(right - 1 - reach, right - 1, top + dy, COL_LOOP);
+		}
+	}
+
+	private SoundEditorWaveLoopDebug waveLoopGeometry(int ins, ref Geo g) {
+		SoundEditorWaveLoopDebug result;
+		result.startFrame = result.endFrame = -1;
+		int topPx, botPx; bandBox(g, 2, topPx, botPx);
+		// Mouse input arrives in character cells.  Keep the one-character marker and
+		// its hit box on that same grid so every visible pixel has a reachable cell.
+		result.top = ((topPx + FONT_Y - 1) / FONT_Y) * FONT_Y;
+		result.bottom = result.top + FONT_Y;
+		int start = song.instrumentTable[ins + 7 * 48];
+		int close = waveCloseRow(start);
+		if(close < start) return result;
+		WaveFrameSim s = simWaveFrames(start, waveTimeForInstrument(ins), MAX_VIS);
+		result.looped = song.waveTable[close] == 0x7f && s.loopFrame >= 0;
+		result.stopped = song.waveTable[close] == 0x7e && s.loopFrame >= 0;
+		if(!result.looped && !result.stopped) return result;
+		result.endFrame = waveProgramExtent(start, waveTimeForInstrument(ins));
+		if(result.looped) result.startFrame = s.loopFrame;
+		if(result.looped && frameInView(result.startFrame)) {
+			int edge = xForFrame(g, result.startFrame);
+			result.startLeft = (edge / FONT_X) * FONT_X;
+			result.startRight = result.startLeft + FONT_X;
+			result.startVisible = result.startRight > g.plotX0px
+				&& result.startLeft < g.plotX0px + g.plotWpx;
+		}
+		if(frameInView(result.endFrame)) {
+			int edge = xForFrame(g, result.endFrame);
+			result.endLeft = (max(0, edge - 1) / FONT_X) * FONT_X;
+			result.endRight = result.endLeft + FONT_X;
+			result.endVisible = result.endRight > g.plotX0px
+				&& result.endLeft < g.plotX0px + g.plotWpx;
+		}
+		return result;
+	}
+
+	private void drawWaveLoopIndicators(int ins, ref Geo g) {
+		auto shape = waveLoopGeometry(ins, g);
+		if(shape.startVisible)
+			drawFilledInwardTriangle(shape.startLeft, shape.startRight,
+				shape.top, shape.bottom, true);
+		if(shape.endVisible)
+			drawFilledInwardTriangle(shape.endLeft, shape.endRight,
+				shape.top, shape.bottom, false);
+	}
+
+	private int waveLoopHandleAt(int ins, ref Geo g, int cellX, int cellY) {
+		auto shape = waveLoopGeometry(ins, g);
+		int px = cellX * FONT_X + FONT_X / 2;
+		int py = cellY * FONT_Y + FONT_Y / 2;
+		if(py < shape.top || py >= shape.bottom) return -1;
+		if(shape.startVisible && px >= shape.startLeft && px < shape.startRight) return 0;
+		if(shape.endVisible && px >= shape.endLeft && px < shape.endRight) return 1;
+		return -1;
+	}
+
+	private void drawSweepLoopIndicators(int table, ref Geo g, ref SweepSim s) {
+		auto shape = sweepLoopGeometry(table, g, s);
+		if(shape.startVisible)
+			drawFilledInwardTriangle(shape.startLeft, shape.startRight,
+				shape.top, shape.bottom, true);
+		if(shape.endVisible)
+			drawFilledInwardTriangle(shape.endLeft, shape.endRight,
+				shape.top, shape.bottom, false);
+	}
+
+	private void drawSweepLoopIndicatorsForInstrument(int ins, ref Geo g) {
+		int pp = song.instrumentTable[ins + 5 * 48];
+		if(pp < 0x80) {
+			SweepSim pulse = simPulse(pp);
+			drawSweepLoopIndicators(0, g, pulse);
+		}
+		int fp = song.instrumentTable[ins + 4 * 48];
+		SweepSim filter = simFilter(fp);
+		drawSweepLoopIndicators(1, g, filter);
 	}
 
 	// A per-frame value staircase (pulse width or filter cutoff) as an area fill +
@@ -975,7 +1571,8 @@ class SoundEditor : Window, Undoable {
 		// leaving Shift-Left/Right free to pan on every row).
 		string[PARAM_ROWS] labels = [
 			"Attack", "Decay", "Sustain", "Release", "Waveform", "Wave ptr",
-			"Pulse ptr", "Filter ptr", "Restart", "Arpeggio speed", "HR wave", "HR SR"
+			"Pulse ptr", "Filter ptr", "Restart", "Arpeggio speed", "HR wave", "HR SR",
+			"Keyjam channel", "Gate hold", "Duration unit"
 		];
 		string[PARAM_ROWS] vals;
 		vals[ROW_ATTACK]  = format("%X %s", attack,  nibbleBar(attack));
@@ -990,6 +1587,11 @@ class SoundEditor : Window, Undoable {
 		vals[ROW_GATE]    = format("%X %s", arpSpeed, nibbleBar(arpSpeed));
 		vals[ROW_HRWAVE]  = format("$%02X", hrw);
 		vals[ROW_HRSR]    = format("$%02X", hsr);
+		vals[ROW_JAMCHANNEL] = format("Voice %d", keyjamChannel + 1);
+		vals[ROW_GATEHOLD] = durationRows
+			? format("%d R = %d T", durationValue, configuredGateTicks())
+			: format("%d T", durationValue);
+		vals[ROW_DURATIONUNIT] = durationRows ? "Rows" : "Ticks";
 
 		int y0 = area.y + 3;
 		immutable int valX = g.paramX + 16;   // wide enough for the "Arpeggio speed" label
@@ -1012,9 +1614,75 @@ class SoundEditor : Window, Undoable {
 			screen.cprint(valX, y, vc, 0, v);
 		}
 
-		// §19 P4a on-screen key hint (one row below the param block, above the probe box).
+		// One context-sensitive action hint below the parameter block. Modern synths expose
+		// the current target and gesture before an edit; keep that predictability without
+		// adding non-retro tooltips or another panel. Selection takes precedence over hover.
 		int hintY = y0 + PARAM_ROWS;
-		screen.cprint(g.paramX, hintY, COL_LABEL, 0, "L/R edit  Shift+L/R pan");
+		string hint = "L/R edit  Shift+L/R pan";
+		int hintCol = COL_LABEL;
+		if(selectedSweepTable >= 0 && selectedSweepRow >= 1) {
+			string kind = selectedSweepTable == 0 ? "Pulse" : "Filter";
+			if(sweepMultiSelected())
+				hint = format("%s $%02X-$%02X: drag joins", kind,
+					selectedSweepRow, selectedSweepRowEnd);
+			else {
+				ubyte[] t = selectedSweepTable == 0 ? song.pulseTable : song.filterTable;
+				if(selectedSweepTable == 1 && (t[selectedSweepRow * 4] & 0x80)) {
+					int cfgMode = t[selectedSweepRow * 4] & 0x70;
+					int cfgRes = t[selectedSweepRow * 4 + 1] >> 4;
+					int cfgMask = t[selectedSweepRow * 4 + 1] & 0x0f;
+					hint = format("Filter $%02X CFG M%02X Res %X Rt %X",
+						selectedSweepRow, cfgMode, cfgRes, cfgMask);
+					hintCol = COL_TITLE;
+					goto hintReady;
+				}
+				int ticks = (t[selectedSweepRow * 4] & 0x7f) + 1;
+				int wraps = selectedSweepTable == 0
+					? sweepStepWinding(0, selectedSweepRow) / 4096 : 0;
+				string wrapCue = wraps ? format(" Wraps %+d", wraps) : "";
+				// Put the exceptional/winding state before ordinary duration text so the
+				// narrow retro parameter column can never clip away the important warning.
+				if(durationRows) hint = format("%s $%02X:%s %d Ticks (%s Rows)", kind,
+					selectedSweepRow, wrapCue, ticks,
+					ticks % trackStepTicks() ? "partial" : format("%d", ticks / trackStepTicks()));
+				else hint = format("%s $%02X:%s %d Ticks", kind,
+					selectedSweepRow, wrapCue, ticks);
+			}
+			hintCol = COL_TITLE;
+		} else if(hovering) {
+			int waveRow;
+			if(waveGraphRowAt(g, hoverCellX, hoverCellY, waveRow)) {
+				int gesture = waveGestureForRow(waveRow);
+				if(gesture == WAVE_GESTURE_PITCH)
+					hint = format("Wave $%02X W1: drag up/down", waveRow);
+				else if(gesture == WAVE_GESTURE_DELAY)
+					hint = format("Wave $%02X W2: drag left/right", waveRow);
+				else
+					hint = format("Wave $%02X: reserved; exact W1/W2", waveRow);
+				hintCol = gesture == WAVE_GESTURE_NONE ? COL_DIM : COL_VALUE;
+			} else {
+			int ht, hr;
+			if(hoverSweepStep(g, ht, hr)) {
+				hint = format("%s $%02X: drag edge / inside", ht == 0 ? "Pulse" : "Filter", hr);
+				hintCol = COL_VALUE;
+			} else {
+				int py = hoverCellY * FONT_Y + FONT_Y / 2;
+				int px = hoverCellX * FONT_X + FONT_X / 2;
+				if(px >= g.plotX0px && px < g.plotX0px + g.plotWpx) {
+					if(py >= g.bandTopPx[1] && py < g.bandTopPx[2])
+						hint = "ADSR: drag square handles";
+					else if(py >= g.bandTopPx[5] && py < g.bandTopPx[6])
+						hint = "Wave lane: click toggles bit";
+					else if(py >= g.stackTopPx && py < g.stackBotPx)
+						hint = "Plot: drag selects time range";
+				}
+			}
+			}
+		}
+	hintReady:
+		int hintMax = g.sepX - g.paramX - 1;
+		if(cast(int)hint.length > hintMax) hint = hint[0 .. hintMax];
+		screen.cprint(g.paramX, hintY, hintCol, 0, hint);
 	}
 
 	private static string waveformName(int ctrl) {
@@ -1049,7 +1717,8 @@ class SoundEditor : Window, Undoable {
 	private bool isEditableRow(int r) {
 		switch(r) {
 			case ROW_ATTACK, ROW_DECAY, ROW_SUSTAIN, ROW_RELEASE,
-				 ROW_RESTART, ROW_GATE, ROW_HRWAVE, ROW_HRSR:
+				 ROW_RESTART, ROW_GATE, ROW_HRWAVE, ROW_HRSR,
+				 ROW_JAMCHANNEL, ROW_GATEHOLD, ROW_DURATIONUNIT:
 				return true;
 			default:
 				return false;
@@ -1157,6 +1826,17 @@ class SoundEditor : Window, Undoable {
 			case ROW_GATE:    bumpNibble(ins, 2, false, delta); break;
 			case ROW_HRWAVE:  bumpByte(ins, 3, delta); break;
 			case ROW_HRSR:    bumpByte(ins, 6, delta); break;
+			case ROW_JAMCHANNEL:
+				keyjamChannel = clampInt(keyjamChannel + delta, 0, 2);
+				syncKeyjamConfiguration();
+				break;
+			case ROW_GATEHOLD:
+				durationValue = clampInt(durationValue + delta, 1, 128);
+				syncKeyjamConfiguration();
+				break;
+			case ROW_DURATIONUNIT:
+				changeDurationUnit(!durationRows);
+				break;
 			default: break;
 		}
 	}
@@ -1164,17 +1844,666 @@ class SoundEditor : Window, Undoable {
 	// One keyboard edit gesture: snapshot for undo, mutate, then make it audible.
 	private void editSelected(int ins, int delta) {
 		if(!isEditableRow(paramCursor)) return;
-		snapshotInstruments();
+		bool songValue = paramCursor < ROW_JAMCHANNEL;
+		if(songValue) snapshotInstruments();
 		applyRowDelta(ins, paramCursor, delta);
 		retriggerIfSounding();
 	}
 
-	// §19.5 P4a immediate audibility: if a keyjam note is currently held on this screen,
-	// re-trigger it so the just-edited envelope is heard at once (AD/SR only take effect
-	// on the NEXT trigger). Never called per drag tick — only on keypress / drag release.
+	// Re-render exactly once after an edit completes. During the gesture the previous
+	// reSID capture remains visible, keeping both the slopes and fitted X axis stable.
+	// A held note is retriggered normally; a released last keyjam note is rendered with
+	// SDL output paused. Before the first played note, InputKeyjam supplies the explicit
+	// C-4 baseline. Song playback remains protected from any preview injection.
 	private void retriggerIfSounding() {
-		if(inputKeyjam.noteHeld())
+		if(audio.player.getPlaystatus() == audio.player.Status.Play) return;
+		// Before the first user keyjam, a completed edit refreshes only the isolated
+		// C-4 reSID envelope preview. It must not manufacture a keyjam recording.
+		if(!inputKeyjam.hasPlayedPreviewNote()) {
+			ensureSilentEnvelopePreview(max(visFrames,
+				cast(int)silentEnvPreview.length));
+			return;
+		}
+		// The initial C-4 baseline shapes the idle estimate, but does not manufacture a
+		// recording merely because a scalar was edited. Once a user has keyjammed, the
+		// durable last note is eligible for the silent real-SID mouse-up rerender.
+		if(!inputKeyjam.noteHeld() && !inputKeyjam.hasPlayedPreviewNote()) return;
+		int extent = visFrames;
+		// Edits can lengthen a program while the prior keyjam fit is locked to a short
+		// recording. Grow the silent rerender and the new lock before the next draw so
+		// the just-created boundary remains visible and interactive.
+		int pe = pulseProgramExtent(song.instrumentTable[clampedIns() + 5 * 48]);
+		if(pe > extent) extent = pe;
+		int fe = filterProgramExtent(song.instrumentTable[clampedIns() + 4 * 48]);
+		if(fe > extent) extent = fe;
+		int we = waveProgramExtent(song.instrumentTable[clampedIns() + 7 * 48],
+			waveTimeForInstrument(clampedIns()));
+		if(we > extent) extent = we;
+		if(extent < MIN_VIS) extent = MIN_VIS;
+		if(inputKeyjam.noteHeld()) {
 			inputKeyjam.retrigger();
+			audio.audio.renderKeyjamCapture(extent);
+		} else if(inputKeyjam.previewMatchesInstrument(clampedIns())) {
+			inputKeyjam.rerenderLastSilently(extent, min(nominalGateFrames, extent));
+		} else return;
+		lockedKeyjamFit = extent;
+		seenKeyjamTrigger = audio.player.keyjamNoteTrigger;
+	}
+
+	private void ensureSilentEnvelopePreview(int requestedTicks) {
+		if(requestedTicks < 1) requestedTicks = 1;
+		if(requestedTicks > MAX_CONTENT) requestedTicks = MAX_CONTENT;
+		inputKeyjam.ensurePreviewBaseline(clampedIns());
+		int ins = clampedIns();
+		int ad = song.instrumentTable[ins + 0 * 48];
+		int sr = song.instrumentTable[ins + 1 * 48];
+		int gate = configuredGateTicks();
+		int mult = max(1, audio.audio.multiplier);
+		int backend = audio.player.usefp;
+		int note = inputKeyjam.previewNote();
+		bool changed = ins != silentEnvIns || ad != silentEnvAd || sr != silentEnvSr
+			|| gate != silentEnvGate || mult != silentEnvMult
+			|| backend != silentEnvBackend || note != silentEnvNote;
+
+		// A mouse move changes instrument bytes, but the audible/visible result commits
+		// on release. Preserve the prior trace throughout the gesture.
+		if(adsrDragging && silentEnvPreview.length) return;
+		if(!changed && silentEnvPreview.length >= requestedTicks) return;
+
+		int renderTicks = max(requestedTicks, cast(int)silentEnvPreview.length);
+		if(renderTicks < MIN_VIS) renderTicks = MIN_VIS;
+		silentEnvPreview.length = renderTicks;
+		int rendered = sid_render_envelope_preview(cast(ubyte)ad, cast(ubyte)sr,
+			gate, mult, restartFramesFor(ins) + 1, silentEnvPreview.ptr, renderTicks);
+		if(rendered < 0) rendered = 0;
+		if(rendered < renderTicks) silentEnvPreview.length = rendered;
+		if(changed) silentEnvGeneration++;
+		silentEnvIns = ins;
+		silentEnvAd = ad;
+		silentEnvSr = sr;
+		silentEnvGate = gate;
+		silentEnvMult = mult;
+		silentEnvBackend = backend;
+		silentEnvNote = note;
+	}
+
+	// Rows reachable from one instrument's wave pointer, including loop-marker rows.
+	// Wave programs may jump between contiguous chunks, so follow $7f targets until a
+	// $7e end marker or a previously visited row is reached.
+	private bool[256] waveProgramRows(int startRow) {
+		bool[256] rows;
+		if(startRow <= 0 || startRow > 0xff) return rows;
+		int row = startRow & 0xff;
+		while(!rows[row]) {
+			rows[row] = true;
+			int w1 = song.waveTable[row];
+			if(w1 == 0x7e) break;
+			if(w1 == 0x7f) row = song.waveTable[row + 256];
+			else row = (row + 1) & 0xff;
+		}
+		return rows;
+	}
+
+	private bool waveProgramShared(int ins) {
+		bool[256] mine = waveProgramRows(song.instrumentTable[ins + 7 * 48]);
+		foreach(j; 0 .. 48) {
+			if(j == ins) continue;
+			bool[256] other = waveProgramRows(song.instrumentTable[j + 7 * 48]);
+			foreach(r; 0 .. 256) if(mine[r] && other[r]) return true;
+		}
+		return false;
+	}
+
+	private int waveTimeForInstrument(int ins) {
+		return song.instrumentTable[ins + 2 * 48] & 0x0f;
+	}
+
+	// Closing $7E/$7F marker of the contiguous authored chunk. Markers are metadata:
+	// they never become editable pitch/control rows themselves.
+	private int waveCloseRow(int start) {
+		if(start < 0 || start > 0xff) return -1;
+		for(int row = start; row < 256; row++)
+			if(song.waveTable[row] == 0x7e || song.waveTable[row] == 0x7f) return row;
+		return -1;
+	}
+
+	private bool selectedWaveNormal(int ins) {
+		int start = song.instrumentTable[ins + 7 * 48];
+		int close = waveCloseRow(start);
+		// A Pulse/Filter click is a fresh graph selection.  Keep the remembered Wave
+		// row for later, but never let that stale row own contextual commands while a
+		// sweep block is selected.
+		return selectedSweepTable < 0 && close > start
+			&& selectedWaveRow >= start && selectedWaveRow < close;
+	}
+
+	// Allocate a complete private sound in unused table space. Pulse and filter start as
+	// canonical stopped programs, ready for their later graphical editing phases.
+	private void createNewIsolatedSound() {
+		int base = song.tWave.seekTableEnd();
+		int pbase = song.tPulse.seekTableEnd(); if(pbase < 1) pbase = 1;
+		int fbase = song.tFilter.seekTableEnd(); if(fbase < 1) fbase = 1;
+		if(base < 0 || base + 7 > 256) {
+			UI.statusline.display("Wave table needs seven free rows for a new sound.");
+			return;
+		}
+		if(pbase > 0x3e || fbase + 1 > 0x3e) {
+			UI.statusline.display("Pulse/filter table has no room for a new sound.");
+			return;
+		}
+		int ins = clampedIns();
+		snapshotAllTables(true);
+		foreach(col; 0 .. 8) song.instrumentTable[ins + col * 48] = 0;
+		song.instrumentTable[ins + 2 * 48] = 0x40; // soft restart, wave speed 0
+		song.instrumentTable[ins + 3 * 48] = 0x80;
+		song.instrumentTable[ins + 4 * 48] = cast(ubyte)fbase;
+		song.instrumentTable[ins + 5 * 48] = cast(ubyte)pbase;
+		song.instrumentTable[ins + 7 * 48] = cast(ubyte)base;
+		linkedEditKind = linkedEditStart = -1;
+		song.waveTable[base] = 0x00;
+		song.waveTable[base + 256] = 0x00;
+		song.waveTable[base + 1] = 0x7e;
+		song.waveTable[base + 1 + 256] = 0x00;
+		// P0: one neutral editable block, stopped.
+		song.pulseTable[pbase * 4 .. pbase * 4 + 4] = [0x00, 0x00, 0x00, 0x7f];
+		// F0: LP/voice-1 config + neutral inherited sweep, stopped.
+		song.filterTable[fbase * 4 .. fbase * 4 + 4] = [0x90, 0x01, 0x00, 0x00];
+		song.filterTable[(fbase + 1) * 4 .. (fbase + 1) * 4 + 4]
+			= [0x00, 0x00, 0xff, 0x7f];
+		song.insLabels[ins][] = ' ';
+		immutable name = "New Sound";
+		song.insLabels[ins][0 .. name.length] = name[];
+		selectedWaveRow = base;
+		clearSweepSelection();
+		lockedKeyjamFit = 0;
+		UI.statusline.display(format("New sound: Wave $%02X Pulse $%02X Filter $%02X.",
+			base, pbase, fbase));
+	}
+
+	private void moveSelectedWave(int delta) {
+		int ins = clampedIns();
+		if(!selectedWaveNormal(ins)) return;
+		int start = song.instrumentTable[ins + 7 * 48];
+		int close = waveCloseRow(start);
+		selectedWaveRow = clampInt(selectedWaveRow + delta, start, close - 1);
+	}
+
+	private void waveRowOp(bool insert) {
+		int ins = clampedIns();
+		if(!selectedWaveNormal(ins)) {
+			UI.statusline.display("Select a wave row first.");
+			return;
+		}
+		int start = song.instrumentTable[ins + 7 * 48];
+		int close = waveCloseRow(start);
+		if(insert && (song.tWave.seekTableEnd() >= 255 || close >= 255)) {
+			UI.statusline.display("Wave table full - cannot insert row.");
+			return;
+		}
+		if(!insert && close - start <= 1) {
+			UI.statusline.display("A wave program must keep one value row.");
+			return;
+		}
+		authorizeWaveMutation(ins, (int delta) {
+			selectedWaveRow += delta;
+			waveRowOpRaw(insert);
+			retriggerIfSounding();
+		});
+	}
+
+	private void waveRowOpRaw(bool insert) {
+		int ins = clampedIns();
+		int start = song.instrumentTable[ins + 7 * 48];
+		int close = waveCloseRow(start);
+		if(insert) {
+			int pos = selectedWaveRow + 1;
+			song.tWave.insertRow(song, pos);
+			song.waveTable[pos] = 0;
+			song.waveTable[pos + 256] = 0;
+			selectedWaveRow = pos;
+		} else {
+			int pos = selectedWaveRow;
+			bool deletedTarget = song.waveTable[close] == 0x7f
+				&& song.waveTable[close + 256] == pos;
+			song.tWave.deleteRow(song, pos);
+			int newClose = close - 1;
+			if(deletedTarget) {
+				int replacement = pos < newClose ? pos : newClose - 1;
+				if(replacement >= start)
+					song.waveTable[newClose + 256] = cast(ubyte)replacement;
+				else {
+					song.waveTable[newClose] = 0x7e;
+					song.waveTable[newClose + 256] = 0;
+				}
+			}
+			selectedWaveRow = min(pos, newClose - 1);
+		}
+	}
+
+	private void querySelectedWaveByte(int column) {
+		int ins = clampedIns();
+		if(!selectedWaveNormal(ins)) return;
+		int row = selectedWaveRow;
+		string prompt = column == 0 ? "Wave 1: $" : "Wave 2: $";
+		mainui.activateDialog(new QueryDialog(prompt, (int value) {
+			if(column == 0 && (value == 0x7e || value == 0x7f)) {
+				UI.statusline.display("Use [Loop] for wave end/loop markers.");
+				return;
+			}
+			authorizeWaveMutation(ins, (int delta) {
+				int target = row + delta;
+				song.waveTable[target + column * 256] = cast(ubyte)value;
+				selectedWaveRow = target;
+				retriggerIfSounding();
+			});
+		}, 0x100));
+	}
+
+	private void queryWaveLoopTarget() {
+		int ins = clampedIns();
+		if(!selectedWaveNormal(ins)) return;
+		int start = song.instrumentTable[ins + 7 * 48];
+		int close = waveCloseRow(start);
+		mainui.activateDialog(new QueryDialog("Loop target: $", (int target) {
+			if(target < start || target >= close) {
+				UI.statusline.display("Loop target must be an authored wave row.");
+				return;
+			}
+			authorizeWaveMutation(ins, (int delta) {
+				int targetClose = close + delta;
+				song.waveTable[targetClose] = 0x7f;
+				song.waveTable[targetClose + 256] = cast(ubyte)(target + delta);
+				selectedWaveRow += delta;
+				retriggerIfSounding();
+			});
+		}, 0x100));
+	}
+
+	// Canonical append-and-relocate fork, matching Song.insertInstrument: getProgram()
+	// returns all reachable chunks compacted together; relocate its $7f targets to the
+	// append base and repoint only the active instrument.
+	private bool forkWaveProgramRaw(int ins, out int delta) {
+		delta = 0;
+		int start = song.instrumentTable[ins + 7 * 48];
+		if(!song.tWave.isValid(start)) {
+			UI.statusline.display("Invalid wave program - cannot fork.");
+			return false;
+		}
+		auto wp = song.tWave.getProgram(start);
+		int base = max(song.tWave.seekTableEnd(), start + 24);
+		if(base + wp.wave1.length > 256) {
+			UI.statusline.display("Wave table full - cannot fork program.");
+			return false;
+		}
+		ubyte[] w1 = wp.wave1.dup;
+		ubyte[] w2 = wp.wave2.dup;
+		// getProgram() compacts reachable chunks to a zero-based payload while
+		// preserving the active pointer as wp.offset within that payload. Loop
+		// targets therefore relocate by the append base, whereas callers holding
+		// absolute rows remap by (new active pointer - old active pointer). These
+		// are different coordinate systems when unused chunks precede the program.
+		int newStart = base + wp.offset;
+		delta = newStart - start;
+		foreach(i; 0 .. w1.length)
+			if(w1[i] == 0x7f) w2[i] = cast(ubyte)(w2[i] + base);
+		song.tWave.wave1[base .. base + w1.length] = w1[];
+		song.tWave.wave2[base .. base + w2.length] = w2[];
+		song.instrumentTable[ins + 7 * 48] = cast(ubyte)newStart;
+		return true;
+	}
+
+	alias WaveMutation = void delegate(int rowDelta);
+	private void authorizeWaveMutation(int ins, WaveMutation mutation) {
+		bool makePrivate = waveProgramShared(ins) && !linkedEditActive(2, ins);
+		if(makePrivate) {
+			int start = song.instrumentTable[ins + 7 * 48];
+			if(!song.tWave.isValid(start)) {
+				UI.statusline.display("Invalid wave program - cannot fork.");
+				return;
+			}
+			auto wp = song.tWave.getProgram(start);
+			int base = max(song.tWave.seekTableEnd(), start + 24);
+			if(base + wp.wave1.length > 256) {
+				UI.statusline.display("Wave table full - cannot fork program.");
+				return;
+			}
+		}
+		// One transaction contains both the automatic fork and the requested edit.
+		snapshotAllTables(false);
+		int delta = 0;
+		if(makePrivate && !forkWaveProgramRaw(ins, delta)) return;
+		mutation(delta);
+	}
+
+	private int waveRowAtFrame(int ins, int frame, out int effectiveCtrl) {
+		WaveFrameSim s = simWaveFrames(song.instrumentTable[ins + 7 * 48],
+			waveTimeForInstrument(ins));
+		if(s.rowOf.length == 0) { effectiveCtrl = 0; return -1; }
+		frame = clampInt(frame, 0, cast(int)s.rowOf.length - 1);
+		effectiveCtrl = s.ctrlOf[frame];
+		return s.rowOf[frame];
+	}
+
+	private enum int WAVE_GESTURE_NONE = 0, WAVE_GESTURE_PITCH = 1,
+		WAVE_GESTURE_DELAY = 2, WAVE_GESTURE_TARGET = 3;
+	private int waveGestureForRow(int row) {
+		if(row < 0 || row >= 256) return WAVE_GESTURE_NONE;
+		int raw1 = song.waveTable[row], raw2 = song.waveTable[row + 256];
+		if(raw1 == 0x7f) return WAVE_GESTURE_TARGET;
+		if(raw1 == 0x7e || !((raw1 >= 0x00 && raw1 <= 0x5f)
+				|| (raw1 >= 0x80 && raw1 <= 0xdf))) return WAVE_GESTURE_NONE;
+		if(raw2 >= 0x01 && raw2 <= 0x0f) return WAVE_GESTURE_DELAY;
+		if(raw2 == 0x00 || (raw2 >= 0x10 && raw2 <= 0xef))
+			return WAVE_GESTURE_PITCH;
+		return WAVE_GESTURE_NONE;
+	}
+
+	private bool writeWaveBit(int row, int effectiveCtrl, int bit, bool on) {
+		if(waveGestureForRow(row) != WAVE_GESTURE_PITCH) return false;
+		int mask = 1 << bit;
+		int ctrl = on ? effectiveCtrl | mask : effectiveCtrl & ~mask;
+		int raw2 = song.waveTable[row + 256];
+		ubyte encoded;
+		if(!representableWaveControl(ctrl, encoded)) {
+			UI.statusline.display("Wave control cannot be represented in W2; unchanged.");
+			return false;
+		}
+		if(encoded == raw2) return false;
+		song.waveTable[row + 256] = encoded;
+		return true;
+	}
+
+	private bool canBeginWaveBitPaint(int ins, int frame, int bit) {
+		int ctrl;
+		int row = waveRowAtFrame(ins, frame, ctrl);
+		if(waveGestureForRow(row) != WAVE_GESTURE_PITCH) return false;
+		int desired = ctrl ^ (1 << bit);
+		ubyte ignored;
+		if(representableWaveControl(desired, ignored)) return true;
+		UI.statusline.display("Wave control cannot be represented in W2; unchanged.");
+		return false;
+	}
+
+	private void toggleWaveBitRaw(int ins, int frame, int bit) {
+		int ctrl;
+		int row = waveRowAtFrame(ins, frame, ctrl);
+		if(waveGestureForRow(row) != WAVE_GESTURE_PITCH) return;
+		writeWaveBit(row, ctrl, bit, !(ctrl & (1 << bit)));
+	}
+
+	private void beginWaveBitPaint(int ins, int frame, int bit) {
+		int ctrl;
+		int row = waveRowAtFrame(ins, frame, ctrl);
+		if(waveGestureForRow(row) != WAVE_GESTURE_PITCH) return;
+		waveBitPainting = true;
+		waveBitChanged = false;
+		waveBitDesired = !(ctrl & (1 << bit));
+		waveBitPaintIns = ins;
+		waveBitLastRow = row;
+		waveBitLastBit = bit;
+		waveBitChanged = writeWaveBit(row, ctrl, bit, waveBitDesired);
+	}
+
+	private void updateWaveBitPaint(ref Geo g, int x, int y) {
+		if(!waveBitPainting) return;
+		int frame, bit;
+		if(!waveLaneAt(g, x, y, frame, bit)) return;
+		int ctrl;
+		int row = waveRowAtFrame(waveBitPaintIns, frame, ctrl);
+		if(row == waveBitLastRow && bit == waveBitLastBit) return;
+		waveBitLastRow = row;
+		waveBitLastBit = bit;
+		waveBitChanged = writeWaveBit(row, ctrl, bit, waveBitDesired) || waveBitChanged;
+	}
+
+	// Frequency graph hit maps through the same delay-aware row timeline the graph
+	// draws. Clicking selects that authored row; dragging edits its meaningful axis:
+	// pitch rows move vertically, delay rows ($01..$0F in wave2) resize horizontally.
+	private bool waveGraphRowAt(ref Geo g, int x, int y, out int row) {
+		row = -1;
+		int px = x * FONT_X + FONT_X / 2;
+		int py = y * FONT_Y + FONT_Y / 2;
+		int topPx, botPx; bandBox(g, 2, topPx, botPx);
+		if(px < g.plotX0px || px >= g.plotX0px + g.plotWpx
+				|| py < topPx || py >= botPx) return false;
+		int frame = cast(int)lround(tickForPixel(g, px));
+		if(frame < 0) return false;
+		int ins = clampedIns();
+		WaveFrameSim s = simWaveFrames(song.instrumentTable[ins + 7 * 48],
+			waveTimeForInstrument(ins));
+		if(frame >= cast(int)s.rowOf.length) return false;
+		row = s.rowOf[frame];
+		return row >= 0 && song.waveTable[row] != 0x7e && song.waveTable[row] != 0x7f;
+	}
+
+	private int waveGraphCursorAt(ref Geo g, int x, int y) {
+		int row;
+		if(!waveGraphRowAt(g, x, y, row)) return CURSOR_NORMAL;
+		int gesture = waveGestureForRow(row);
+		return gesture == WAVE_GESTURE_DELAY ? CURSOR_HORIZONTAL
+			: gesture == WAVE_GESTURE_PITCH ? CURSOR_VERTICAL : CURSOR_NORMAL;
+	}
+
+	private void beginWaveGraphDrag(ref Geo g, int x, int y, int row) {
+		int gesture = waveGestureForRow(row);
+		if(gesture != WAVE_GESTURE_PITCH && gesture != WAVE_GESTURE_DELAY) return;
+		selectedWaveRow = row;
+		clearSweepSelection();
+		waveGraphDragging = true;
+		waveGraphMoved = false;
+		waveGraphAuthorizing = false;
+		waveGraphRow = row;
+		int raw2 = song.waveTable[row + 256];
+		waveGraphField = gesture == WAVE_GESTURE_DELAY ? 1 : 0;
+		waveGraphAnchorX = x;
+		waveGraphAnchorValue = waveGraphField ? raw2 : song.waveTable[row];
+		clickWasButton = true;
+	}
+
+	private void updateWaveGraphDrag(ref Geo g, int x, int y) {
+		if(!waveGraphDragging || waveGraphRow < 0) return;
+		if(!waveGraphMoved) {
+			if(waveGraphAuthorizing) return;
+			waveGraphAuthorizing = true;
+			int ins = clampedIns();
+			authorizeWaveMutation(ins, (int delta) {
+				waveGraphAuthorizing = false;
+				waveGraphRow += delta;
+				selectedWaveRow += delta;
+				waveGraphMoved = true;
+				Geo committedGeometry = layout();
+				updateWaveGraphDragRaw(committedGeometry, x, y);
+			});
+			return;
+		}
+		updateWaveGraphDragRaw(g, x, y);
+	}
+
+	private void updateWaveGraphDragRaw(ref Geo g, int x, int y) {
+		if(waveGraphField == 1) {
+			song.waveTable[waveGraphRow + 256] = cast(ubyte)clampInt(
+				waveGraphAnchorValue + (x - waveGraphAnchorX), 1, 0x0f);
+			return;
+		}
+		int topPx, botPx; bandBox(g, 2, topPx, botPx);
+		int h = botPx - topPx; if(h < 1) h = 1;
+		int py = y * FONT_Y + FONT_Y / 2;
+		int pitch = clampInt(cast(int)lround(cast(double)(botPx - py) * 0x5f / h), 0, 0x5f);
+		bool absolute = waveGraphAnchorValue >= 0x80 && waveGraphAnchorValue <= 0xdf;
+		song.waveTable[waveGraphRow] = cast(ubyte)(absolute ? 0x80 | pitch : pitch);
+	}
+
+	private int waveRetargetRowAt(int ins, ref Geo g, int cellX) {
+		int start = song.instrumentTable[ins + 7 * 48];
+		int close = waveCloseRow(start);
+		if(close <= start) return -1;
+		WaveFrameSim s = simWaveFrames(start, waveTimeForInstrument(ins), MAX_VIS);
+		int pointerFrame = cast(int)lround(tickForPixel(g, cellX * FONT_X + FONT_X / 2));
+		// In range, the simulated row at the pointer owns the tick. Choosing a row by
+		// nearest start instead makes the latter half of a long delay jump early.
+		int authoredEnd = waveProgramExtent(start, waveTimeForInstrument(ins));
+		if(pointerFrame >= 0 && pointerFrame < authoredEnd
+				&& pointerFrame < cast(int)s.rowOf.length) {
+			int owner = s.rowOf[pointerFrame];
+			if(owner >= start && owner < close) return owner;
+		}
+		// Only an off-range pointer needs a nearest legal authored-row fallback.
+		int bestRow = -1, bestDistance = int.max;
+		bool[256] seen;
+		foreach(frame, row; s.rowOf) {
+			if(row < start || row >= close || seen[row]) continue;
+			seen[row] = true;
+			int distance = abs(cast(int)frame - pointerFrame);
+			if(distance < bestDistance) { bestDistance = distance; bestRow = row; }
+		}
+		return bestRow;
+	}
+
+	private void beginWaveLoopDrag(int ins) {
+		int start = song.instrumentTable[ins + 7 * 48];
+		waveLoopDragging = true;
+		waveLoopAuthorizing = false;
+		waveLoopMoved = false;
+		waveLoopIns = ins;
+		waveLoopCloseRow = waveCloseRow(start);
+		clickWasButton = true;
+	}
+
+	private void updateWaveLoopDrag(ref Geo g, int cellX) {
+		if(!waveLoopDragging || waveLoopCloseRow < 0) return;
+		if(!waveLoopMoved) {
+			if(waveLoopAuthorizing) return;
+			waveLoopAuthorizing = true;
+			authorizeWaveMutation(waveLoopIns, (int delta) {
+				waveLoopAuthorizing = false;
+				waveLoopCloseRow += delta;
+				if(selectedWaveRow >= 0) selectedWaveRow += delta;
+				waveLoopMoved = true;
+				Geo committedGeometry = layout();
+				updateWaveLoopDragRaw(committedGeometry, cellX);
+			});
+			return;
+		}
+		updateWaveLoopDragRaw(g, cellX);
+	}
+
+	private void updateWaveLoopDragRaw(ref Geo g, int cellX) {
+		int target = waveRetargetRowAt(waveLoopIns, g, cellX);
+		if(target < 0) return;
+		song.waveTable[waveLoopCloseRow] = 0x7f;
+		song.waveTable[waveLoopCloseRow + 256] = cast(ubyte)target;
+	}
+
+	private SoundEditorWaveAddDebug waveAddTarget(int ins, ref Geo g) {
+		SoundEditorWaveAddDebug a;
+		a.frame = a.x = a.y = a.close = -1;
+		a.reason = "invalid";
+		int start = song.instrumentTable[ins + 7 * 48];
+		int close = waveCloseRow(start);
+		int topPx, botPx; bandBox(g, 2, topPx, botPx);
+		if(close < start) return a;
+		a.close = close;
+		// Creation is authored-terminal chrome. Put `+` in the nearest free top-strip
+		// cell immediately BEFORE the END/LOOP triangle. For a very short loop where
+		// that cell is another triangle, search deterministically outward, left first;
+		// every visible valid programme therefore keeps both targets reachable.
+		a.frame = waveProgramExtent(start, waveTimeForInstrument(ins));
+		auto loopShape = waveLoopGeometry(ins, g);
+		int minCell = g.plotX0px / FONT_X;
+		int maxCell = (g.plotX0px + g.plotWpx - 1) / FONT_X;
+		int preferred = loopShape.endVisible ? loopShape.endLeft / FONT_X - 1
+			: xForFrame(g, a.frame) / FONT_X;
+		bool freeCell(int cell) {
+			if(cell < minCell || cell > maxCell) return false;
+			int left = cell * FONT_X, right = left + FONT_X;
+			bool hitsStart = loopShape.startVisible
+				&& right > loopShape.startLeft && left < loopShape.startRight;
+			bool hitsEnd = loopShape.endVisible
+				&& right > loopShape.endLeft && left < loopShape.endRight;
+			return !hitsStart && !hitsEnd;
+		}
+		int plotCells = maxCell - minCell + 1;
+		foreach(distance; 0 .. plotCells) {
+			int leftCandidate = preferred - cast(int)distance;
+			if(freeCell(leftCandidate)) { a.x = leftCandidate; break; }
+			int rightCandidate = preferred + 1 + cast(int)distance;
+			if(freeCell(rightCandidate)) { a.x = rightCandidate; break; }
+		}
+		// Creation is top-strip chrome like END/LOOP, leaving the frequency gesture
+		// row below fully available for pitch and delay selection/dragging.
+		a.y = (topPx + FONT_Y - 1) / FONT_Y;
+		a.visible = frameInView(a.frame) && a.x >= minCell;
+		a.enabled = song.tWave.seekTableEnd() < 255 && close < 255;
+		a.reason = !a.enabled ? "full" : close == start ? "end-only" : "normal";
+		return a;
+	}
+
+	private void drawWaveAddTarget(int ins, ref Geo g) {
+		auto a = waveAddTarget(ins, g);
+		if(!a.visible) return;
+		screen.cprint(a.x, a.y, a.enabled ? COL_TITLE : COL_DIM, 0, "+");
+	}
+
+	private bool waveAddTargetAt(int ins, ref Geo g, int x, int y,
+			out bool enabled) {
+		auto a = waveAddTarget(ins, g);
+		enabled = a.enabled;
+		return a.visible && x == a.x && y == a.y;
+	}
+
+	private void appendWaveRowAtEnd(int ins) {
+		int start = song.instrumentTable[ins + 7 * 48];
+		int close = waveCloseRow(start);
+		if(close < start) {
+			UI.statusline.display("Invalid wave program - cannot append row.");
+			return;
+		}
+		if(song.tWave.seekTableEnd() >= 255 || close >= 255) {
+			UI.statusline.display("Wave table full - cannot append row.");
+			return;
+		}
+		authorizeWaveMutation(ins, (int delta) {
+			int targetClose = close + delta;
+			song.tWave.insertRow(song, targetClose);
+			song.waveTable[targetClose] = 0;
+			song.waveTable[targetClose + 256] = 0;
+			selectedWaveRow = targetClose;
+			clearSweepSelection();
+			retriggerIfSounding();
+		});
+	}
+
+	private void drawSelectedWaveRow(int ins, ref Geo g) {
+		if(!selectedWaveNormal(ins)) return;
+		WaveFrameSim s = simWaveFrames(song.instrumentTable[ins + 7 * 48],
+			waveTimeForInstrument(ins));
+		int first = -1, last = -1;
+		foreach(f, row; s.rowOf) {
+			if(row == selectedWaveRow) { if(first < 0) first = cast(int)f; last = cast(int)f + 1; }
+			else if(first >= 0) break;
+		}
+		if(first < 0) return;
+		int topPx, botPx; bandBox(g, 2, topPx, botPx);
+		int xa = xForFrame(g, first), xb = xForFrame(g, last);
+		if(xb <= xa) xb = xa + 1;
+		video.olRect(xa, topPx, xb - xa, botPx - topPx, COL_STEPSEL);
+	}
+
+	// Return the clicked wave frame + SID control bit. Lane geometry exactly mirrors
+	// drawWaveBand (top lane Noise/b7, bottom lane Gate/b0).
+	private bool waveLaneAt(ref Geo g, int x, int y, out int frame, out int bit) {
+		frame = bit = -1;
+		int px = x * FONT_X + FONT_X / 2;
+		int py = y * FONT_Y + FONT_Y / 2;
+		if(px < g.plotX0px || px >= g.plotX0px + g.plotWpx) return false;
+		int topPx, botPx; bandBox(g, 5, topPx, botPx);
+		int topRow = (topPx + FONT_Y - 1) / FONT_Y;
+		int lane = y - topRow;
+		if(lane < 0 || lane >= 8 || py > botPx) return false;
+		frame = cast(int)lround(tickForPixel(g, px));
+		if(frame < 0) return false;
+		bit = 7 - lane;
+		return true;
 	}
 
 	// ---- ADSR-curve drag handles (§19.2/§19.3 graph gesture) ----
@@ -1196,8 +2525,8 @@ class SoundEditor : Window, Undoable {
 		float dF = DECAY_RELEASE_TIME_MS[decay]   / tickMs;
 		float rF = DECAY_RELEASE_TIME_MS[release] / tickMs;
 		if(rF < 0.5f) rF = 0.5f;
-		float gateEnd = aF + dF + nominalGateFrames;
-		float sustMid = (aF + dF + gateEnd) / 2.0f;    // middle of the sustain plateau
+		float gateEnd = nominalGateFrames;
+		float sustMid = (min(aF + dF, gateEnd) + gateEnd) / 2.0f;
 		float[4] hf   = [aF, aF + dF, sustMid, gateEnd + rF];
 		float[4] hlvl = [1.0f, sLvl, sLvl, 0.0f];
 		foreach(i; 0 .. 4) {
@@ -1282,7 +2611,7 @@ class SoundEditor : Window, Undoable {
 				break;
 			}
 			case ADSR_RELEASE: {
-				double ms = (t - (aF + dF + nominalGateFrames)) * tickMs; if(ms < 0) ms = 0;
+				double ms = (t - nominalGateFrames) * tickMs; if(ms < 0) ms = 0;
 				setNibbleAbs(ins, 1, false, nearestMs(DECAY_RELEASE_TIME_MS, ms));
 				break;
 			}
@@ -1297,18 +2626,76 @@ class SoundEditor : Window, Undoable {
 	// band's plot pixel region counts (a "vertical grab" of the level). Hit-tested AFTER
 	// the ADSR handles / scrollbar / zoom buttons, so those keep working.
 	private int sweepBandAt(ref Geo g, int x, int y) {
-		int px = x * FONT_X, py = y * FONT_Y;
+		// Mouse input is character-cell granular. Test the cell CENTRE, matching every
+		// handle/edge hit-test below, so the top and bottom cell of a band remain usable.
+		int px = x * FONT_X + FONT_X / 2;
+		int py = y * FONT_Y + FONT_Y / 2, pyTop = y * FONT_Y;
 		if(px < g.plotX0px || px >= g.plotX0px + g.plotWpx) return -1;
 		int ins = clampedIns();
 		if(py >= g.bandTopPx[3] && py < g.bandTopPx[4]) {
 			int ptr = song.instrumentTable[ins + 5 * 48];
 			if(ptr >= 1 && ptr <= 0x3f) return 0;    // pulse program (not fixed $80+/off)
 		}
-		if(py >= g.bandTopPx[4] && py < g.bandTopPx[5]) {
+		// Preserve the established Filter cell ownership; Phase 3's full-height edge
+		// correction is pulse-specific and must not move existing filter gestures.
+		if(pyTop >= g.bandTopPx[4] && pyTop < g.bandTopPx[5]) {
 			int ptr = song.instrumentTable[ins + 4 * 48];
 			if(ptr >= 1 && ptr <= 0x3f) return 1;    // filter program (not off)
 		}
 		return -1;
+	}
+
+	// Pulse/Filter plot under a click even when no editable program exists. Used only
+	// for immediate create/convert-on-first-drag; regular editing still goes through
+	// sweepBandAt and therefore cannot accidentally treat a pointer as a row.
+	private int emptySweepBandAt(ref Geo g, int x, int y) {
+		int px = x * FONT_X, py = y * FONT_Y;
+		if(px < g.plotX0px || px >= g.plotX0px + g.plotWpx) return -1;
+		int ins = clampedIns();
+		if(py >= g.bandTopPx[3] && py < g.bandTopPx[4]) {
+			int ptr = song.instrumentTable[ins + 5 * 48];
+			if(ptr == 0 || ptr >= 0x40) return 0;
+		}
+		if(py >= g.bandTopPx[4] && py < g.bandTopPx[5]) {
+			int ptr = song.instrumentTable[ins + 4 * 48];
+			if(ptr <= 0 || ptr >= 0x40) return 1;
+		}
+		return -1;
+	}
+
+	private bool createSweepProgram(int table, int ins, int clickedValue) {
+		int base = table == 0 ? song.tPulse.seekTableEnd() : song.tFilter.seekTableEnd();
+		if(base < 1) base = 1; // row 0 is the player's inert/stop sentinel
+		// Match the backend's instrument-import guard: keep row 63 as spare/sentinel.
+		if(base > 0x3e) {
+			UI.statusline.display(format("%s table full - cannot create program.",
+				table == 0 ? "Pulse" : "Filter"));
+			return false;
+		}
+		snapshotAllTables(true);
+		if(table == 0) {
+			int ptr = song.instrumentTable[ins + 5 * 48];
+			// Converting a direct $80-$8f pulse keeps its audible fixed width. A truly
+			// empty pointer uses the clicked graph level as the initial value.
+			int initial = ptr >= 0x80 ? ((ptr & 0x0f) << 8) : clickedValue;
+			song.pulseTable[base * 4 + 0] = 0;
+			song.pulseTable[base * 4 + 1] = 0;
+			song.pulseTable[base * 4 + 2] = encodeInitB2(0, initial);
+			song.pulseTable[base * 4 + 3] = 0x7f;
+			song.instrumentTable[ins + 5 * 48] = cast(ubyte)base;
+		} else {
+			int route = viewVoice >= 0 && viewVoice < 3 ? (1 << viewVoice) : 1;
+			song.filterTable[base * 4 + 0] = 0x90; // config row, LP mode
+			song.filterTable[base * 4 + 1] = cast(ubyte)route; // res 0, current voice routed
+			song.filterTable[base * 4 + 2] = encodeInitB2(1, clickedValue);
+			song.filterTable[base * 4 + 3] = 0x7f;
+			song.instrumentTable[ins + 4 * 48] = cast(ubyte)base;
+		}
+		selectedWaveRow = -1;
+		selectedSweepTable = table;
+		selectedSweepRow = selectedSweepRowEnd = base;
+		linkedEditKind = linkedEditStart = -1;
+		return true;
 	}
 
 	// The SweepTable row producing the frame under the press x (via the sim's per-frame
@@ -1322,7 +2709,18 @@ class SoundEditor : Window, Undoable {
 			? simPulse(song.instrumentTable[ins + 5 * 48])
 			: simFilter(song.instrumentTable[ins + 4 * 48]);
 		if(s.rowOf.length == 0) return -1;
-		if(f >= cast(int)s.rowOf.length) f = cast(int)s.rowOf.length - 1;
+		// A stopped program has genuine empty space after its final frame. Do not clamp
+		// arbitrary clicks in that space onto the last row. But a one-frame filter CONFIG
+		// block can be narrower than our cell-granular mouse input; keep one cell of hit
+		// tolerance at the visible end so it can still be selected and [Add] can create
+		// the first sweep row after it.
+		if(f >= cast(int)s.rowOf.length) {
+			int pressX = x * FONT_X + FONT_X / 2;
+			int endX = xForFrame(g, cast(int)s.rowOf.length);
+			if(s.rowOf.length > 0 && abs(pressX - endX) <= FONT_X * 2)
+				return s.rowOf[$ - 1];
+			return -1;
+		}
 		return s.rowOf[f];
 	}
 
@@ -1360,16 +2758,6 @@ class SoundEditor : Window, Undoable {
 		return false;
 	}
 
-	// Whether the in-flight DRAG is already authorized to edit this shared program in
-	// place (the user just answered "edit shared" for THIS program). Transient: keyed by
-	// the current program start row, and cleared on the next mouse release so the next
-	// drag warns again. Discrete edits don't use this — they resolve in the callback.
-	private bool sweepDragAuthorized(int table, int ins) {
-		int col = (table == 0) ? 5 : 4;
-		int startRow = song.instrumentTable[ins + col * 48];
-		return sweepDragGrant && sweepDragGrantTable == table && sweepDragGrantRow == startRow;
-	}
-
 	// §20.2 fork: allocate a private copy of this instrument's program at seekTableEnd,
 	// copy its rows, relocate their internal b3 jump targets to the new base, and repoint
 	// ONLY this instrument. Snapshots ALL tables + insLabels for undo (pointer shifts).
@@ -1396,6 +2784,7 @@ class SoundEditor : Window, Undoable {
 		// the next element of the ascending set), and remaps explicit jumps below.
 		int[0x40] newRow; newRow[] = -1;
 		foreach(i, r; rows) newRow[r] = base + cast(int)i;
+		lastSweepForkMap = newRow;
 		// Copy source rows into a buffer FIRST (source/dest may alias), relocate jumps.
 		ubyte[] buf = new ubyte[count * 4];
 		foreach(i, r; rows) buf[i * 4 .. i * 4 + 4] = t[r * 4 .. r * 4 + 4];
@@ -1413,28 +2802,36 @@ class SoundEditor : Window, Undoable {
 			if(selectedSweepRowEnd >= 0 && selectedSweepRowEnd < 0x40 && newRow[selectedSweepRowEnd] >= 0)
 				selectedSweepRowEnd = newRow[selectedSweepRowEnd];
 		}
-		retriggerIfSounding();
 		return true;
 	}
 
-	// §20.2 pop the shared-program confirmation for a DRAG edit. Y = fork a private copy,
-	// N = edit the shared program in place. The prompt fires on the first drag tick and
-	// cancels that drag, so N grants a ONE-SHOT authorization for the immediate re-drag
-	// (cleared on the next mouse release -> the following drag warns again).
-	private void promptSweepFork(int table, int ins) {
-		int col = (table == 0) ? 5 : 4;
-		int startRow = song.instrumentTable[ins + col * 48];
-		string what = (table == 0) ? "pulse" : "filter";
-		mainui.activateDialog(new ConfirmationDialog(
-			format("This %s program is shared. Fork a private copy (y/n)? ", what),
-			(int param) {
-				if(param == 0) forkSweepProgram(table, ins);       // Y = fork
-				else {                                             // N = edit shared once
-					sweepDragGrant = true;
-					sweepDragGrantTable = table;
-					sweepDragGrantRow = startRow;
-				}
-			}));
+	private int remapForkedSweepRow(int row) {
+		return row >= 0 && row < 0x40 && lastSweepForkMap[row] >= 0
+			? lastSweepForkMap[row] : row;
+	}
+	private bool beginSweepDragMutation(int table, int ins) {
+		bool isShared = sweepProgramShared(table, ins);
+		if(isShared && !linkedEditActive(table, ins)) {
+			if(!forkSweepProgram(table, ins)) return false;
+			// Selection is remapped by forkSweepProgram; remap every in-flight handle.
+			sweepLoopCloseRow = remapForkedSweepRow(sweepLoopCloseRow);
+			sweepResRow = remapForkedSweepRow(sweepResRow);
+			sweepResTargetRow = remapForkedSweepRow(sweepResTargetRow);
+			sweepRow = remapForkedSweepRow(sweepRow);
+			sweepEndRow = remapForkedSweepRow(sweepEndRow);
+			sweepJoinLeftRow = remapForkedSweepRow(sweepJoinLeftRow);
+			sweepJoinRightRow = remapForkedSweepRow(sweepJoinRightRow);
+			sweepDurRow = remapForkedSweepRow(sweepDurRow);
+			return true;
+		}
+		snapshotAllTables(false);
+		return true;
+	}
+	private bool beginSweepDiscreteMutation(int table, int ins, bool withLabels = false) {
+		if(sweepProgramShared(table, ins) && !linkedEditActive(table, ins))
+			return forkSweepProgram(table, ins); // fork owns the one atomic snapshot
+		snapshotAllTables(withLabels);
+		return true;
 	}
 
 	// Map the current level drag's mouse Y to the target value and write the edited
@@ -1447,8 +2844,13 @@ class SoundEditor : Window, Undoable {
 		int topPx, botPx; bandBox(g, band, topPx, botPx);
 		int h = botPx - topPx; if(h < 1) h = 1;
 		int py = celly * FONT_Y + FONT_Y / 2;
-		int v = cast(int)lround(cast(double)(botPx - py) * maxVal / h);
-		v = clampInt(v, 0, maxVal);
+		int v;
+		if(sweepTable == 1 && sweepRow >= 1) {
+			v = filterCutoffValue(g, celly);
+		} else {
+			v = cast(int)lround(cast(double)(botPx - py) * maxVal / h);
+			v = clampInt(v, 0, maxVal);
+		}
 		if(sweepRow < 0 || sweepRow >= 0x40) return;
 		if(sweepTable == 0) song.pulseTable[sweepRow * 4 + 2] = encodeInitB2(0, v);
 		else song.filterTable[sweepRow * 4 + 2] = encodeInitB2(1, v);
@@ -1473,6 +2875,44 @@ class SoundEditor : Window, Undoable {
 		}
 		return -1;
 	}
+	private int filterControlConfigRow(int ins) {
+		if(selectedSweepTable == 1 && selectedSweepRow >= 1) {
+			if(song.filterTable[selectedSweepRow * 4] & 0x80)
+				return selectedSweepRow;
+			// A SWEEP is the editable body of its logical CONFIG+SWEEP block. Make
+			// the gutter mode/route controls follow that governing CONFIG, including
+			// after deletion compacts a loop and its instantaneous CONFIG marker shares
+			// the preceding boundary. Falling back to the first CONFIG made later blocks
+			// appear selectable while their LP/BP/HP and route controls edited block 1.
+			SweepSim s = simFilter(song.instrumentTable[ins + 4 * 48]);
+			foreach(f, row; s.rowOf)
+				if(row == selectedSweepRow && f < s.cfgRowOf.length
+						&& s.cfgRowOf[f] >= 1)
+					return s.cfgRowOf[f];
+		}
+		return filterFirstConfigRow(song.instrumentTable[ins + 4 * 48]);
+	}
+
+	// CONFIG rows are instantaneous and share their X with the preceding SWEEP edge.
+	// Give their visible vertical marker a small cell-granular selection zone so users
+	// can select CONFIG instead of always resizing the block on its left.
+	private int filterConfigRowAtPress(ref Geo g, int x) {
+		int ins = clampedIns();
+		int ptr = song.instrumentTable[ins + 4 * 48];
+		if(ptr < 1 || ptr > 0x3f) return -1;
+		SweepSim s = simFilter(ptr);
+		int px = x * FONT_X + FONT_X / 2;
+		int best = -1, bestDist = DUR_HIT_PX + 1;
+		bool[0x40] seen;
+		foreach(f, row; s.rowOf) {
+			if(row < 1 || row >= 0x40 || seen[row]
+					|| !(song.filterTable[row * 4] & 0x80)) continue;
+			seen[row] = true;
+			int d = abs(px - xForFrame(g, cast(int)f));
+			if(d <= DUR_HIT_PX && d < bestDist) { best = row; bestDist = d; }
+		}
+		return best;
+	}
 
 	// Hit-test the resonance overlay line in the Filter band at press (x,y screen cells).
 	// The grab zone is a small band (RES_HIT_PX) around the DRAWN res line (which lives in
@@ -1483,7 +2923,8 @@ class SoundEditor : Window, Undoable {
 	// drag (and before sweepBandAt, whose cell-top band split can't reach a top-edge res
 	// line) so grabbing the resonance line always wins over a cutoff-level drag.
 	private enum int RES_HIT_PX = 6;
-	private int filterResHandleAt(ref Geo g, int x, int y) {
+	private int filterResHandleAt(ref Geo g, int x, int y, out int targetRow) {
+		targetRow = -1;
 		int px = x * FONT_X;
 		if(px < g.plotX0px || px >= g.plotX0px + g.plotWpx) return -1;
 		int ins = clampedIns();
@@ -1501,7 +2942,10 @@ class SoundEditor : Window, Undoable {
 		int hh = botPx - topPx; if(hh < 1) hh = 1;
 		int ry = botPx - res * hh / 15;
 		int clickPy = y * FONT_Y + FONT_Y / 2;
-		if(abs(clickPy - ry) <= RES_HIT_PX) return cfg;   // click is on the drawn res line
+		if(abs(clickPy - ry) <= RES_HIT_PX) {
+			targetRow = f < cast(int)s.rowOf.length ? s.rowOf[f] : -1;
+			return cfg;
+		}
 		return -1;
 	}
 
@@ -1520,67 +2964,206 @@ class SoundEditor : Window, Undoable {
 		song.filterTable[sweepResRow * 4 + 1] = cast(ubyte)((v << 4) | (b1 & 0x0f));
 	}
 
-	// The Filter band's clickable MODE CHIP lives in the band's left gutter, two rows below
-	// the "Filter" label (below "res"), showing the first config row's mode name in its
-	// §10.1 colour. Fixed-width click target across the gutter (nothing else is drawn there).
+	// Cell-granular graph height cannot represent all sixteen resonance nibbles. These
+	// visible mouse controls provide exact +/-1 refinement for the selected CONFIG row,
+	// preserving its route mask, mode, cutoff and jump.
+	private void nudgeSelectedFilterRes(int delta) {
+		int ins = clampedIns(), row = selectedSweepRow;
+		if(selectedSweepTable != 1 || row < 1
+				|| !(song.filterTable[row * 4] & 0x80)) return;
+		if(!beginSweepDiscreteMutation(1, ins)) return;
+		doNudgeSelectedFilterRes(delta);
+	}
+	private void doNudgeSelectedFilterRes(int delta) {
+		int row = selectedSweepRow;
+		if(selectedSweepTable != 1 || row < 1
+				|| !(song.filterTable[row * 4] & 0x80)) return;
+		ubyte b1 = song.filterTable[row * 4 + 1];
+		int res = clampInt((b1 >> 4) + delta, 0, 15);
+		if(res == (b1 >> 4)) return;
+		song.filterTable[row * 4 + 1] = cast(ubyte)((res << 4) | (b1 & 0x0f));
+		UI.statusline.display(format("Filter CONFIG $%02X: Res %X Mask %X.",
+			row, res, b1 & 0x0f));
+		retriggerIfSounding();
+	}
+
+	// Give a sweep block its own piecewise-constant resonance. If it is already directly
+	// preceded by a CONFIG row, that row is its constant. Otherwise insert a carry-cutoff
+	// CONFIG between the previous block and this one, preserving mode, routing and jumps.
+	private int ensureResConfigForTarget(int ins, int targetRow, int governingCfg) {
+		if(targetRow < 1 || targetRow >= 0x40) return governingCfg;
+		if(song.filterTable[targetRow * 4] & 0x80) return targetRow;
+		int[] steps = sweepProgramSteps(1, ins);
+		int at = -1;
+		foreach(i, r; steps) if(r == targetRow) { at = cast(int)i; break; }
+		if(at < 0) return governingCfg;
+		if(at > 0) {
+			int prev = steps[at - 1];
+			if(song.filterTable[prev * 4] & 0x80) return prev;
+		}
+		if(sweepTableFull(1)) {
+			UI.statusline.display("Filter table full - cannot add a resonance segment.");
+			return -1;
+		}
+		ubyte mode = governingCfg >= 1 ? song.filterTable[governingCfg * 4] & 0x70 : 0x10;
+		ubyte rr = governingCfg >= 1 ? song.filterTable[governingCfg * 4 + 1] : 0;
+		int nr;
+		if(at > 0) {
+			int prev = steps[at - 1];
+			nr = prev + 1;
+			ct.purge.filterInsertRow(song, nr);
+			ubyte next = song.filterTable[prev * 4 + 3];
+			song.filterTable[prev * 4 + 3] = 0;
+			song.filterTable[nr * 4 + 3] = next;
+		} else {
+			nr = targetRow;
+			ct.purge.filterInsertRow(song, nr);
+			song.instrumentTable[ins + 4 * 48] = cast(ubyte)nr;
+			song.filterTable[nr * 4 + 3] = 0;
+		}
+		if(selectedSweepTable == 1) {
+			if(selectedSweepRow >= nr) ++selectedSweepRow;
+			if(selectedSweepRowEnd >= nr) ++selectedSweepRowEnd;
+		}
+		song.filterTable[nr * 4] = cast(ubyte)(0x80 | mode);
+		song.filterTable[nr * 4 + 1] = rr;
+		song.filterTable[nr * 4 + 2] = 0xff; // keep the cutoff continuous
+		return nr;
+	}
+
+	// Three independent mode-bit buttons in the filter gutter. They remain clickable
+	// while off: dark-gray = bit clear, yellow = bit set. Labels intentionally have no
+	// brackets so LP/BP/HP read as three compact hardware bits.
 	private void filterModeChipCell(ref Geo g, out int cx, out int cy) {
 		cx = g.labelX;
-		cy = g.bandTopPx[4] / FONT_Y + 2;
+		cy = g.bandTopPx[4] / FONT_Y + 1;
 	}
 	private bool filterModeChipVisible(ref Geo g) {
 		int cx, cy; filterModeChipCell(g, cx, cy);
-		return cy < g.bandTopPx[5] / FONT_Y;      // fits inside the filter band
+		return cy + 2 < g.bandTopPx[5] / FONT_Y;
 	}
-	private bool filterModeChipAt(ref Geo g, int x, int y) {
-		if(!filterModeChipVisible(g)) return false;
+	private Button[3] filterModeButtons(int ins, ref Geo g) {
+		static immutable string[3] labels = ["LP", "BP", "HP"];
+		static immutable int[3] bits = [0x10, 0x20, 0x40];
+		static immutable string[3] actions = ["se_lp", "se_bp", "se_hp"];
+		Button[3] b;
 		int cx, cy; filterModeChipCell(g, cx, cy);
-		return y == cy && x >= cx && x < g.labelX + 8;   // whole 8-cell gutter row
+		int cfg = filterControlConfigRow(ins);
+		int mode = cfg >= 0 ? song.filterTable[cfg * 4] & 0x70 : 0;
+		foreach(i; 0 .. 3) {
+			b[i].x0 = cx; b[i].x1 = cx + 4; b[i].row = cy + cast(int)i;
+			b[i].label = " " ~ labels[i] ~ " ";
+			b[i].enabled = cfg >= 0;
+			b[i].active = (mode & bits[i]) != 0;
+			b[i].hovered = hovering && b[i].contains(hoverCellX, hoverCellY);
+			b[i].pressed = pressedFilterAction == actions[i] && pressedFilterOver;
+			b[i].restingLabel = BaseColor.darkgray;
+			b[i].activeLabel = BaseColor.yellow;
+			b[i].activeBackground = BaseColor.black;
+		}
+		return b;
+	}
+	private int filterModeBitAt(int ins, ref Geo g, int x, int y) {
+		if(!filterModeChipVisible(g)) return 0;
+		auto b = filterModeButtons(ins, g);
+		static immutable int[3] bits = [0x10, 0x20, 0x40];
+		foreach(i; 0 .. 3) if(b[i].enabled && b[i].contains(x, y)) return bits[i];
+		return 0;
+	}
+	private void filterRouteChipCell(ref Geo g, out int cx, out int cy) {
+		cx = g.labelX;
+		cy = g.bandTopPx[4] / FONT_Y + 4;
+	}
+	private bool filterRouteChipVisible(ref Geo g) {
+		int cx, cy; filterRouteChipCell(g, cx, cy);
+		// The route chip occupies the one-character separator row immediately below
+		// the three filter-mode chips.  That boundary row is still Filter chrome; the
+		// next graph begins below it.
+		return cy <= g.bandTopPx[5] / FONT_Y;
+	}
+	private static string filterRouteName(int route) {
+		string s;
+		if(route & 1) s ~= "1";
+		if(route & 2) s ~= "2";
+		if(route & 4) s ~= "3";
+		if(route & 8) s ~= "X"; // SID external input
+		return s.length ? s : "-";
+	}
+	private Button filterRouteButton(int ins, ref Geo g) {
+		int cx, cy; filterRouteChipCell(g, cx, cy);
+		int cfg = filterControlConfigRow(ins);
+		string name = cfg < 0 ? "n/a" : filterRouteName(song.filterTable[cfg * 4 + 1] & 0x0f);
+		Button b;
+		b.label = " Rt" ~ name.leftJustify(4) ~ " "; // fixed eight-cell padded target
+		b.x0 = cx; b.x1 = cx + cast(int)b.label.length; b.row = cy;
+		b.enabled = cfg >= 0;
+		b.hovered = hovering && b.contains(hoverCellX, hoverCellY);
+		b.pressed = pressedFilterAction == "se_route" && pressedFilterOver;
+		b.restingLabel = cfg < 0 ? BaseColor.darkgray : COL_VALUE;
+		return b;
+	}
+	private bool filterRouteChipAt(int ins, ref Geo g, int x, int y) {
+		if(!filterRouteChipVisible(g)) return false;
+		auto b = filterRouteButton(ins, g);
+		return b.enabled && b.contains(x, y);
+	}
+	private string filterActionAt(int ins, ref Geo g, int x, int y) {
+		if(filterModeChipVisible(g)) {
+			auto b = filterModeButtons(ins, g);
+			static immutable string[3] actions = ["se_lp", "se_bp", "se_hp"];
+			foreach(i; 0 .. 3) if(b[i].enabled && b[i].contains(x, y)) return actions[i];
+		}
+		if(filterRouteChipAt(ins, g, x, y)) return "se_route";
+		return "";
+	}
+	private void activateFilterAction(int ins, string action) {
+		switch(action) {
+			case "se_lp": toggleFilterModeBit(ins, 0x10); break;
+			case "se_bp": toggleFilterModeBit(ins, 0x20); break;
+			case "se_hp": toggleFilterModeBit(ins, 0x40); break;
+			case "se_route": cycleFilterRoute(ins); break;
+			default: break;
+		}
 	}
 	private void drawFilterModeChip(int ins, ref Geo g) {
 		if(!filterModeChipVisible(g)) return;
-		int cx, cy; filterModeChipCell(g, cx, cy);
-		int cfg = filterFirstConfigRow(song.instrumentTable[ins + 4 * 48]);
-		string name; int col;
-		if(cfg < 0) { name = "n/a"; col = COL_DIM; }
-		else {
-			int mode = song.filterTable[cfg * 4] & 0x70;
-			name = filterModeName(mode);          // "LP".."LPBPHP" or "off"
-			int mc = filterModeColor(mode);
-			col = (mc < 0) ? COL_DIM : mc;
-		}
-		screen.cprint(cx, cy, col, 0, "[" ~ name ~ "]");
+		auto b = filterModeButtons(ins, g);
+		foreach(ref button; b) button.draw();
+	}
+	private void drawFilterRouteChip(int ins, ref Geo g) {
+		if(!filterRouteChipVisible(g)) return;
+		filterRouteButton(ins, g).draw();
 	}
 
-	// §20 P4b-3 cycle the first filter config row's mode (LP->BP->HP->LP+BP->BP+HP->LP+HP->
-	// LP+HP+BP-> back to LP). Runs the §20.2 shared check first (fork/edit-shared prompt),
-	// then rewrites the config row's b0 mode bits (0x70), preserving the 0x80 config flag +
-	// low nibble. No-op with a status hint if the program has no config row.
-	private void cycleFilterMode(int ins) {
-		if(filterFirstConfigRow(song.instrumentTable[ins + 4 * 48]) < 0) {
+	private void toggleFilterModeBit(int ins, int bit) {
+		if(filterControlConfigRow(ins) < 0) {
 			UI.statusline.display("No filter config row - add a filter program to set mode.");
 			return;
 		}
-		if(sweepProgramShared(1, ins)) {   // §20.2 warn every time (no remembered choice)
-			mainui.activateDialog(new ConfirmationDialog(
-				"This filter program is shared. Fork a private copy (y/n)? ",
-				(int param) {
-					if(param == 0) { if(!forkSweepProgram(1, ins)) return; }  // Y = fork
-					doCycleFilterMode(ins);                                   // N = edit shared
-				}));
+		if(!beginSweepDiscreteMutation(1, ins)) return;
+		doToggleFilterModeBit(ins, bit);
+	}
+	private void doToggleFilterModeBit(int ins, int bit) {
+		int cfg = filterControlConfigRow(ins);
+		if(cfg < 0) return;
+		ubyte b0 = song.filterTable[cfg * 4];
+		song.filterTable[cfg * 4] = cast(ubyte)(b0 ^ (bit & 0x70));
+		retriggerIfSounding();
+	}
+
+	private void cycleFilterRoute(int ins) {
+		if(filterControlConfigRow(ins) < 0) {
+			UI.statusline.display("No filter config row - add a filter program to set routing.");
 			return;
 		}
-		doCycleFilterMode(ins);
+		if(!beginSweepDiscreteMutation(1, ins)) return;
+		doCycleFilterRoute(ins);
 	}
-	private void doCycleFilterMode(int ins) {
-		int cfg = filterFirstConfigRow(song.instrumentTable[ins + 4 * 48]);
+	private void doCycleFilterRoute(int ins) {
+		int cfg = filterControlConfigRow(ins);
 		if(cfg < 0) return;
-		snapshotAllTables(false);
-		ubyte b0 = song.filterTable[cfg * 4];
-		int cur = b0 & 0x70;
-		int idx = -1;
-		foreach(i, m; FILTER_MODE_CYCLE) if(m == cur) { idx = cast(int)i; break; }
-		int next = FILTER_MODE_CYCLE[(idx + 1) % cast(int)FILTER_MODE_CYCLE.length];
-		song.filterTable[cfg * 4] = cast(ubyte)((b0 & 0x8f) | (next & 0x70));
+		ubyte b1 = song.filterTable[cfg * 4 + 1];
+		song.filterTable[cfg * 4 + 1] = cast(ubyte)((b1 & 0xf0) | (((b1 & 0x0f) + 1) & 0x0f));
 		retriggerIfSounding();
 	}
 
@@ -1623,32 +3206,23 @@ class SoundEditor : Window, Undoable {
 	// line (loopFrame + k*period) or, for a stopping program, its subtle end marker;
 	// else -1. Checked in clickedAt BEFORE the level-drag so grabbing the loop line
 	// neither pans nor edits levels.
-	private enum int LOOP_HIT_PX = 5;
 	private int sweepLoopHandleAt(int table, ref Geo g, int x, int y) {
-		int band = (table == 0) ? 3 : 4;
-		int px = x * FONT_X, py = y * FONT_Y;
-		if(px < g.plotX0px || px >= g.plotX0px + g.plotWpx) return -1;
-		// §21 P4c the loop is grabbed only from the TOP strip of the band (its grip); the
-		// rest of the band belongs to the step-box resize edges that share the same X.
-		if(py < g.bandTopPx[band] || py >= g.bandTopPx[band] + LOOP_GRIP_PX) return -1;
+		int cellLeft = x * FONT_X, cellRight = cellLeft + FONT_X;
+		int cellTop = y * FONT_Y, cellBottom = cellTop + FONT_Y;
+		if(cellRight <= g.plotX0px || cellLeft >= g.plotX0px + g.plotWpx) return -1;
 		int ins = clampedIns();
 		int col = (table == 0) ? 5 : 4;
 		int startRow = song.instrumentTable[ins + col * 48];
 		int closeRow = sweepCloseRow(table, startRow);
 		if(closeRow < 0) return -1;
 		SweepSim s = (table == 0) ? simPulse(startRow) : simFilter(startRow);
-		int pressX = px + FONT_X / 2;
-		if(s.loopFrame >= 0 && s.loopPeriod >= 2) {
-			int n = min(cast(int)s.val.length, visFrames);
-			for(int f = s.loopFrame; f < n && f < visFrames; f += s.loopPeriod) {
-				if(!frameInView(f)) continue;
-				if(abs(pressX - xForFrame(g, f)) <= LOOP_HIT_PX) return closeRow;
-			}
-		} else if(s.stops) {
-			int f = min(cast(int)s.val.length, visFrames);
-			if(frameInView(f) && abs(pressX - xForFrame(g, f)) <= LOOP_HIT_PX)
-				return closeRow;
-		}
+		auto shape = sweepLoopGeometry(table, g, s);
+		if(cellBottom <= shape.top || cellTop >= shape.bottom) return -1;
+		bool hitsStart = shape.startVisible && cellRight > shape.startLeft
+			&& cellLeft < shape.startRight;
+		bool hitsEnd = shape.endVisible && cellRight > shape.endLeft
+			&& cellLeft < shape.endRight;
+		if(hitsStart || hitsEnd) return closeRow;
 		return -1;
 	}
 
@@ -1676,9 +3250,8 @@ class SoundEditor : Window, Undoable {
 
 	// §20.1/§20.4 insert (after the selected row) or delete the selected sweep step via
 	// the ct.purge row-ops (which shift the table AND fix every instrument pointer +
-	// sequence command globally). Runs the §20.2 shared-program check first: if shared &
-	// undecided, prompts fork/edit-shared and performs the row-op in the dialog callback
-	// (on the private copy if forked). Snapshots ALL tables + insLabels for undo.
+	// sequence command globally). Ownership resolves automatically before the row-op;
+	// the fork and edit share one all-table undo snapshot.
 	private void sweepRowOp(int table, bool insert) {
 		int ins = clampedIns();
 		if(selectedSweepRow < 0 || selectedSweepRow >= 0x40) return;
@@ -1687,17 +3260,27 @@ class SoundEditor : Window, Undoable {
 				table == 0 ? "Pulse" : "Filter"));
 			return;
 		}
-		if(sweepProgramShared(table, ins)) {   // §20.2 warn every time (no remembered choice)
-			string what = (table == 0) ? "pulse" : "filter";
-			mainui.activateDialog(new ConfirmationDialog(
-				format("This %s program is shared. Fork a private copy (y/n)? ", what),
-				(int param) {
-					if(param == 0) { if(!forkSweepProgram(table, ins)) return; }  // Y = fork
-					doSweepRowOp(table, insert);   // N = edit shared; Y = the forked copy
-				}));
-			return;
-		}
+		if(!beginSweepDiscreteMutation(table, ins, true)) return;
 		doSweepRowOp(table, insert);
+	}
+
+	// Resolve a canonical logical Filter block (CONFIG immediately followed in program
+	// order by its SWEEP) from either constituent row.
+	private bool filterLogicalBlockAt(int ins, int selected, out int cfg, out int sweep) {
+		cfg = sweep = -1;
+		int[] steps = sweepProgramSteps(1, ins);
+		foreach(i, row; steps) {
+			if(row != selected) continue;
+			if(song.filterTable[row * 4] & 0x80) {
+				if(i + 1 < steps.length && !(song.filterTable[steps[i + 1] * 4] & 0x80)) {
+					cfg = row; sweep = steps[i + 1]; return true;
+				}
+			} else if(i > 0 && (song.filterTable[steps[i - 1] * 4] & 0x80)) {
+				cfg = steps[i - 1]; sweep = row; return true;
+			}
+			return false;
+		}
+		return false;
 	}
 
 	// The actual row-op, once sharing is resolved. INSERT: a new row after the selected
@@ -1708,8 +3291,32 @@ class SoundEditor : Window, Undoable {
 		int sel = selectedSweepRow;
 		if(sel < 0 || sel >= 0x40) return;
 		ubyte[] t = (table == 0) ? song.pulseTable : song.filterTable;
-		snapshotAllTables(true);                 // row-ops shift pointers + seq commands
 		if(insert) {
+			int logicalCfg, logicalSweep;
+			if(table == 1 && filterLogicalBlockAt(clampedIns(), sel,
+					logicalCfg, logicalSweep)) {
+				int nr = logicalSweep + 1;
+				if(nr + 1 >= 0x40 || sweepTableFull(1)
+						|| song.filterTable[0x3e * 4] != 0
+						|| song.filterTable[0x3e * 4 + 1] != 0
+						|| song.filterTable[0x3e * 4 + 2] != 0
+						|| song.filterTable[0x3e * 4 + 3] != 0) {
+					UI.statusline.display("Filter table needs two free rows for a logical block.");
+					return;
+				}
+				ct.purge.filterInsertRow(song, nr);
+				ct.purge.filterInsertRow(song, nr + 1);
+				ubyte inheritedJump = t[logicalSweep * 4 + 3];
+				ubyte cfg0 = t[logicalCfg * 4];
+				ubyte cfg1 = t[logicalCfg * 4 + 1];
+				t[nr * 4 .. nr * 4 + 4] = [cast(ubyte)(0x80 | (cfg0 & 0x70)),
+					cfg1, 0xff, 0x00];
+				t[(nr + 1) * 4 .. (nr + 1) * 4 + 4] = [0x00, 0x00, 0xff, inheritedJump];
+				t[logicalSweep * 4 + 3] = 0;
+				selectedSweepRow = selectedSweepRowEnd = nr; // CONFIG first: mode/res/route
+				retriggerIfSounding();
+				return;
+			}
 			int nr = sel + 1;
 			ubyte b0 = t[sel * 4], b1 = t[sel * 4 + 1], b2 = t[sel * 4 + 2];
 			if(table == 0) ct.purge.pulseInsertRow(song, nr);
@@ -1718,12 +3325,112 @@ class SoundEditor : Window, Undoable {
 			// selected row's (possibly-adjusted) jump so the terminal/loop still resolves,
 			// and the selected row now falls through (b3=0) into the new row.
 			ubyte cur = t[sel * 4 + 3];
+			// After a filter CONFIG row, the useful default is a neutral SWEEP row;
+			// cloning the config made newly-created filters impossible to animate without
+			// returning to hex. Other rows retain the established clone behavior.
+			if(table == 1 && (b0 & 0x80)) { b0 = 0; b1 = 0; b2 = 0xff; }
 			t[nr * 4 + 0] = b0; t[nr * 4 + 1] = b1; t[nr * 4 + 2] = b2; t[nr * 4 + 3] = cur;
 			t[sel * 4 + 3] = 0;
 			selectedSweepRow = nr;
+			selectedSweepRowEnd = nr;
 		} else {
+			int logicalCfg, logicalSweep;
+			if(table == 1 && filterLogicalBlockAt(clampedIns(), sel,
+					logicalCfg, logicalSweep) && logicalSweep == logicalCfg + 1) {
+				// A canonical filter block is one user object backed by CONFIG+SWEEP.
+				// Delete both adjacent physical rows inside this one existing snapshot.
+				int insBefore = clampedIns();
+				int startBefore = song.instrumentTable[insBefore + 4 * 48];
+				int closeBefore = sweepCloseRow(1, startBefore);
+				int targetBefore = closeBefore >= 0 ? t[closeBefore * 4 + 3] : -1;
+				bool loopBefore = targetBefore >= 1 && targetBefore <= 0x3f;
+				bool deletesClose = closeBefore >= logicalCfg && closeBefore <= logicalSweep;
+				bool deletesTarget = targetBefore >= logicalCfg && targetBefore <= logicalSweep;
+				bool[48] restoreDeletedStart;
+				bool[0x40] programBefore = sweepProgramRows(1, startBefore);
+				int survivingRows;
+				foreach(r; 1 .. 0x40)
+					if(programBefore[r] && (r < logicalCfg || r > logicalSweep)) survivingRows++;
+				if(survivingRows > 0)
+					foreach(j; 0 .. 48) {
+						int pointer = song.instrumentTable[j + 4 * 48];
+						if(pointer == logicalCfg || pointer == logicalSweep)
+							restoreDeletedStart[j] = true;
+					}
+
+				ct.purge.filterDeleteRow(song, logicalCfg);
+				ct.purge.filterDeleteRow(song, logicalCfg);
+				// purge's generic address shift maps a pointer AT the deleted first row
+				// to row-1. When a successor logical block survives, it shifts into the
+				// deleted gap, so every linked pointer must continue at that same row.
+				foreach(j; 0 .. 48) if(restoreDeletedStart[j])
+					song.instrumentTable[j + 4 * 48] = cast(ubyte)logicalCfg;
+
+				int closeAfter = deletesClose ? logicalCfg - 1
+					: (closeBefore > logicalSweep ? closeBefore - 2 : closeBefore);
+				if(closeAfter >= 1 && closeAfter < 0x40) {
+					if(deletesClose) {
+						// Removing the complete closing loop cannot expand it onto an
+						// unrelated block: the surviving predecessor explicitly stops.
+						t[closeAfter * 4 + 3] = 0x7f;
+					} else if(loopBefore) {
+						int targetAfter;
+						if(deletesTarget)
+							targetAfter = logicalCfg; // successor shifted into the gap
+						else
+							targetAfter = targetBefore > logicalSweep
+								? targetBefore - 2 : targetBefore;
+						t[closeAfter * 4 + 3] = cast(ubyte)targetAfter;
+					}
+				}
+
+				int ins = clampedIns();
+				int startRow = song.instrumentTable[ins + 4 * 48];
+				bool[0x40] rows = sweepProgramRows(1, startRow);
+				int pick = -1;
+				if(logicalCfg - 1 >= 1 && rows[logicalCfg - 1]) pick = logicalCfg - 1;
+				else if(logicalCfg < 0x40 && rows[logicalCfg]) pick = logicalCfg;
+				else foreach(r; 1 .. 0x40) if(rows[r]) { pick = r; break; }
+				selectedSweepRow = selectedSweepRowEnd = pick;
+				if(pick < 0) selectedSweepTable = -1;
+				retriggerIfSounding();
+				return;
+			}
+			// Capture loop meaning before the generic row deletion rebases absolute
+			// addresses. Removing a target contracts to its successor; removing the sole
+			// self-loop converts the preceding block to END, never to an expanded loop.
+			int insBefore = clampedIns();
+			int colBefore = table == 0 ? 5 : 4;
+			int closeBefore = sweepCloseRow(table,
+				song.instrumentTable[insBefore + colBefore * 48]);
+			int targetBefore = closeBefore >= 0 ? t[closeBefore * 4 + 3] : -1;
+			bool loopBefore = targetBefore >= 1 && targetBefore <= 0x3f;
+			bool[48] restoreDeletedStart;
+			bool[0x40] programBefore = sweepProgramRows(table,
+				song.instrumentTable[insBefore + colBefore * 48]);
+			int survivingRows;
+			foreach(r; 1 .. 0x40) if(programBefore[r] && r != sel) survivingRows++;
+			if(survivingRows > 0)
+				foreach(j; 0 .. 48)
+					if(song.instrumentTable[j + colBefore * 48] == sel)
+						restoreDeletedStart[j] = true;
 			if(table == 0) ct.purge.pulseDeleteRow(song, sel);
 			else ct.purge.filterDeleteRow(song, sel);
+			foreach(j; 0 .. 48) if(restoreDeletedStart[j])
+				song.instrumentTable[j + colBefore * 48] = cast(ubyte)sel;
+			if(loopBefore) {
+				int closeAfter = closeBefore - 1;
+				if(closeAfter >= 1 && closeAfter < 0x40) {
+					if(sel == closeBefore && targetBefore == closeBefore) {
+						t[closeAfter * 4 + 3] = 0x7f;
+					} else {
+						int targetAfter = targetBefore;
+						if(targetBefore > sel) targetAfter--;
+						else if(targetBefore == sel && sel < closeBefore) targetAfter = sel;
+						t[closeAfter * 4 + 3] = cast(ubyte)targetAfter;
+					}
+				}
+			}
 			// Move the selection to an adjacent row still inside the (shifted) program.
 			int ins = clampedIns();
 			int col = (table == 0) ? 5 : 4;
@@ -1734,8 +3441,81 @@ class SoundEditor : Window, Undoable {
 			else if(sel < 0x40 && rows[sel]) pick = sel;
 			else foreach(r; 0 .. 0x40) if(rows[r]) { pick = r; break; }
 			selectedSweepRow = pick;
+			selectedSweepRowEnd = pick;
 			if(pick < 0) selectedSweepTable = -1;   // program emptied -> no selection
 		}
+		retriggerIfSounding();
+	}
+
+	// Explicit graphical loop -> stop conversion. The inverse remains the loop-grip
+	// drag, because creating a loop needs a visible target row rather than an arbitrary
+	// pointer number.
+	private void stopSelectedSweepProgram() {
+		int table = selectedSweepTable;
+		if(table < 0) return;
+		int ins = clampedIns();
+		if(!beginSweepDiscreteMutation(table, ins)) return;
+		doStopSweepProgram(table, ins);
+	}
+	private void doStopSweepProgram(int table, int ins) {
+		int col = table == 0 ? 5 : 4;
+		int close = sweepCloseRow(table, song.instrumentTable[ins + col * 48]);
+		if(close < 0) return;
+		ubyte[] t = table == 0 ? song.pulseTable : song.filterTable;
+		if(t[close * 4 + 3] == 0x7f) return;
+		t[close * 4 + 3] = 0x7f;
+		retriggerIfSounding();
+	}
+
+	private void toggleSelectedFilterRowType() {
+		if(selectedSweepTable != 1 || selectedSweepRow < 1) return;
+		int ins = clampedIns();
+		if(!beginSweepDiscreteMutation(1, ins)) return;
+		doToggleSelectedFilterRowType(ins);
+	}
+	private void doToggleSelectedFilterRowType(int ins) {
+		int row = selectedSweepRow;
+		if(row < 1) return;
+		ubyte b0 = song.filterTable[row * 4];
+		if(b0 & 0x80) {
+			bool[0x40] rows = sweepProgramRows(1, song.instrumentTable[ins + 4 * 48]);
+			bool otherConfig;
+			foreach(r; 1 .. 0x40)
+				if(r != row && rows[r] && (song.filterTable[r * 4] & 0x80)) { otherConfig = true; break; }
+			if(!otherConfig) {
+				UI.statusline.display("A filter program must keep at least one config row.");
+				return;
+			}
+		}
+		if(b0 & 0x80) {
+			// Config -> neutral one-frame sweep; preserve init cutoff and jump.
+			song.filterTable[row * 4] = 0;
+			song.filterTable[row * 4 + 1] = 0;
+		} else {
+			// Sweep -> config using the program's existing config state where possible.
+			int cfg = filterFirstConfigRow(song.instrumentTable[ins + 4 * 48]);
+			ubyte mode = cfg >= 0 ? cast(ubyte)(song.filterTable[cfg * 4] & 0x70) : 0x10;
+			ubyte rr = cfg >= 0 ? song.filterTable[cfg * 4 + 1] : 0x01;
+			song.filterTable[row * 4] = cast(ubyte)(0x80 | mode);
+			song.filterTable[row * 4 + 1] = rr;
+		}
+		retriggerIfSounding();
+	}
+
+	private void toggleSelectedSweepCarry() {
+		int table = selectedSweepTable, ins = clampedIns();
+		if(table < 0 || selectedSweepRow < 1) return;
+		if(!beginSweepDiscreteMutation(table, ins)) return;
+		doToggleSelectedSweepCarry();
+	}
+	private void doToggleSelectedSweepCarry() {
+		int table = selectedSweepTable, row = selectedSweepRow;
+		if(table < 0 || row < 1) return;
+		ubyte[] t = table == 0 ? song.pulseTable : song.filterTable;
+		if(t[row * 4 + 2] == 0xff)
+			t[row * 4 + 2] = encodeInitB2(table, sweepStepEnterVal(table, row));
+		else
+			t[row * 4 + 2] = 0xff;
 		retriggerIfSounding();
 	}
 
@@ -1792,6 +3572,23 @@ class SoundEditor : Window, Undoable {
 		return true;
 	}
 
+	private bool sweepJoinAt(int ins, ref Geo g, int cellx, int celly,
+			out int leftRow, out int rightRow) {
+		leftRow = rightRow = -1;
+		int[] range = sweepSelectedRange(ins);
+		if(range.length < 2) return false;
+		int px = cellx * FONT_X + FONT_X / 2, py = celly * FONT_Y + FONT_Y / 2;
+		foreach(i; 0 .. cast(int)range.length - 1) {
+			int f0, f1, xa, xb, syS, syE;
+			if(!sweepStepGeom(selectedSweepTable, ins, range[i], g,
+					f0, f1, xa, xb, syS, syE)) continue;
+			if(nearSweepHandle(selectedSweepTable, px, py, xb, syE)) {
+				leftRow = range[i]; rightRow = range[i + 1]; return true;
+			}
+		}
+		return false;
+	}
+
 	// §21 P4c ---- interactive step BOX: duration (edges) + ramp (endpoints) ----
 
 	// Whether a row's DURATION (b0 low 7 bits) is meaningfully editable: pulse rows always;
@@ -1802,6 +3599,43 @@ class SoundEditor : Window, Undoable {
 		return true;
 	}
 
+	// Whether an END/slope handle can produce a visible change. Pulse always applies
+	// its add/sub at least once. A filter sweep with duration zero emits only its initial
+	// cutoff; its b1 slope is never applied, so presenting an END handle would be false UI.
+	private bool sweepRowHasSlope(int table, int row) {
+		if(!sweepRowResizable(table, row)) return false;
+		return table == 0 || (song.filterTable[row * 4] & 0x7f) > 0;
+	}
+
+	// Direct-manipulation hit test for a duration edge. Unlike rowOf-at-frame, this
+	// deliberately checks every visible block so a shared boundary consistently owns
+	// the block on its left. The whole band height is active.
+	private int sweepDurationRowAtPress(int table, int ins, ref Geo g, int x, int y) {
+		int band = table == 0 ? 3 : 4;
+		int px = x * FONT_X + FONT_X / 2, py = y * FONT_Y + FONT_Y / 2;
+		bool inBand = py >= g.bandTopPx[band] && py < g.bandTopPx[band + 1];
+		if(table == 1 && y == g.bandTopPx[4] / FONT_Y) {
+			int cellTop = y * FONT_Y, cellBot = cellTop + FONT_Y;
+			inBand = cellBot > g.bandTopPx[4] && cellTop < g.bandTopPx[5];
+		}
+		if(!inBand) return -1;
+		int best = -1, bestDist = DUR_HIT_PX + 1;
+		foreach(r; sweepProgramSteps(table, ins)) {
+			if(!sweepRowResizable(table, r)) continue;
+			int f0, f1, xa, xb, syS, syE;
+			if(!sweepStepGeom(table, ins, r, g, f0, f1, xa, xb, syS, syE)) continue;
+			int d = abs(px - xb);
+			if(d <= DUR_HIT_PX && d < bestDist) { best = r; bestDist = d; }
+		}
+		return best;
+	}
+
+	private int filterModeForSweepRow(int ins, int row) {
+		SweepSim s = simFilter(song.instrumentTable[ins + 4 * 48]);
+		foreach(f, emitted; s.rowOf)
+			if(emitted == row && f < s.modeOf.length) return s.modeOf[f] & 0x70;
+		return 0;
+	}
 	// §21 P4c geometry of `row`'s step box on the shared axis: its frame span [f0,f1), the
 	// pixel x of its left/right EDGES, and the pixel y of its START and END value handles,
 	// all from the SAME sim the band draws. false if `row` is not currently emitted.
@@ -1826,14 +3660,30 @@ class SoundEditor : Window, Undoable {
 		xa = xForFrame(g, f0); xb = xForFrame(g, f1);
 		if(xb <= xa) xb = xa + 1;
 		int v0 = s.val[f0], v1 = s.val[f1 - 1];
-		syStart = botPx - cast(int)lround(cast(double)v0 * h / maxVal);
-		syEnd   = botPx - cast(int)lround(cast(double)v1 * h / maxVal);
+		// The pulse player applies b1 on the same tick that it loads b2. The plotted
+		// first sample is therefore already one increment past the authored START value.
+		// Handles represent editable bytes, not merely samples, so decode b2 for the
+		// left handle. This keeps press -> drag -> redraw stable and truly WYSIWYG.
+		if(table == 0) {
+			ubyte b2 = song.pulseTable[row * 4 + 2];
+			if(b2 != 0xff) v0 = ((b2 & 0x0f) << 8) | (b2 & 0xf0);
+			else v0 = sweepStepEnterVal(table, row);
+		}
+		if(table == 1) {
+			syStart = filterCutoffY(g, v0);
+			syEnd = filterCutoffY(g, v1);
+		} else {
+			syStart = botPx - cast(int)lround(cast(double)v0 * h / maxVal);
+			syEnd   = botPx - cast(int)lround(cast(double)v1 * h / maxVal);
+		}
 		// Keep the handles inside the band's grabbable interior: a value pinned to the very
 		// top/bottom would land in a half-cell edge that the cell-granular (14px) hit-test
 		// can't reach. A few px of pad barely moves the marker but keeps it grabbable.
-		int pad = FONT_Y / 2;
-		syStart = clampInt(syStart, topPx + pad, botPx - pad);
-		syEnd   = clampInt(syEnd,   topPx + pad, botPx - pad);
+		if(table == 0) {
+			int pad = FONT_Y / 2;
+			syStart = clampInt(syStart, topPx + pad, botPx - pad);
+			syEnd   = clampInt(syEnd,   topPx + pad, botPx - pad);
+		}
 		return true;
 	}
 
@@ -1860,11 +3710,9 @@ class SoundEditor : Window, Undoable {
 		return true;
 	}
 
-	// §21 P4c(v2) Begin editing the PERSISTENTLY-SELECTED step's box at press (x,y), if the
-	// press lands on one of its handles. ALL sweep edits are anchored to the selected step
-	// (you click a step to select it, then edit it) so the edit focus never swaps to a
-	// neighbour mid-gesture — the erratic behaviour of hit-testing the step under the cursor.
-	// Priority: END dot (slope) -> START dot (level) -> right EDGE (duration) -> body (level).
+	// Begin editing the step selected by the current direct-manipulation press. Once the
+	// gesture starts, all updates remain anchored to that step so focus cannot jump.
+	// Priority: END dot (slope) -> right EDGE (duration) -> START dot (level) -> body.
 	// Returns true if a drag was started.
 	private bool beginSelectedStepDrag(int ins, ref Geo g, int x, int y) {
 		int t = selectedSweepTable, r = selectedSweepRow;
@@ -1873,26 +3721,43 @@ class SoundEditor : Window, Undoable {
 		if(!sweepStepGeom(t, ins, r, g, f0, f1, xa, xb, syS, syE)) return false;
 		int band = (t == 0) ? 3 : 4;
 		int px = x * FONT_X + FONT_X / 2, py = y * FONT_Y + FONT_Y / 2;
-		if(py < g.bandTopPx[band] || py >= g.bandTopPx[band + 1]) return false;   // wrong band
-		if(px < xa - BOX_HIT_PX || px > xb + BOX_HIT_PX) return false;            // outside box
+		bool inBand = py >= g.bandTopPx[band] && py < g.bandTopPx[band + 1];
+		if(t == 1 && y == g.bandTopPx[4] / FONT_Y) {
+			int cellTop = y * FONT_Y, cellBot = cellTop + FONT_Y;
+			inBand = cellBot > g.bandTopPx[4] && cellTop < g.bandTopPx[5];
+		}
+		if(!inBand) return false;   // wrong band
+		if(px < xa - BOX_HIT_PX || px > xb + DUR_HIT_PX) return false;             // outside box
 		bool resizable = sweepRowResizable(t, r);
-		int belowGrip = g.bandTopPx[band] + LOOP_GRIP_PX;   // top strip belongs to the loop grip
-		if(resizable && nearHandle(px, py, xb, syE)) {       // END dot -> slope b1 (+ direction)
+		// The slope dot is drawn on the right boundary, so it must win in its small
+		// circular hit area; the remainder of the vertical line remains duration.
+		if(sweepRowHasSlope(t, r)
+				&& nearSweepHandle(t, px, py, xb, syE)) {
 			clickWasButton = true; sweepEndDragging = true;
 			sweepEndTable = t; sweepEndRow = r; sweepEndIsEnd = true; sweepEndMoved = false;
+			sweepEndWinding = sweepStepWinding(t, r);
 			return true;
 		}
-		if(resizable && nearHandle(px, py, xa, syS)) {       // START dot -> init level b2
+		// Duration owns every vertical position on the right boundary.
+		if(resizable && abs(px - xb) <= DUR_HIT_PX) {
+			clickWasButton = true; sweepDurDragging = true;
+			sweepDurTable = t; sweepDurRow = r; sweepDurAnchorF = f0; sweepDurMoved = false;
+			sweepDurViewStart = viewStartTick; sweepDurViewEnd = viewEndTick;
+			sweepDurViewLocked = true;
+			sweepDurUnitClipped = false;
+			int scale = t == 0 ? 1 : 2;
+			sweepDurTargetExit = sweepStepEnterVal(t, r)
+				+ sweepSignedSlope(t, r) * scale * sweepRampApplications(t, r);
+			sweepDurLegalExit = sweepDurTargetExit;
+			sweepDurClipped = false;
+			return true;
+		}
+		if(resizable && nearSweepHandle(t, px, py, xa, syS)) { // START dot -> init level b2
 			clickWasButton = true; sweepEndDragging = true;
 			sweepEndTable = t; sweepEndRow = r; sweepEndIsEnd = false; sweepEndMoved = false;
 			return true;
 		}
-		if(resizable && abs(px - xb) <= BOX_HIT_PX && py >= belowGrip) {   // right EDGE -> duration
-			clickWasButton = true; sweepDurDragging = true;
-			sweepDurTable = t; sweepDurRow = r; sweepDurAnchorF = f0; sweepDurMoved = false;
-			return true;
-		}
-		if(px > xa && px < xb && py >= belowGrip) {          // BODY -> level b2 (coarse translate)
+		if(px > xa && px < xb) {                             // BODY -> level b2 (coarse translate)
 			clickWasButton = true; sweepDragging = true;
 			sweepTable = t; sweepRow = r; sweepMoved = false;
 			return true;
@@ -1921,19 +3786,18 @@ class SoundEditor : Window, Undoable {
 			}
 		}
 		// §21 P4c(v3) MULTI-block selection: outline the whole range and mark each shared
-		// JOIN (at the left block's end value). A drag anywhere on the range sets the joins,
-		// so the markers light YELLOW while the pointer is over it or a join drag is active.
+		// JOIN (at the left block's end value). Only the hovered/dragged join lights.
 		if(sweepMultiSelected()) {
 			int rxa, rxb, rband;
 			if(sweepSelectionSpan(ins, g, rxa, rxb, rband)) {
 				int tp, bp; bandBox(g, rband, tp, bp);
 				video.olRect(rxa, tp, rxb - rxa, bp - tp, COL_STEPSEL);
-				bool joinHot = sweepJoinDragging
-					|| (hovering && hx >= rxa - BOX_HIT_PX && hx <= rxb + BOX_HIT_PX && hy >= tp && hy < bp);
 				int[] range = sweepSelectedRange(ins);
 				foreach(i; 0 .. cast(int)range.length - 1) {
 					int a0, a1, aa, ab, as0, as1;
 					if(!sweepStepGeom(selectedSweepTable, ins, range[i], g, a0, a1, aa, ab, as0, as1)) continue;
+					bool joinHot = (sweepJoinDragging && sweepJoinLeftRow == range[i])
+						|| (hovering && nearSweepHandle(selectedSweepTable, hx, hy, ab, as1));
 					video.olFillRect(ab - 2, as1 - 2, 5, 5, joinHot ? COL_BOX_HOT : COL_HEAD);
 				}
 			}
@@ -1949,30 +3813,63 @@ class SoundEditor : Window, Undoable {
 		bool inY = hy >= topPx && hy < botPx;
 		bool resizable = sweepRowResizable(t, r);
 		// RIGHT edge (duration): hot while resizing, or when hovered near.
-		bool rHot = sweepDurDragging || (inY && abs(hx - xb) <= BOX_HIT_PX);
+		bool rHot = sweepDurDragging || (inY && abs(hx - xb) <= DUR_HIT_PX);
 		if(resizable)
 			video.olVLine(xb, topPx, botPx, rHot ? COL_BOX_HOT : COL_STEPSEL);
 		// START (init b2) + END (slope b1) value dots.
 		if(resizable) {
-			bool sHot = (sweepEndDragging && !sweepEndIsEnd) || (inY && nearHandle(hx, hy, xa, syS));
-			bool eHot = (sweepEndDragging &&  sweepEndIsEnd) || (inY && nearHandle(hx, hy, xb, syE));
+			bool sHot = (sweepEndDragging && !sweepEndIsEnd)
+				|| (inY && nearSweepHandle(t, hx, hy, xa, syS));
 			video.olFillRect(xa - 2, syS - 2, 5, 5, sHot ? COL_BOX_HOT : COL_HEAD);
-			video.olFillRect(xb - 2, syE - 2, 5, 5, eHot ? COL_BOX_HOT : COL_HEAD);
+			if(sweepRowHasSlope(t, r)) {
+				bool eHot = (sweepEndDragging && sweepEndIsEnd)
+					|| (inY && nearSweepHandle(t, hx, hy, xb, syE));
+				video.olFillRect(xb - 2, syE - 2, 5, 5, eHot ? COL_BOX_HOT : COL_HEAD);
+			}
 		}
 	}
 
 	// §21 P4c apply a duration drag: width in frames from the step's fixed start to the
 	// cursor -> the row's b0 low 7 bits (emitted frames = field+1), preserving b0 bit 7
 	// (pulse direction / filter config flag).
+	private int nearestDurationWidth(ref Geo g, int anchorFrame, int pointerPx) {
+		int period = durationRows ? trackStepTicks() : 1;
+		int first = period <= 0 ? 1 : period;
+		if(first > 0x80) first = 0x80;
+		int best = first;
+		int bestDistance = abs(xForFrame(g, anchorFrame + best) - pointerPx);
+		for(int width = first + period; period > 0 && width <= 0x80; width += period) {
+			int distance = abs(xForFrame(g, anchorFrame + width) - pointerPx);
+			// Iterating shorter to longer makes an exact distance tie choose shorter.
+			if(distance < bestDistance) { best = width; bestDistance = distance; }
+		}
+		return best;
+	}
+
 	private void sweepDurDragUpdate(ref Geo g, int cellx) {
 		if(sweepDurRow < 1 || sweepDurRow >= 0x40) return;
-		int px = cellx * FONT_X + FONT_X / 2;
-		int frame = cast(int)lround(tickForPixel(g, px));
-		int width = frame - sweepDurAnchorF;
+		int pointerPx = cellx * FONT_X + FONT_X / 2;
+		int width = nearestDurationWidth(g, sweepDurAnchorF, pointerPx);
+		sweepDurUnitClipped = durationRows && trackStepTicks() > 0x80;
 		int field = clampInt(width - 1, 0, 0x7f);
 		ubyte[] t = (sweepDurTable == 0) ? song.pulseTable : song.filterTable;
 		ubyte b0 = t[sweepDurRow * 4];
 		t[sweepDurRow * 4] = cast(ubyte)((b0 & 0x80) | field);
+		// Duration edits preserve the endpoint the user saw when grabbing the edge.
+		// Each table's signed slope range is clamped through the normal encoder and
+		// retain the legal endpoint for clear feedback on mouse-up.
+		if(sweepDurTable == 0 || sweepDurTable == 1) {
+			int enter = sweepStepEnterVal(sweepDurTable, sweepDurRow);
+			int applications = sweepRampApplications(sweepDurTable, sweepDurRow);
+			int scale = sweepDurTable == 0 ? 1 : 2;
+			int divisor = max(1, applications * scale);
+			int requestedSlope = cast(int)lround(
+				cast(double)(sweepDurTargetExit - enter) / divisor);
+			setSweepSignedSlope(sweepDurTable, sweepDurRow, requestedSlope);
+			sweepDurLegalExit = enter
+				+ sweepSignedSlope(sweepDurTable, sweepDurRow) * scale * applications;
+			sweepDurClipped = sweepDurLegalExit != sweepDurTargetExit;
+		}
 	}
 
 	// §21 P4c the value ENTERING a step's ramp: its explicit init (b2 != 0xff) decoded,
@@ -1998,6 +3895,10 @@ class SoundEditor : Window, Undoable {
 	private static bool nearHandle(int px, int py, int hx, int hy) {
 		return abs(px - hx) <= BOX_HIT_PX && abs(py - hy) <= FONT_Y - 2;
 	}
+	private static bool nearSweepHandle(int table, int px, int py, int hx, int hy) {
+		int yr = table == 1 ? FONT_Y / 2 + 1 : FONT_Y - 2;
+		return abs(px - hx) <= BOX_HIT_PX && abs(py - hy) <= yr;
+	}
 
 	// §21 P4c encode a value to a step's init byte b2 (pulse nibble-swap / filter >>3),
 	// avoiding 0xff — the player reads 0xff as "inherit the running value", not a literal
@@ -2007,6 +3908,36 @@ class SoundEditor : Window, Undoable {
 		                        : cast(ubyte)((v >> 3) & 0xff);
 		if(b2 == 0xff) b2 = (table == 0) ? 0xef : 0xfe;
 		return b2;
+	}
+
+	private int sweepSignedSlope(int table, int row) {
+		const(ubyte)[] t = table == 0 ? song.pulseTable : song.filterTable;
+		if(table == 0) return (t[row * 4] & 0x80) ? -t[row * 4 + 1] : t[row * 4 + 1];
+		int raw = t[row * 4 + 1];
+		return raw < 0x80 ? raw : raw - 0x100;
+	}
+	private int sweepRampApplications(int table, int row) {
+		int n = ((table == 0 ? song.pulseTable : song.filterTable)[row * 4] & 0x7f);
+		return table == 0 ? n + 1 : n;
+	}
+	private int sweepStepWinding(int table, int row) {
+		int modulus = table == 0 ? 4096 : 2048;
+		int scale = table == 0 ? 1 : 2;
+		int exit = sweepStepEnterVal(table, row)
+			+ sweepSignedSlope(table, row) * scale * sweepRampApplications(table, row);
+		int visible = exit % modulus; if(visible < 0) visible += modulus;
+		return exit - visible;
+	}
+	private void setSweepSignedSlope(int table, int row, int slope) {
+		ubyte[] t = table == 0 ? song.pulseTable : song.filterTable;
+		if(table == 0) {
+			slope = clampInt(slope, -255, 255);
+			t[row * 4] = cast(ubyte)((t[row * 4] & 0x7f) | (slope < 0 ? 0x80 : 0));
+			t[row * 4 + 1] = cast(ubyte)(slope < 0 ? -slope : slope);
+		} else {
+			slope = clampInt(slope, -128, 127);
+			t[row * 4 + 1] = cast(ubyte)(slope & 0xff);
+		}
 	}
 
 	// §21 P4c set a step's START value = its init byte b2 (avoids the 0xff inherit sentinel).
@@ -2023,6 +3954,8 @@ class SoundEditor : Window, Undoable {
 		ubyte[] t = (table == 0) ? song.pulseTable : song.filterTable;
 		int entering = sweepStepEnterVal(table, row);
 		ubyte b0 = t[row * 4];
+		// `v` is deliberately UNWRAPPED for endpoint drags. Keeping its winding avoids
+		// direction flips at the value-ring midpoint and permits multiple wraps.
 		int d = v - entering;
 		if(table == 0) {
 			int n = (b0 & 0x7f) + 1;                       // pulse ramps n times
@@ -2037,7 +3970,8 @@ class SoundEditor : Window, Undoable {
 	}
 
 	// Map a cell row to a band value (0..maxVal), inverting the band's Y axis.
-	private int sweepValueForCell(int table, ref Geo g, int celly) {
+	private int sweepValueForCell(int table, ref Geo g, int celly, int row = -1) {
+		if(table == 1 && row >= 1) return filterCutoffValue(g, celly);
 		int band = (table == 0) ? 3 : 4;
 		int maxVal = (table == 0) ? 4095 : 2047;
 		int topPx, botPx; bandBox(g, band, topPx, botPx);
@@ -2045,34 +3979,111 @@ class SoundEditor : Window, Undoable {
 		int py = celly * FONT_Y + FONT_Y / 2;
 		return clampInt(cast(int)lround(cast(double)(botPx - py) * maxVal / h), 0, maxVal);
 	}
+	private int sweepUnwrappedValueForCell(int table, ref Geo g, int celly, int row = -1) {
+		if(table == 1 && row >= 1) return filterCutoffValue(g, celly, false);
+		int band = table == 0 ? 3 : 4;
+		int maxVal = table == 0 ? 4095 : 2047;
+		int topPx, botPx; bandBox(g, band, topPx, botPx);
+		int py = celly * FONT_Y + FONT_Y / 2;
+		if(table == 0) {
+			// Cell-granular input can reach the first/last ROW intersecting the band, not
+			// an arbitrary pixel on its border. Those row centres are the pulse graph's
+			// exact max/min rails; dragging beyond them still extrapolates for winding.
+			int railTop = (topPx / FONT_Y) * FONT_Y + FONT_Y / 2;
+			int railBot = ((botPx - 1) / FONT_Y) * FONT_Y + FONT_Y / 2;
+			int railH = railBot - railTop; if(railH < 1) railH = 1;
+			return cast(int)lround(cast(double)(railBot - py) * maxVal / railH);
+		}
+		int h = botPx - topPx; if(h < 1) h = 1;
+		return cast(int)lround(cast(double)(botPx - py) * maxVal / h);
+	}
 
 	// §21 P4c apply a value-endpoint drag. START: set init b2 (translate). END: set slope
 	// b1 + direction so the ramp ENDS at the pointer value (tilt).
 	private void sweepEndDragUpdate(ref Geo g, int celly) {
-		int v = sweepValueForCell(sweepEndTable, g, celly);
-		if(sweepEndIsEnd) setStepEndValue(sweepEndTable, sweepEndRow, v);
-		else setStepStartValue(sweepEndTable, sweepEndRow, v);
+		if(sweepEndIsEnd) {
+			if(SDL_GetModState() & KMOD_SHIFT) {
+				// Fine endpoint position is ambiguous once a ramp winds. Shift maps the
+				// full band directly onto the complete signed speed range.
+				int band = sweepEndTable == 0 ? 3 : 4;
+				int topPx, botPx; bandBox(g, band, topPx, botPx);
+				int h = botPx - topPx; if(h < 1) h = 1;
+				int py = celly * FONT_Y + FONT_Y / 2;
+				int maxSlope = sweepEndTable == 0 ? 255 : 127;
+				int minSlope = sweepEndTable == 0 ? -255 : -128;
+				int slope = maxSlope - cast(int)lround(cast(double)(py - topPx)
+					* (maxSlope - minSlope) / h);
+				setSweepSignedSlope(sweepEndTable, sweepEndRow, slope);
+			} else {
+				setStepEndValue(sweepEndTable, sweepEndRow,
+					sweepUnwrappedValueForCell(sweepEndTable, g, celly, sweepEndRow) + sweepEndWinding);
+			}
+		} else {
+			setStepStartValue(sweepEndTable, sweepEndRow,
+				sweepValueForCell(sweepEndTable, g, celly, sweepEndRow));
+		}
 	}
 
-	// §21 P4c(v3) apply a JOIN drag over the selected multi-block range: every shared
-	// boundary between consecutive selected blocks meets at the dragged value — the left
-	// block's END and the right block's START both become v.
+	// Apply the clicked JOIN only: both sides move because both adjacent blocks are selected.
 	private void sweepJoinDragUpdate(ref Geo g, int celly) {
-		int ins = clampedIns();
-		int[] range = sweepSelectedRange(ins);
-		if(range.length < 2) return;
-		int v = sweepValueForCell(selectedSweepTable, g, celly);
-		foreach(i; 0 .. cast(int)range.length - 1) {
-			setStepEndValue(selectedSweepTable, range[i], v);       // left block ends at v
-			setStepStartValue(selectedSweepTable, range[i + 1], v); // right block starts at v
+		if(sweepJoinLeftRow < 1 || sweepJoinRightRow < 1) return;
+		int v = sweepValueForCell(selectedSweepTable, g, celly, sweepJoinLeftRow);
+		setStepEndValue(selectedSweepTable, sweepJoinLeftRow, v);
+		setStepStartValue(selectedSweepTable, sweepJoinRightRow, v);
+	}
+
+	// Keyboard parity for a selected graphical block:
+	// Ctrl-Left/Right = START, Ctrl-Shift-Left/Right = END,
+	// Ctrl-Up/Down = duration. Values move by the table's real quantization.
+	private void editSelectedSweepKeyboard(int field, int delta) {
+		int table = selectedSweepTable, ins = clampedIns();
+		if(table < 0 || selectedSweepRow < 1) return;
+		if(!beginSweepDiscreteMutation(table, ins)) return;
+		doEditSelectedSweepKeyboard(field, delta);
+	}
+	private void doEditSelectedSweepKeyboard(int field, int delta) {
+		int table = selectedSweepTable, row = selectedSweepRow;
+		if(table < 0 || row < 1) return;
+		if(field != 0 && !sweepRowResizable(table, row)) {
+			UI.statusline.display("Filter config rows have no slope or duration.");
+			return;
 		}
+		if(field == 1 && !sweepRowHasSlope(table, row)) {
+			UI.statusline.display("Increase this filter step's duration before editing its end.");
+			return;
+		}
+		ubyte[] t = table == 0 ? song.pulseTable : song.filterTable;
+		int modulus = table == 0 ? 4096 : 2048;
+		int unit = table == 0 ? 16 : (field == 1 ? 2 : 8);
+		final switch(field) {
+			case 0:
+				setStepStartValue(table, row,
+					(sweepStepEnterVal(table, row) + delta * unit + modulus) % modulus);
+				break;
+			case 1:
+				if(table == 0) {
+					int slope = (t[row * 4] & 0x80) ? -t[row * 4 + 1] : t[row * 4 + 1];
+					slope = clampInt(slope + delta, -255, 255);
+					t[row * 4] = cast(ubyte)((t[row * 4] & 0x7f) | (slope < 0 ? 0x80 : 0));
+					t[row * 4 + 1] = cast(ubyte)(slope < 0 ? -slope : slope);
+				} else {
+					int slope = t[row * 4 + 1] < 0x80 ? t[row * 4 + 1] : t[row * 4 + 1] - 0x100;
+					slope = clampInt(slope + delta, -128, 127);
+					t[row * 4 + 1] = cast(ubyte)(slope & 0xff);
+				}
+				break;
+			case 2:
+				int n = clampInt((t[row * 4] & 0x7f) + delta, 0, 0x7f);
+				t[row * 4] = cast(ubyte)((t[row * 4] & 0x80) | n);
+				break;
+		}
+		retriggerIfSounding();
 	}
 
 	// ---- band chrome ----
 
 	// §13.1(b) split so the TEXT label (drawn in drawTextChrome, incl. under
-	// chromeActive) is independent of the pixel baseline axis (drawn only with the
-	// graph bands on the normal path).
+	// foreground chrome) is independent of the pixel baseline axis.
 	private void drawBandLabelText(ref Geo g, int band, string label) {
 		int row = g.bandTopPx[band] / FONT_Y;
 		screen.cprint(g.labelX, row, COL_LABEL, 0, label);
@@ -2082,6 +4093,60 @@ class SoundEditor : Window, Undoable {
 		// Faint baseline axis at the band's bottom.
 		int botPx = g.bandTopPx[band + 1] - 2;
 		video.olHLine(g.plotX0px, g.plotX0px + g.plotWpx - 1, botPx, COL_AXIS);
+	}
+
+	// One tracker sequence row lasts effectiveSpeed+1 main-player calls: speedcnt
+	// reaches zero on the row boundary, then underflows and reloads on the next call.
+	// The Sound Editor axis contains EVERY multispeed sound call, so convert that
+	// duration to axis ticks by multiplying by the calls-per-screen-frame multiplier.
+	private int effectiveSpeed() {
+		int speed = song.playSpeed;       // includes the current break-speed/groove value
+		if(speed < 2) speed = song.speed; // safe before the resident player is initialized
+		if(speed < 2) speed = 2;          // player_v4 floors break-speed entries to two
+		return speed;
+	}
+	private int trackStepTicks() {
+		int speed = effectiveSpeed();
+		int mult = audio.audio.multiplier;
+		return soundEditorStepTicks(speed, mult);
+	}
+	private int configuredGateTicks() {
+		return soundEditorDurationTicks(durationValue, durationRows,
+			effectiveSpeed(), audio.audio.multiplier);
+	}
+	private void syncKeyjamConfiguration() {
+		inputKeyjam.setKeyjamVoice(keyjamChannel);
+		inputKeyjam.setFixedGateTicks(configuredGateTicks());
+	}
+	private void changeDurationUnit(bool rows) {
+		if(rows == durationRows) return;
+		int ticks = configuredGateTicks();
+		durationRows = rows;
+		if(rows) {
+			int period = trackStepTicks();
+			durationValue = max(1, cast(int)lround(cast(double)ticks / period));
+			if(durationValue * period != ticks)
+				UI.statusline.display(format("Gate hold quantised to %d rows (%d ticks).",
+					durationValue, durationValue * period));
+		} else durationValue = ticks;
+		syncKeyjamConfiguration();
+	}
+	// Subtle dashed grid across the shared timeline. Tick 0 is already the brighter red
+	// note-trigger divider; subsequent lines mark exactly one tracker-row period. Keep
+	// only one line per output pixel when zoomed far out so the graph never becomes a fill.
+	private void drawTrackStepGrid(ref Geo g) {
+		int period = trackStepTicks();
+		if(period < 1) return;
+		int first = max(period, cast(int)ceil(max(0.0, viewStartTick) / period) * period);
+		int lastX = -1_000_000;
+		for(int f = first; f <= viewEndTick; f += period) {
+			if(!frameInView(f)) continue;
+			int x = xForFrame(g, f);
+			if(x == lastX) continue;
+			for(int y = g.stackTopPx; y < g.stackBotPx; y += 7)
+				video.olVLine(x, y, min(y + 3, g.stackBotPx), COL_TRACKSTEP);
+			lastX = x;
+		}
 	}
 
 	private void bandBox(ref Geo g, int band, out int topPx, out int botPx) {
@@ -2208,68 +4273,27 @@ class SoundEditor : Window, Undoable {
 		int h = botPx - topPx;
 		if(h < 1) return;
 
-		// §11.2 recording path: draw the ACTUAL per-frame envelope amplitude the voice
-		// produced (the real A/D/S/R the ear heard, including retrigger/release), as a
-		// bright step line on the shared frame axis. No restart pre-roll here — the
-		// recording begins at the note trigger (frame 0).
+		// Both vivid keyjam and dim idle paths use raw 8-bit counters from reSID. The
+		// only smoothing is the line drawn between adjacent player-tick samples.
+		const(ubyte)[] envelope;
+		int traceCol;
 		if(useRec) {
-			auto amp = audio.visualizer.getRecordedAmp(viewVoice);
-			int n = min(cast(int)amp.length, visFrames);
-			// §15.4 FIXED 0..1 scale — NOT auto-gained. The envelope amplitude is an
-			// ABSOLUTE quantity (0..1, sustain 0..15) governed by the SID's CONSTANT
-			// attack/decay/release times, so it must plot on the fixed band scale: a slow
-			// AD=FF attack then reads as a steady RAMP over the attack (a note reaching only
-			// 37% draws a ramp to 37%), not an instant jump to the top that peak-normalising
-			// produced. The peak auto-gain stays ONLY on the Output waveform band (raw
-			// samples, whose absolute level is arbitrary). With §15.2 fit-to-recording the
-			// fixed-scale ramp already fills the width.
-			// Draw the envelope as a connected DIAGONAL polyline (one line segment between
-			// consecutive per-frame samples), NOT a sample-and-hold staircase. The old
-			// flat-tread (olHLine) + vertical-riser (olVLine) style quantised a gentle
-			// slope into wide flat steps: the envelope FSM advances once per SCREEN frame
-			// but the axis is in finer player ticks, so each level spanned several pixels
-			// horizontally while dropping ~1px vertically -> visible treads. A polyline
-			// interpolates between samples so the slope reads as a slope (matches the
-			// smooth idle-sim path below). The envelope is a continuous quantity, so this
-			// is honest; genuinely discrete lanes (wave bits, arp notes) stay stepped.
-			int prevX = -1, prevY = -1;
-			int lo, hi; visRange(n, lo, hi);       // §17.1 only emit on-screen frames
-			foreach(f; lo .. hi) {
-				int y = botPx - cast(int)lround(clamp01(amp[f]) * h);
-				int x = xForFrame(g, f);
-				if(prevX >= 0) video.olLine(prevX, prevY, x, y, COL_CURVE);
-				else video.olPoint(x, y, COL_CURVE);
-				prevX = x; prevY = y;
-			}
-			// §19: DON'T return — fall through to overlay the white-dotted ADSR estimate
-			// (from the current AD/SR nibbles) on top of the solid green recording, so the
-			// estimate updates live as the user edits A/D/S/R.
+			envelope = audio.visualizer.getRecordedEnvelope(viewVoice);
+			traceCol = COL_CURVE;
+		} else {
+			ensureSilentEnvelopePreview(visFrames);
+			envelope = silentEnvPreview;
+			traceCol = COL_DIM;
 		}
-
-		ubyte ad = song.instrumentTable[ins + 0 * 48];
-		ubyte sr = song.instrumentTable[ins + 1 * 48];
-		int attack  = (ad >> 4) & 0x0f, decay = ad & 0x0f;
-		int sustain = (sr >> 4) & 0x0f, release = sr & 0x0f;
-		float sLvl = sustain / 15.0f;
-		// SID ms tables -> frames (real, non-linear MOS timing). The knee frames are
-		// absolute frame indices, so they line up in time with pulse/filter/wave.
-		float aF = ATTACK_TIME_MS[attack]         / tickMs;
-		float dF = DECAY_RELEASE_TIME_MS[decay]   / tickMs;
-		float rF = DECAY_RELEASE_TIME_MS[release] / tickMs;
-		if(rF < 0.5f) rF = 0.5f;
-		// Nominal gate: release begins nominalGateFrames after the trigger (but never
-		// before attack+decay have completed), so all four A/D/S/R phases are visible.
-		float gateEnd = aF + dF + nominalGateFrames;
-
-		// Amplitude 0..1 at absolute frame f (f>=0, i.e. after the trigger).
-		// §19: decay/release use the exponential shape (expEnvLevel) that the recorder
-		// produces, so the estimate curve matches the recording's shape. Attack stays
-		// linear; sustain hold unchanged.
-		float amp(float f) {
-			if(f < aF) return aF > 0 ? f / aF : 1.0f;             // attack ramp -> 1.0
-			if(f < aF + dF) return dF > 0 ? sLvl + (1.0f - sLvl) * expEnvLevel((f - aF) / dF) : sLvl;
-			if(f < gateEnd) return sLvl;                          // sustain hold
-			return clamp01(sLvl * expEnvLevel((f - gateEnd) / rF)); // release (exponential)
+		int n = min(cast(int)envelope.length, visFrames);
+		int prevX = -1, prevY = -1;
+		int lo, hi; visRange(n, lo, hi);
+		foreach(f; lo .. hi) {
+			int y = botPx - cast(int)lround(envelope[f] / 255.0 * h);
+			int x = xForFrame(g, f);
+			if(prevX >= 0) video.olLine(prevX, prevY, x, y, traceCol);
+			else video.olPoint(x, y, traceCol);
+			prevX = x; prevY = y;
 		}
 
 		// §9.2 restart pre-roll (frames -RESTART_FRAMES..0), shaded distinctly, showing
@@ -2301,18 +4325,6 @@ class SoundEditor : Window, Undoable {
 			screen.cprint(preX0 / FONT_X, topPx / FONT_Y, COL_RSTCURVE, 0, rlabel);
 		}
 
-		// §19 ADSR ESTIMATE: one point per horizontal pixel across the visible note
-		// region, mapped pixel->tick through the SAME viewport axis so its knees align
-		// with the other bands at any zoom. Skip columns before the trigger (pre-roll,
-		// f<0). Drawn as a WHITE DOTTED line (2-on/2-off pixel pattern) — ALWAYS, both
-		// idle (estimate only) and after a keyjam note (overlaid on the solid green
-		// recording); it updates live as the user edits A/D/S/R.
-		for(int x = g.plotX0px; x < plotEndPx; x++) {
-			double f = tickForPixel(g, x);
-			if(f < 0) continue;
-			int y = botPx - cast(int)lround(clamp01(amp(cast(float)f)) * h);
-			if((x & 2) == 0) video.olPoint(x, y, COL_ESTIMATE);
-		}
 	}
 
 	// ---- pulse / filter bands (recording, with the table sim as dimmed preview) ----
@@ -2325,29 +4337,12 @@ class SoundEditor : Window, Undoable {
 		int topPx, botPx; bandBox(g, 3, topPx, botPx);
 		int ptr = song.instrumentTable[ins + 5 * 48];
 		SweepSim s = simPulse(ptr);           // loop period + idle-preview values
-		// §14.2 loop lines: in the recording path derive the loop start/period from the
-		// ACTUAL recorded pulse values (honours the real gate-on delay); else use the sim.
-		int lf = s.loopFrame, lp = s.loopPeriod, ln = min(cast(int)s.val.length, visFrames);
 		if(useRec) {
 			auto rp = audio.visualizer.getRecordedPulse(viewVoice);
 			drawValueBand(rp, 4095, COL_PULSE_FILL, COL_PULSE_LINE, topPx, botPx, g);
-			ln = min(cast(int)rp.length, visFrames);
-			loopFromRecording(rp, ln, lf, lp);
 		} else if(ptr < 0x80) {               // direct fixed pulse ($80+) = no program
 			drawValueBand(s.val, 4095, COL_DIMFILL, COL_DIM, topPx, botPx, g);
 		}
-		drawLoopLines(g, topPx, botPx, lf, lp, ln);
-		drawSweepEndMarker(g, topPx, botPx, s);   // §20 P4b-2 grabbable stop marker
-	}
-
-	// §20 P4b-2 for a STOPPING program (no loop line to grab), draw a subtle marker at the
-	// program's end so the loop-marker drag has something to grab (dragging it converts the
-	// stop into a loop). Looping programs already draw grabbable loop lines.
-	private void drawSweepEndMarker(ref Geo g, int topPx, int botPx, ref SweepSim s) {
-		if(s.loopFrame >= 0 || !s.stops) return;
-		int f = min(cast(int)s.val.length, visFrames);
-		if(!frameInView(f)) return;
-		video.olVLine(xForFrame(g, f), topPx, botPx, COL_LOOPLINE);
 	}
 
 	// §10.1/§10.2 Filter band: cutoff fill/line coloured PER FRAME by the active
@@ -2377,22 +4372,24 @@ class SoundEditor : Window, Undoable {
 		int n = min(cast(int)cutoff.length, visFrames);
 		int lo, hi; visRange(n, lo, hi);       // §17.1 only emit on-screen frames
 
-		// Cutoff fill + top line, coloured by the mode active on each frame. A "filter
-		// off" frame (mode 0x00 -> col < 0) leaves that column empty; dim uses grey.
+		// R58 response silhouette on one absolute cutoff axis. LP fills below cutoff,
+		// BP is a fixed one-third-height centred ribbon, HP fills above cutoff, and
+		// combined flags are their union. Resonance never changes these bounds.
 		foreach(f; lo .. hi) {
 			int mode = f < modeA.length ? modeA[f] : 0;
 			int mc = filterModeColor(mode);
 			if(mc < 0) continue;              // filter off -> empty band this frame
-			int col = dim ? COL_DIMFILL : mc;
-			int v = cutoff[f];
-			if(v < 0) v = 0; if(v > maxVal) v = maxVal;
-			int y = botPx - v * h / maxVal;
+			FilterRegions regions = filterRegions(g, mode, cutoff[f]);
+			int fillCol = dim ? COL_DIMFILL : mc;
+			int traceCol = dim ? COL_DIM : COL_FILT_LINE;
 			int xa = xForFrame(g, f);
 			int xb = xForFrame(g, f + 1);
 			if(xb <= xa) xb = xa + 1;
 			for(int x = xa; x < xb; x++) {
-				video.olVLine(x, botPx, y, col);   // fill in the mode colour
-				video.olPoint(x, y, col);          // top edge (line) in the mode colour
+				if(regions.lp) video.olVLine(x, regions.lpTop, regions.lpBottom, fillCol);
+				if(regions.bp) video.olVLine(x, regions.bpTop, regions.bpBottom, fillCol);
+				if(regions.hp) video.olVLine(x, regions.hpTop, regions.hpBottom, fillCol);
+				video.olPoint(x, regions.y, traceCol); // exactly one cutoff trace
 			}
 		}
 
@@ -2413,21 +4410,9 @@ class SoundEditor : Window, Undoable {
 			prevY = ry;
 		}
 
-		// §14.2 loop lines: recording path derives the loop from the ACTUAL recorded
-		// cutoff (real gate-on delay); sim path uses the sim's loopFrame/period.
-		int lf = s.loopFrame, lp = s.loopPeriod;
-		if(useRec) loopFromRecording(cutoff, n, lf, lp);
-		drawLoopLines(g, topPx, botPx, lf, lp,
-			useRec ? n : min(cast(int)s.val.length, visFrames));
-		drawSweepEndMarker(g, topPx, botPx, s);   // §20 P4b-2 grabbable stop marker
-
-		// Label the resonance overlay in the band's left gutter (row below "Filter").
-		int lrow = g.bandTopPx[4] / FONT_Y + 1;
-		if(lrow < g.bandTopPx[5] / FONT_Y)
-			screen.cprint(g.labelX, lrow, rescol, 0, "res");
-
 		// §20 P4b-3 clickable mode chip (cycles LP/BP/HP combos, recolours the fill live).
 		drawFilterModeChip(ins, g);
+		drawFilterRouteChip(ins, g);
 	}
 
 	// §10.3 Frequency/pitch band: the instrument's per-frame semitone program taken
@@ -2438,7 +4423,7 @@ class SoundEditor : Window, Undoable {
 		int h = botPx - topPx;
 		if(h < 2) return;
 		int ptr = song.instrumentTable[ins + 7 * 48];
-		WaveFrameSim s = simWaveFrames(ptr);   // sim pitch program + loop period
+		WaveFrameSim s = simWaveFrames(ptr, waveTimeForInstrument(ins));
 
 		// §11.2 recording path: the ACTUAL 16-bit SID frequency per frame, drawn on a
 		// log2 (pitch) scale auto-fitted to the recorded range so pitch moves read as
@@ -2513,7 +4498,7 @@ class SoundEditor : Window, Undoable {
 		int availRows = botPx / FONT_Y - topRow + 1;
 		if(availRows < 8) return;                     // no room for 8 lanes
 		int ptr = song.instrumentTable[ins + 7 * 48];
-		WaveFrameSim s = simWaveFrames(ptr);    // loop period + idle-preview control bytes
+		WaveFrameSim s = simWaveFrames(ptr, waveTimeForInstrument(ins));
 
 		// §11.2 source: the RECORDED control byte per frame when a note has played
 		// (vivid per-bit lane colours), else the sim's effective control byte (dimmed).
@@ -2563,7 +4548,7 @@ class SoundEditor : Window, Undoable {
 		// Horizontal separator across the interior above the strip.
 		for(int cx = area.x + 1; cx < area.x + area.width - 1; cx++)
 			screen.setChar(cx, y, 0x0500 | 192);
-		screen.cprint(x + 1, y, COL_TITLE, 0, " Raw table data (read-only) ");
+		screen.cprint(x + 1, y, COL_TITLE, 0, " Raw table data / edit state ");
 
 		ubyte b(int col) { return song.instrumentTable[ins + col * 48]; }
 		screen.cprint(x, y + 1, COL_LABEL, 0, format(
@@ -2574,12 +4559,22 @@ class SoundEditor : Window, Undoable {
 
 		// Wave rows the instrument walks (wave1/wave2 pairs).
 		{
-			WaveSim w = simWave(b(7));
-			string ln = format("Wave $%02X: ", b(7));
-			foreach(c; w.cells) {
+			int ptr = b(7);
+			WaveSim w = simWave(ptr);
+			string ln = ptr == 0 ? "Wave: EMPTY" : selectedWaveNormal(ins)
+				? format("Wave $%02X [row $%02X]: ", b(7), selectedWaveRow)
+				: format("Wave $%02X: ", b(7));
+			if(ptr != 0) foreach(c; w.cells) {
 				string cell = format("%02X/%02X ", c.transpose & 0xff, c.ctrl & 0xff);
 				if(ln.length + cell.length > maxw) { ln ~= ".."; break; }
 				ln ~= cell;
+			}
+			int close = ptr == 0 ? -1 : waveCloseRow(ptr);
+			if(close >= 0) {
+				string marker = song.waveTable[close] == 0x7f
+					? format(" LOOP $%02X->$%02X", close, song.waveTable[close + 256])
+					: format(" END $%02X", close);
+				if(ln.length + marker.length <= maxw) ln ~= marker;
 			}
 			screen.cprint(x, y + 2, COL_VALUE, 0, ln);
 		}
@@ -2587,10 +4582,19 @@ class SoundEditor : Window, Undoable {
 		{
 			int ptr = b(5);
 			string ln;
-			if(ptr >= 0x80) ln = format("Pulse: direct fixed $%03X", (ptr & 0x0f) << 8);
+			if(ptr == 0) ln = "Pulse: EMPTY";
+			else if(ptr >= 0x80) ln = format("Pulse: direct fixed $%03X", (ptr & 0x0f) << 8);
 			else {
 				SweepSim s = simPulse(ptr);
-				ln = format("Pulse $%02X: ", ptr);
+				int close = sweepCloseRow(0, ptr);
+				string marker;
+				if(close >= 0) {
+					int jump = song.pulseTable[close * 4 + 3];
+					marker = jump == 0x7f ? format("END $%02X", close)
+						: (jump >= 1 && jump <= 0x3f
+							? format("LOOP $%02X->$%02X", close, jump) : "INVALID");
+				}
+				ln = format("Pulse $%02X %s: ", ptr, marker);
 				bool[0x40] seen;
 				foreach(r; s.rowOf) {
 					if(r < 0 || r >= 0x40 || seen[r]) continue;
@@ -2608,10 +4612,18 @@ class SoundEditor : Window, Undoable {
 		{
 			int ptr = b(4);
 			string ln;
-			if(ptr <= 0) ln = "Filter: none";
+			if(ptr <= 0) ln = "Filter: EMPTY";
 			else {
 				SweepSim s = simFilter(ptr);
-				ln = format("Filter $%02X: ", ptr);
+				int close = sweepCloseRow(1, ptr);
+				string marker;
+				if(close >= 0) {
+					int jump = song.filterTable[close * 4 + 3];
+					marker = jump == 0x7f ? format("END $%02X", close)
+						: (jump >= 1 && jump <= 0x3f
+							? format("LOOP $%02X->$%02X", close, jump) : "INVALID");
+				}
+				ln = format("Filter $%02X %s: ", ptr, marker);
 				bool[0x40] seen;
 				foreach(r; s.rowOf) {
 					if(r < 0 || r >= 0x40 || seen[r]) continue;
@@ -2625,7 +4637,8 @@ class SoundEditor : Window, Undoable {
 			}
 			screen.cprint(x, y + 4, COL_VALUE, 0, ln);
 		}
-		// Live filter routing/resonance/mode (filter is shared/global).
+		// Live filter routing/resonance/mode. "SID-global" avoids confusing this hardware
+		// property with a table program shared by two instruments (which has fork semantics).
 		ubyte r17 = audio.audio.sidreg[0x17];
 		ubyte r18 = audio.audio.sidreg[0x18];
 		string routeStr;
@@ -2635,7 +4648,7 @@ class SoundEditor : Window, Undoable {
 		if(r18 & 0x10) modeStr ~= "LP"; if(r18 & 0x20) modeStr ~= "BP"; if(r18 & 0x40) modeStr ~= "HP";
 		if(modeStr.length == 0) modeStr = "off";
 		screen.cprint(x, y + 5, COL_LABEL, 0,
-			format("Live filter: Res %X  Route %s  Mode %s (shared)", r17 >> 4, routeStr, modeStr));
+			format("Live filter: Res %X  Route %s  Mode %s (SID-global)", r17 >> 4, routeStr, modeStr));
 	}
 
 	// ---- §14.1 mouse-hover probe + numeric readout ----
@@ -2649,10 +4662,123 @@ class SoundEditor : Window, Undoable {
 	override void hoverAt(int scrx, int scry) {
 		hoverCellX = scrx;
 		hoverCellY = scry;
-		hovering = true;
+		hovering = scrx >= 0 && scry >= 0;
 		// §17.3 light the zoom button under the pointer (-1 = none / disabled).
 		Geo g = layout();
-		hoveredBtn = buttonAt(g, scrx, scry);
+		hoveredBtn = hovering ? visualButtonAt(g, scrx, scry) : -1;
+		string actionId = hovering ? controlActionAt(clampedIns(), g) : "";
+		if(actionId != hoveredControlAction) {
+			hoveredControlAction = actionId;
+			if(actionId.length && state.displayHelp) {
+				auto def = mainui.sm.getAction(actionId);
+				if(def !is null) {
+					string keys = formatShortcuts(mainui.sm.getShortcuts(actionId));
+					UI.statusline.display(def.description ~ (keys.length ? "  " ~ keys : ""));
+				}
+			}
+		}
+		if(!hovering) { setEditCursor(CURSOR_NORMAL); return; }
+		bool waveLoopCursor = waveLoopHandleAt(clampedIns(), g, scrx, scry) >= 0;
+		int dotCursor = graphDotCursorAt(g, scrx, scry);
+		int waveCursor = waveGraphCursorAt(g, scrx, scry);
+		bool loopCursor = sweepLoopHandleAt(0, g, scrx, scry) >= 0
+			|| sweepLoopHandleAt(1, g, scrx, scry) >= 0;
+		setEditCursor(waveLoopCursor ? CURSOR_HORIZONTAL
+			: dotCursor != CURSOR_NORMAL ? dotCursor
+			: waveCursor != CURSOR_NORMAL ? waveCursor
+			: loopCursor ? CURSOR_HORIZONTAL
+			: durationBoundaryAt(g, scrx, scry) ? CURSOR_HORIZONTAL
+			: resonanceLineAt(g, scrx, scry) ? CURSOR_VERTICAL : CURSOR_NORMAL);
+	}
+
+	private bool resonanceLineAt(ref Geo g, int cellx, int celly) {
+		int targetRow;
+		return filterResHandleAt(g, cellx, celly, targetRow) >= 0;
+	}
+
+	// Cursor direction mirrors what each graph dot actually edits.
+	private int graphDotCursorAt(ref Geo g, int cellx, int celly) {
+		int ah = adsrHandleAt(g, cellx, celly);
+		if(ah == ADSR_ATTACK || ah == ADSR_RELEASE) return CURSOR_HORIZONTAL;
+		if(ah == ADSR_DECAY) return CURSOR_BOTH;       // time + sustain level
+		if(ah == ADSR_SUSTAIN) return CURSOR_VERTICAL;
+
+		int px = cellx * FONT_X + FONT_X / 2;
+		int py = celly * FONT_Y + FONT_Y / 2;
+		if(sweepMultiSelected()) {
+			int[] range = sweepSelectedRange(clampedIns());
+			if(range.length < 2) return CURSOR_NORMAL;
+			foreach(i; 0 .. cast(int)range.length - 1) {
+				int f0, f1, xa, xb, syS, syE;
+				if(sweepStepGeom(selectedSweepTable, clampedIns(), range[i], g,
+						f0, f1, xa, xb, syS, syE)
+						&& nearSweepHandle(selectedSweepTable, px, py, xb, syE))
+					return CURSOR_VERTICAL;
+			}
+			return CURSOR_NORMAL;
+		}
+		int t = selectedSweepTable, r = selectedSweepRow;
+		if((t != 0 && t != 1) || !sweepRowResizable(t, r)) return CURSOR_NORMAL;
+		int f0, f1, xa, xb, syS, syE;
+		if(!sweepStepGeom(t, clampedIns(), r, g, f0, f1, xa, xb, syS, syE)) return CURSOR_NORMAL;
+		if(nearSweepHandle(t, px, py, xa, syS)) return CURSOR_VERTICAL;
+		if(sweepRowHasSlope(t, r) && nearSweepHandle(t, px, py, xb, syE)) return CURSOR_VERTICAL;
+		return CURSOR_NORMAL;
+	}
+
+	// Match the duration-drag hit priority exactly: only advertise horizontal resize
+	// where pressing will resize the selected pulse/filter sweep row. The END/slope dot
+	// keeps its own drag behavior, and instantaneous filter CONFIG rows never claim it.
+	private bool durationBoundaryAt(ref Geo g, int cellx, int celly) {
+		int t = sweepBandAt(g, cellx, celly);
+		// The first character row can straddle the pixel-precise Filter band top.
+		// Treat an intersecting cell as Filter geometry so its true terminal edge
+		// advertises the same duration gesture that beginSelectedStepDrag starts.
+		if(t < 0 && selectedSweepTable == 1) {
+			int cellTop = celly * FONT_Y, cellBot = cellTop + FONT_Y;
+			if(cellBot > g.bandTopPx[4] && cellTop < g.bandTopPx[5]) t = 1;
+		}
+		if(t < 0) return false;
+		int r = sweepDurationRowAtPress(t, clampedIns(), g, cellx, celly);
+		if(r < 0) return false;
+		int f0, f1, xa, xb, syS, syE;
+		if(!sweepStepGeom(t, clampedIns(), r, g, f0, f1, xa, xb, syS, syE)) return false;
+		int band = t == 0 ? 3 : 4;
+		int px = cellx * FONT_X + FONT_X / 2;
+		int py = celly * FONT_Y + FONT_Y / 2;
+		bool inBand = py >= g.bandTopPx[band] && py < g.bandTopPx[band + 1];
+		if(t == 1 && celly == g.bandTopPx[4] / FONT_Y) {
+			int cellTop = celly * FONT_Y, cellBot = cellTop + FONT_Y;
+			inBand = cellBot > g.bandTopPx[4] && cellTop < g.bandTopPx[5];
+		}
+		if(!inBand) return false;
+		if(abs(px - xb) > DUR_HIT_PX) return false;
+		return true;
+	}
+
+	private void setEditCursor(int cursor) {
+		if(cursor == editCursor) return;
+		if(cursor == CURSOR_HORIZONTAL) {
+			if(sizeWeCursor is null)
+				sizeWeCursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_SIZEWE);
+			if(sizeWeCursor !is null) SDL_SetCursor(sizeWeCursor);
+		} else if(cursor == CURSOR_VERTICAL) {
+			if(sizeNsCursor is null)
+				sizeNsCursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_SIZENS);
+			if(sizeNsCursor !is null) SDL_SetCursor(sizeNsCursor);
+		} else if(cursor == CURSOR_BOTH) {
+			if(sizeAllCursor is null)
+				sizeAllCursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_SIZEALL);
+			if(sizeAllCursor !is null) SDL_SetCursor(sizeAllCursor);
+		} else {
+			SDL_SetCursor(SDL_GetDefaultCursor());
+		}
+		editCursor = cursor;
+	}
+
+	override void deactivate() {
+		hoveredControlAction = "";
+		setEditCursor(CURSOR_NORMAL);
 	}
 
 	// Note name from a raw 16-bit SID frequency register value (PAL). "if easy": a
@@ -2670,25 +4796,19 @@ class SoundEditor : Window, Undoable {
 		return format("%s%d", nm[m % 12], m / 12 - 1);
 	}
 
-	// Interpolated ADSR envelope amplitude 0..1 at absolute frame f (>=0) for the sim
-	// (idle) path — the same continuous A/D/S/R model drawAdsrBand samples, so the
-	// probe readout shows an INTERPOLATED value between the SID ms-table knees.
+	// Idle probe amplitude from the same silent raw reSID trace as drawAdsrBand. Linear
+	// interpolation is display geometry only; both endpoints remain true tick samples.
 	private float adsrAmpAt(int ins, float f) {
-		ubyte ad = song.instrumentTable[ins + 0 * 48];
-		ubyte sr = song.instrumentTable[ins + 1 * 48];
-		int attack = (ad >> 4) & 0x0f, decay = ad & 0x0f;
-		int sustain = (sr >> 4) & 0x0f, release = sr & 0x0f;
-		float sLvl = sustain / 15.0f;
-		float aF = ATTACK_TIME_MS[attack]         / tickMs;
-		float dF = DECAY_RELEASE_TIME_MS[decay]   / tickMs;
-		float rF = DECAY_RELEASE_TIME_MS[release] / tickMs;
-		if(rF < 0.5f) rF = 0.5f;
-		float gateEnd = aF + dF + nominalGateFrames;
-		// §19: exponential decay/release matching the recording + drawAdsrBand estimate.
-		if(f < aF) return aF > 0 ? f / aF : 1.0f;
-		if(f < aF + dF) return dF > 0 ? sLvl + (1.0f - sLvl) * expEnvLevel((f - aF) / dF) : sLvl;
-		if(f < gateEnd) return sLvl;
-		return clamp01(sLvl * expEnvLevel((f - gateEnd) / rF));
+		if(f < 0) f = 0;
+		int i0 = cast(int)floor(f);
+		ensureSilentEnvelopePreview(i0 + 2);
+		if(silentEnvPreview.length == 0) return 0;
+		if(i0 >= silentEnvPreview.length - 1)
+			return silentEnvPreview[$ - 1] / 255.0f;
+		float frac = f - i0;
+		float a = silentEnvPreview[i0] / 255.0f;
+		float b = silentEnvPreview[i0 + 1] / 255.0f;
+		return a + (b - a) * frac;
 	}
 
 	// §14.1 Draw the hover probe: a dashed WHITE vertical line at the hovered frame
@@ -2745,7 +4865,8 @@ class SoundEditor : Window, Undoable {
 		} else {
 			SweepSim ps = simPulse(song.instrumentTable[ins + 5 * 48]);
 			SweepSim fs = simFilter(song.instrumentTable[ins + 4 * 48]);
-			WaveFrameSim ws = simWaveFrames(song.instrumentTable[ins + 7 * 48]);
+			WaveFrameSim ws = simWaveFrames(song.instrumentTable[ins + 7 * 48],
+				waveTimeForInstrument(ins));
 			if(f < cast(int)ps.val.length) pw = ps.val[f];
 			if(f < cast(int)fs.val.length) {
 				cutoff = fs.val[f];
@@ -2937,9 +5058,9 @@ class SoundEditor : Window, Undoable {
 				int delta = 2 * (b1 < 0x80 ? b1 : b1 - 0x100);
 				emit();
 				foreach(f; 0 .. n) {
-					cutoff += delta;
-					if(cutoff < 0) cutoff = 0;
-					if(cutoff > 2047) cutoff = 2047;
+					// The player's 8-bit cutoff-high byte + 3-bit fractional low
+					// accumulator wraps naturally; it does not saturate at either rail.
+					cutoff = (cutoff + delta) & 0x7ff;
 					emit();
 					if(s.val.length >= MAXF) break;
 				}
@@ -2990,45 +5111,60 @@ class SoundEditor : Window, Undoable {
 	// §9.3: flatten the wave program to one control byte per FRAME, following $7F
 	// jump / $7E loop-to-previous exactly like simPulse/simFilter follow their jumps.
 	// Carries the last real control byte forward across delay/unchanged rows.
-	private WaveFrameSim simWaveFrames(int startRow) {
+	private WaveFrameSim simWaveFrames(int startRow, int waveTime = 0, int requestedFrames = 0) {
 		WaveFrameSim s;
-		int MAXF = visFrames;   // §12.2 sims produce/replicate up to the dynamic window
+		int MAXF = requestedFrames > 0 ? requestedFrames : visFrames;
 		if(startRow < 0 || startRow > 0xff) return s;
-		int row = startRow & 0xff;
-		int cur = 0;                    // carried effective control byte
+		if(waveTime < 0) waveTime = 0;
+		if(waveTime > 0x0f) waveTime = 0x0f;
+		int row = startRow & 0xff, producer = -1;
+		int cur = 0, curTrans = 0;       // carried effective values
+		bool curAbs = false;
+		int waveCnt = 0;                 // player initializes wavecnt to zero
 		int[256] firstFrame; firstFrame[] = -1;
-		// §11.3 REPLICATE the looped section across the window instead of stopping at
-		// the loop. `steps` bounds jump-only cycles (no frame emitted) so we can't spin.
-		int steps = 0;
-		while(s.ctrlOf.length < MAXF && steps < MAXF * 8) {
-			steps++;
-			int w1 = song.waveTable[row];
-			int w2 = song.waveTable[row + 256];
-			// Loop back-edge: $7F jumps to the row in wave2; $7E loops to previous.
-			if(w1 == 0x7f || w1 == 0x7e) {
-				int tgt = (w1 == 0x7f) ? (w2 & 0xff) : ((row - 1) & 0xff);
-				if(firstFrame[tgt] >= 0 && s.loopFrame < 0) {
-					s.loopFrame = firstFrame[tgt];
-					s.loopPeriod = cast(int)s.ctrlOf.length - firstFrame[tgt];
+		foreach(tick; 0 .. MAXF) {
+			waveCnt--;
+			if(waveCnt < 0) {
+				waveCnt = waveTime;
+				// Markers are consumed by look-ahead in the real player and emit no value.
+				// Normalize a malformed pointer that starts directly on one without spinning.
+				int guard;
+				while((song.waveTable[row] == 0x7e || song.waveTable[row] == 0x7f)
+						&& guard++ < 256)
+					row = song.waveTable[row] == 0x7f
+						? song.waveTable[row + 256] : ((row - 1) & 0xff);
+				if(guard >= 256) break;
+
+				if(firstFrame[row] >= 0 && s.loopFrame < 0) {
+					s.loopFrame = firstFrame[row];
+					s.loopPeriod = tick - firstFrame[row];
 					if(s.loopPeriod < 1) s.loopPeriod = 1;
 				}
-				row = tgt;
-				continue;
+				if(firstFrame[row] < 0) firstFrame[row] = tick;
+
+				int w1 = song.waveTable[row];
+				int w2 = song.waveTable[row + 256];
+				producer = row;
+				cur = decodeWaveControl(w2, cur);
+				if(w1 >= 0x80) { curTrans = w1 & 0x7f; curAbs = true; }
+				else           { curTrans = w1;        curAbs = false; }
+
+				// Resolve the destination exactly in player order, then let that row's
+				// $01..$0F wave2 override the countdown. Delay D holds this producer for
+				// D+1 emitted ticks before the destination is processed.
+				int next = (row + 1) & 0xff;
+				int nextW1 = song.waveTable[next];
+				if(nextW1 == 0x7e) next = row;
+				else if(nextW1 == 0x7f) next = song.waveTable[next + 256];
+				int nextW2 = song.waveTable[next + 256];
+				if(nextW2 >= 1 && nextW2 <= 0x0f) waveCnt = nextW2;
+				row = next & 0xff;
 			}
-			// A sequential advance back onto an already-emitted row is also a loop.
-			if(firstFrame[row] >= 0 && s.loopFrame < 0) {
-				s.loopFrame = firstFrame[row];
-				s.loopPeriod = cast(int)s.ctrlOf.length - firstFrame[row];
-				if(s.loopPeriod < 1) s.loopPeriod = 1;
-			}
-			if(firstFrame[row] < 0) firstFrame[row] = cast(int)s.ctrlOf.length;
-			if(w2 >= 0x10) cur = w2;    // real SID control byte (else 0/delay = keep)
+			if(producer < 0) break;
 			s.ctrlOf ~= cur;
-			// §10.3 wave1 pitch: $80..$DF = absolute tuning (note = w1 & 0x7F),
-			// $00..$5F = relative transpose up (semitone offset). Recorded per frame.
-			if(w1 >= 0x80) { s.transOf ~= w1 & 0x7f; s.absOf ~= true; }
-			else           { s.transOf ~= w1;        s.absOf ~= false; }
-			row = (row + 1) & 0xff;
+			s.rowOf ~= producer;
+			s.transOf ~= curTrans;
+			s.absOf ~= curAbs;
 		}
 		return s;
 	}
@@ -3077,8 +5213,20 @@ class SoundEditor : Window, Undoable {
 			video.olVLine(xForFrame(g, selEndTick), g.stackTopPx, g.stackBotPx, COL_SEL_EDGE);
 	}
 
-	// §17.3 The four zoom controls, left-to-right on the control row.
-	private enum int BTN_ZOOMOUT = 0, BTN_ZOOMIN = 1, BTN_FIT = 2, BTN_SEL = 3;
+	// View controls plus a selected-program Stop action, left-to-right.
+	private enum int BTN_ZOOMOUT = 0, BTN_ZOOMIN = 1, BTN_FIT = 2, BTN_SEL = 3,
+		BTN_ADD = 4, BTN_DEL = 5, BTN_STOP = 6, BTN_TYPE = 7, BTN_CARRY = 8,
+		BTN_NEW = 9, BTN_WPREV = 10, BTN_WNEXT = 11, BTN_W1 = 12, BTN_W2 = 13,
+		BTN_WLOOP = 14, BTN_RESDEC = 15, BTN_RESINC = 16, BTN_LINKED = 17;
+	private static string controlActionId(int i) {
+		static immutable string[18] actions = [
+			"se_zoom_out", "se_zoom_in", "se_fit", "se_selection",
+			"se_add", "se_delete", "se_stop", "se_type", "se_carry", "se_new",
+			"se_wave_prev", "se_wave_next", "se_wave_1", "se_wave_2", "se_wave_loop",
+			"se_res_down", "se_res_up", "se_linked"
+		];
+		return i >= 0 && i < actions.length ? actions[i] : "";
+	}
 
 	// §17.3 Build the four zoom buttons as ordinary ui.button widgets, laid out
 	// left-to-right on the control row from the plot's left edge with a 1-cell gap,
@@ -3088,24 +5236,60 @@ class SoundEditor : Window, Undoable {
 	//   * [Fit] is `active` while the view is auto-fitted (not user-zoomed);
 	//   * [Selection] needs a selection — it is `disabled` without one, and `active`
 	//     while the viewport currently equals that selection.
-	private Button[4] zoomButtons(ref Geo g) {
-		static immutable string[4] labels = ["[-]", "[+]", "[Fit]", "[Selection]"];
-		Button[4] b;
+	private Button[18] zoomButtons(ref Geo g) {
+		Button[18] b;
+		foreach(i, ref button; b) {
+			button.x0 = -1000; button.x1 = -1000; button.row = g.controlRow;
+			button.enabled = commandEnabled(controlActionId(cast(int)i));
+		}
 		int cx = g.plotX0px / FONT_X;
-		foreach(int i; 0 .. 4) {
-			b[i].x0 = cx;
-			b[i].x1 = cx + cast(int)labels[i].length;
-			b[i].row = g.controlRow;
-			b[i].label = labels[i];
+		void place(int i, string text) {
+			string label = " " ~ text ~ " ";
+			b[i].x0 = cx; b[i].x1 = cx + cast(int)label.length;
+			b[i].label = label;
 			b[i].hovered = (hoveredBtn == i);
 			b[i].pressed = (pressedBtn == i && pressedOver);
-			cx = b[i].x1 + 1;   // 1-cell gap
+			b[i].enabled = commandEnabled(controlActionId(i));
+			cx = b[i].x1 + 1;
+		}
+		place(BTN_ZOOMOUT, "-"); place(BTN_ZOOMIN, "+");
+		place(BTN_FIT, "Fit"); place(BTN_SEL, "Selection");
+		place(BTN_LINKED, "Linked edits");
+		cx += 1; // two-cell separation between View and contextual graph actions
+		int ins = clampedIns();
+		if(selectedWaveNormal(ins)) {
+			place(BTN_ADD, "Add"); place(BTN_DEL, "Delete");
+			place(BTN_WPREV, "Previous"); place(BTN_WNEXT, "Next"); place(BTN_WLOOP, "Loop");
+		} else if(selectedSweepTable == 0 && selectedSweepRow >= 1) {
+			place(BTN_ADD, "Add"); place(BTN_DEL, "Delete");
+			place(BTN_STOP, "Stop"); place(BTN_CARRY, "Carry");
+		} else if(selectedSweepTable == 1 && selectedSweepRow >= 1) {
+			bool config = (song.filterTable[selectedSweepRow * 4] & 0x80) != 0;
+			place(BTN_ADD, "Add"); place(BTN_DEL, "Delete");
+			place(BTN_STOP, "Stop"); place(BTN_TYPE, "Type");
+			if(config) { place(BTN_RESDEC, "Res-"); place(BTN_RESINC, "Res+"); }
+			else place(BTN_CARRY, "Carry");
 		}
 		b[BTN_FIT].active = !userZoomed;
-		b[BTN_SEL].enabled = hasSelection;
 		b[BTN_SEL].active = hasSelection
 			&& cast(int)lround(viewStartTick) == selStartTick
 			&& cast(int)lround(viewEndTick) == selEndTick;
+		b[BTN_LINKED].active = debugOwnershipMode() == "linked";
+		if(b[BTN_STOP].enabled) {
+			int col = selectedSweepTable == 0 ? 5 : 4;
+			int close = sweepCloseRow(selectedSweepTable, song.instrumentTable[ins + col * 48]);
+			const(ubyte)[] t = selectedSweepTable == 0 ? song.pulseTable : song.filterTable;
+			b[BTN_STOP].active = close >= 0 && t[close * 4 + 3] == 0x7f;
+		}
+		b[BTN_TYPE].active = b[BTN_TYPE].enabled
+			&& (song.filterTable[selectedSweepRow * 4] & 0x80) != 0;
+		if(b[BTN_CARRY].enabled) {
+			const(ubyte)[] t = selectedSweepTable == 0 ? song.pulseTable : song.filterTable;
+			b[BTN_CARRY].active = t[selectedSweepRow * 4 + 2] == 0xff;
+		}
+		int wstart = song.instrumentTable[ins + 7 * 48];
+		int wclose = waveCloseRow(wstart);
+		b[BTN_WLOOP].active = wclose >= 0 && song.waveTable[wclose] == 0x7f;
 		return b;
 	}
 
@@ -3118,6 +5302,25 @@ class SoundEditor : Window, Undoable {
 			if(b.enabled && b.contains(x, y)) return i;
 		return -1;
 	}
+	private int visualButtonAt(ref Geo g, int x, int y) {
+		auto btns = zoomButtons(g);
+		foreach(int i, ref b; btns) if(b.contains(x, y)) return i;
+		return -1;
+	}
+	private string controlActionAt(int ins, ref Geo g) {
+		if(hoveredBtn >= 0 && hoveredBtn < 18) return controlActionId(hoveredBtn);
+		if(hovering && filterModeChipVisible(g)) {
+			auto b = filterModeButtons(ins, g);
+			static immutable string[3] modeActions = ["se_lp", "se_bp", "se_hp"];
+			foreach(i; 0 .. 3)
+				if(b[i].contains(hoverCellX, hoverCellY)) return modeActions[i];
+		}
+		if(hovering && filterRouteChipVisible(g)) {
+			auto route = filterRouteButton(ins, g);
+			if(route.contains(hoverCellX, hoverCellY)) return "se_route";
+		}
+		return "";
+	}
 
 	// §17.3 Perform a zoom button's action (fired on release over the pressed button).
 	private void activateZoomButton(int i) {
@@ -3126,6 +5329,26 @@ class SoundEditor : Window, Undoable {
 			case BTN_ZOOMIN:  zoomBy(0.5); break;             // [+] zoom in
 			case BTN_FIT:     userZoomed = false; fitViewport(); break;  // [Fit]
 			case BTN_SEL:     zoomToSelection(); break;       // [Selection]
+			case BTN_ADD:
+				if(selectedSweepTable >= 0) sweepRowOp(selectedSweepTable, true);
+				else waveRowOp(true);
+				break;
+			case BTN_DEL:
+				if(selectedSweepTable >= 0) sweepRowOp(selectedSweepTable, false);
+				else waveRowOp(false);
+				break;
+			case BTN_STOP:    stopSelectedSweepProgram(); break;
+			case BTN_TYPE:    toggleSelectedFilterRowType(); break;
+			case BTN_CARRY:   toggleSelectedSweepCarry(); break;
+			case BTN_NEW:     createNewIsolatedSound(); break;
+			case BTN_WPREV:   moveSelectedWave(-1); break;
+			case BTN_WNEXT:   moveSelectedWave(+1); break;
+			case BTN_W1:      querySelectedWaveByte(0); break;
+			case BTN_W2:      querySelectedWaveByte(1); break;
+			case BTN_WLOOP:   queryWaveLoopTarget(); break;
+			case BTN_RESDEC:  nudgeSelectedFilterRes(-1); break;
+			case BTN_RESINC:  nudgeSelectedFilterRes(+1); break;
+			case BTN_LINKED:  toggleLinkedEdits(); break;
 			default: break;
 		}
 	}
@@ -3135,9 +5358,11 @@ class SoundEditor : Window, Undoable {
 	// the rest of the chrome.
 	private void drawZoomControls(ref Geo g) {
 		auto btns = zoomButtons(g);
-		foreach(ref b; btns)
+		int rx = g.plotX0px / FONT_X;
+		foreach(ref b; btns) if(b.x0 >= 0) {
 			b.draw();
-		int rx = btns[3].x1 + 2;
+			rx = max(rx, b.x1 + 1);
+		}
 		int rw = (g.plotX0px + g.plotWpx) / FONT_X - rx;
 		if(rw < 4) return;
 		string txt;
@@ -3267,6 +5492,17 @@ class SoundEditor : Window, Undoable {
 		Geo g = layout();
 		clickWasButton = false;
 		scrollDragging = false;
+		// A fresh press cannot belong to a previously completed button gesture.
+		pressedBtn = -1;
+		pressedOver = false;
+		// The retro parameter list is also a mouse target: clicking a row selects it,
+		// after which Left/Right is the same predictable edit gesture as keyboard focus.
+		int paramY0 = area.y + 3;
+		if(x >= g.paramX && x < g.sepX && y >= paramY0 && y < paramY0 + PARAM_ROWS) {
+			paramCursor = y - paramY0;
+			clickWasButton = true;
+			return;
+		}
 		// §17.4 scrollbar row: grab the thumb to pan, or click the track to page. Hit-test
 		// by ROW so a press here never starts a plot selection (and vice versa).
 		if(y == g.scrollRow) {
@@ -3292,13 +5528,71 @@ class SoundEditor : Window, Undoable {
 			if(hit >= 0) { pressedBtn = hit; pressedOver = true; }
 			return;
 		}
-		// §20 P4b-3: a click on the Filter band's mode chip cycles the filter mode. Checked
-		// BEFORE step-selection so clicking the chip cycles rather than selecting a step (the
-		// chip lives in the gutter, so this also never starts a plot selection).
-		if(filterModeChipAt(g, x, y)) {
-			clickWasButton = true;   // consume the paired release (no selection change)
-			cycleFilterMode(clampedIns());
+		// Exact top-cell Wave END/LOOP triangles own their cell before the trailing
+		// creation target and the pitch/delay graph beneath them.
+		if(waveLoopHandleAt(clampedIns(), g, x, y) >= 0) {
+			beginWaveLoopDrag(clampedIns());
 			return;
+		}
+		// The trailing '+' owns only its exact in-band cell, before the frequency graph
+		// beneath it. A disabled full-table target still consumes the click predictably.
+		{
+			bool enabled;
+			int ins = clampedIns();
+			if(waveAddTargetAt(ins, g, x, y, enabled)) {
+				clickWasButton = true;
+				if(enabled) appendWaveRowAtEnd(ins);
+				else UI.statusline.display("Wave table full - cannot append row.");
+				return;
+			}
+		}
+		// Filter gutter controls use the same release-over-target activation as the
+		// graph-row buttons, including their whitespace padding.
+		string filterAction = filterActionAt(clampedIns(), g, x, y);
+		if(filterAction.length) {
+			clickWasButton = true;
+			pressedFilterAction = filterAction;
+			pressedFilterOver = true;
+			return;
+		}
+		{
+			int wr;
+			if(waveGraphRowAt(g, x, y, wr)) {
+				beginWaveGraphDrag(g, x, y, wr);
+				return;
+			}
+		}
+		// Empty Filter or absent/fixed Pulse: allocate immediately and keep this same
+		// press/move/release gesture alive. Fixed Pulse conversion preserves its audible
+		// starting width inside createSweepProgram before motion applies the final value.
+		{
+			int eb = emptySweepBandAt(g, x, y);
+			if(eb >= 0) {
+				clickWasButton = true;
+				if(createSweepProgram(eb, clampedIns(), sweepValueForCell(eb, g, y))) {
+					sweepDragging = true;
+					sweepTable = eb;
+					sweepRow = selectedSweepRow;
+					sweepMoved = true; // creation already took the gesture's one snapshot
+				}
+				return;
+			}
+		}
+		// Wave band: one click toggles the control bit for the row producing this frame.
+		// This is intentionally immediate (no select-first step); shared programmes are
+		// copied automatically unless the visible Linked edits mode is active.
+		{
+			int wf, wb;
+			if(waveLaneAt(g, x, y, wf, wb)) {
+				clickWasButton = true;
+				int ins = clampedIns();
+				// Reject an unrepresentable initial toggle before authorization/snapshot:
+				// a true no-op must consume neither undo nor a release-time rerender.
+				if(canBeginWaveBitPaint(ins, wf, wb))
+					authorizeWaveMutation(ins,
+						(int delta) { beginWaveBitPaint(ins, wf, wb); });
+				return;
+			}
 		}
 		// §19 P4a: grab an A/D/S/R handle on the ADSR curve if the press landed on one
 		// (checked BEFORE the plot drag-select, since the ADSR band is inside the plot).
@@ -3311,24 +5605,8 @@ class SoundEditor : Window, Undoable {
 			clickWasButton = true;   // consume the paired release (no selection change)
 			return;
 		}
-		// §20 P4b-3 RESONANCE drag: grabbing the resonance overlay line in the Filter band
-		// starts a res drag of the governing config row's b1 hi nibble. Checked BEFORE the
-		// P4b-1 cutoff-level drag AND before sweepBandAt (whose cell-top band split can miss
-		// a res line sitting at the filter band's top edge) so the two never conflict.
-		{
-			int rcfg = filterResHandleAt(g, x, y);
-			if(rcfg >= 0) {
-				clickWasButton = true;   // this press never starts/clears a selection
-				sweepResDragging = true;
-				sweepResRow = rcfg;
-				sweepResMoved = false;   // shared check + snapshot on the first drag tick
-				return;
-			}
-		}
 		int sb = sweepBandAt(g, x, y);
-		// §21 P4c(v3) SHIFT-click extends a multi-block selection (anchor..this) in the same
-		// program — the consecutive blocks between them. No drag; the join edit is a separate
-		// drag on the range.
+		// Shift-click extends selection before any direct manipulation at the boundary.
 		if((SDL_GetModState() & KMOD_SHIFT) && sb >= 0 && selectedSweepTable == sb
 				&& selectedSweepRow >= 1) {
 			int row = sweepRowAtPress(sb, g, x);
@@ -3338,27 +5616,95 @@ class SoundEditor : Window, Undoable {
 				return;
 			}
 		}
-		// §21 P4c(v3) with a MULTI-block range selected, a drag anywhere on it sets the shared
-		// JOIN(s) between the blocks to one value (checked before the single-step handles).
+		// If both neighbours are selected, the exact shared dot outranks either block's
+		// individual endpoint/boundary behavior.
 		if(sweepMultiSelected()) {
-			int jxa, jxb, jband;
-			if(sweepSelectionSpan(clampedIns(), g, jxa, jxb, jband)) {
-				int px = x * FONT_X + FONT_X / 2, py = y * FONT_Y + FONT_Y / 2;
-				if(px >= jxa - BOX_HIT_PX && px <= jxb + BOX_HIT_PX
-						&& py >= g.bandTopPx[jband] && py < g.bandTopPx[jband + 1]) {
-					clickWasButton = true;
-					sweepJoinDragging = true;
-					sweepJoinMoved = false;
-					return;
-				}
+			int jl, jr;
+			if(sweepJoinAt(clampedIns(), g, x, y, jl, jr)) {
+				clickWasButton = true;
+				sweepJoinDragging = true;
+				sweepJoinMoved = false;
+				sweepJoinLeftRow = jl; sweepJoinRightRow = jr;
+				return;
+			}
+		}
+		// A dot belonging to the already-selected single block wins at a shared edge.
+		// Thus selecting the right block first edits only its START; selecting the left
+		// block first edits only its END slope.
+		if(!sweepMultiSelected() && graphDotCursorAt(g, x, y) == CURSOR_VERTICAL
+				&& beginSelectedStepDrag(clampedIns(), g, x, y)) return;
+		// END/LOOP grips are explicit top-strip controls and may intersect a character
+		// cell whose centre is just outside sweepBandAt's band ownership. Hit-test both
+		// drawn grips directly, after the higher-priority slope dot.
+		foreach(loopTable; 0 .. 2) {
+			int lc = sweepLoopHandleAt(loopTable, g, x, y);
+			if(lc >= 0) {
+				clickWasButton = true;
+				sweepLoopDragging = true;
+				sweepLoopTable = loopTable;
+				sweepLoopCloseRow = lc;
+				sweepLoopMoved = false;
+				return;
+			}
+		}
+		int edgeRow = sb >= 0
+			? sweepDurationRowAtPress(sb, clampedIns(), g, x, y) : -1;
+		int cfg = sb == 1 ? filterConfigRowAtPress(g, x) : -1;
+		// At a shared Filter CONFIG/boundary X, the already-selected sweep owns its
+		// complete edge; otherwise the instantaneous CONFIG marker remains selectable.
+		bool selectedEdge = edgeRow >= 1 && selectedSweepTable == sb
+			&& (selectedSweepRow == edgeRow || selectedSweepRowEnd == edgeRow);
+		if(edgeRow >= 1 && (cfg < 1 || selectedEdge)) {
+			selectedWaveRow = -1;
+			selectedSweepTable = sb;
+			selectedSweepRow = selectedSweepRowEnd = edgeRow;
+			if(beginSelectedStepDrag(clampedIns(), g, x, y)) return;
+		}
+		if(cfg >= 1) {
+			clickWasButton = true;
+			selectedWaveRow = -1;
+			selectedSweepTable = 1;
+			selectedSweepRow = selectedSweepRowEnd = cfg;
+			int targetRow;
+			int rcfg = filterResHandleAt(g, x, y, targetRow);
+			if(rcfg >= 0) {
+				sweepResDragging = true;
+				sweepResRow = rcfg;
+				sweepResTargetRow = targetRow;
+				sweepResMoved = false;
+			}
+			return;
+		}
+		if(edgeRow >= 1) {
+			selectedWaveRow = -1;
+			selectedSweepTable = sb;
+				selectedSweepRow = selectedSweepRowEnd = edgeRow;
+				if(beginSelectedStepDrag(clampedIns(), g, x, y)) return;
+		}
+		// §20 P4b-3 RESONANCE drag: grabbing the resonance overlay line in the Filter band
+		// starts a res drag of the governing config row's b1 hi nibble. Block boundary and
+		// slope-dot hits were checked first; elsewhere the resonance line precedes cutoff.
+		{
+			int targetRow;
+			int rcfg = filterResHandleAt(g, x, y, targetRow);
+			if(rcfg >= 0) {
+				clickWasButton = true;   // this press never starts/clears a selection
+				selectedWaveRow = -1;
+				selectedSweepTable = 1;
+				selectedSweepRow = selectedSweepRowEnd = targetRow >= 1 ? targetRow : rcfg;
+				sweepResDragging = true;
+				sweepResRow = rcfg;
+				sweepResTargetRow = targetRow;
+				sweepResMoved = false;   // shared check + snapshot on the first drag tick
+				return;
 			}
 		}
 		// §21 P4c(v2) SINGLE-step edits are anchored to the selected step's box handles: if
 		// the press lands on one, edit it (stable focus, no swapping). Checked before
 		// sweepBandAt (whose cell-top gate misses a handle in the band's top/bottom cell).
 		if(!sweepMultiSelected() && beginSelectedStepDrag(clampedIns(), g, x, y)) return;
-		// §20 otherwise, in a sweep band: grab the loop line, else SELECT (single) the step
-		// under the cursor (a click selects; you then edit it via its box handles).
+		// Otherwise, in a sweep band: grab the loop line, else directly edit the block
+		// under the pointer. Its interior controls level/cutoff; selection is also updated.
 		if(sb >= 0) {
 			int lc = sweepLoopHandleAt(sb, g, x, y);
 			if(lc >= 0) {
@@ -3372,9 +5718,11 @@ class SoundEditor : Window, Undoable {
 			int row = sweepRowAtPress(sb, g, x);
 			if(row >= 0) {
 				clickWasButton = true;   // this press never starts/clears a plot selection
+				selectedWaveRow = -1;
 				selectedSweepTable = sb; // fresh single selection (anchor == extent)
 				selectedSweepRow = row;
 				selectedSweepRowEnd = row;
+				beginSelectedStepDrag(clampedIns(), g, x, y);
 				return;
 			}
 		}
@@ -3392,6 +5740,21 @@ class SoundEditor : Window, Undoable {
 	}
 
 	override void draggedTo(int x, int y) {
+		if(waveLoopDragging) {
+			Geo g = layout();
+			updateWaveLoopDrag(g, x);
+			return;
+		}
+		if(waveBitPainting) {
+			Geo g = layout();
+			updateWaveBitPaint(g, x, y);
+			return;
+		}
+		if(waveGraphDragging) {
+			Geo g = layout();
+			updateWaveGraphDrag(g, x, y);
+			return;
+		}
 		// §19 P4a ADSR-handle drag: on the first drag tick take the one gesture undo
 		// snapshot, then rewrite the mapped byte every tick (curve + column redraw from
 		// the byte). No re-trigger here — that fires once on release.
@@ -3401,53 +5764,49 @@ class SoundEditor : Window, Undoable {
 			adsrDragUpdate(g, x, y);
 			return;
 		}
-		// §20 P4b-2 loop-marker drag: on the first motion tick do the shared check (prompt
-		// fork/edit-shared and abort if undecided — the user drags again after choosing),
-		// else snapshot ALL tables and rewrite the loop-closing row's b3 every tick.
+		// §20 P4b-2 loop-marker drag: first motion resolves ownership atomically, then
+		// rewrites the loop-closing row's b3 every tick.
 		if(sweepLoopDragging) {
 			Geo g = layout();
 			if(!sweepLoopMoved) {
 				int ins = clampedIns();
-				if(sweepProgramShared(sweepLoopTable, ins) && !sweepDragAuthorized(sweepLoopTable, ins)) {
-					promptSweepFork(sweepLoopTable, ins);
+				if(!beginSweepDragMutation(sweepLoopTable, ins)) {
 					sweepLoopDragging = false; sweepLoopTable = -1; sweepLoopCloseRow = -1;
 					return;
 				}
-				snapshotAllTables(false); sweepLoopMoved = true;
+				sweepLoopMoved = true;
 			}
 			sweepLoopDragUpdate(g, x);
 			return;
 		}
-		// §20 P4b-3 filter RESONANCE drag: on the first motion tick do the §20.2 shared
-		// check (prompt + abort if undecided; the user drags again after choosing), else
-		// take one all-tables undo snapshot, then rewrite the config row's b1 hi nibble.
+		// §20 P4b-3 filter RESONANCE drag: first motion resolves ownership and takes one
+		// all-table undo snapshot, then rewrites the config row's b1 high nibble.
 		if(sweepResDragging) {
 			Geo g = layout();
 			if(!sweepResMoved) {
 				int ins = clampedIns();
-				if(sweepProgramShared(1, ins) && !sweepDragAuthorized(1, ins)) {
-					promptSweepFork(1, ins);
-					sweepResDragging = false; sweepResRow = -1;
+				if(!beginSweepDragMutation(1, ins)) {
+					sweepResDragging = false; sweepResRow = sweepResTargetRow = -1;
 					return;
 				}
-				snapshotAllTables(false); sweepResMoved = true;
+				// A later block may materialize a CONFIG row, which shifts global table refs.
+				sweepResRow = ensureResConfigForTarget(ins, sweepResTargetRow, sweepResRow);
+				sweepResMoved = true;
 			}
 			sweepResDragUpdate(g, y);
 			return;
 		}
-		// §20 P4b-1 pulse/filter LEVEL drag: on the first motion tick do the §20.2 shared
-		// check (prompt + abort if undecided; the user drags again after choosing), else
-		// take one all-tables undo snapshot, then rewrite the edited row's b2 every tick.
+		// §20 P4b-1 pulse/filter LEVEL drag: first motion resolves ownership and takes one
+		// all-table undo snapshot, then rewrites the edited row's b2 every tick.
 		if(sweepDragging) {
 			Geo g = layout();
 			if(!sweepMoved) {
 				int ins = clampedIns();
-				if(sweepProgramShared(sweepTable, ins) && !sweepDragAuthorized(sweepTable, ins)) {
-					promptSweepFork(sweepTable, ins);
+				if(!beginSweepDragMutation(sweepTable, ins)) {
 					sweepDragging = false; sweepTable = -1; sweepRow = -1;
 					return;
 				}
-				snapshotAllTables(false); sweepMoved = true;
+				sweepMoved = true;
 			}
 			sweepLevelDragUpdate(g, y);
 			return;
@@ -3458,12 +5817,11 @@ class SoundEditor : Window, Undoable {
 			Geo g = layout();
 			if(!sweepEndMoved) {
 				int ins = clampedIns();
-				if(sweepProgramShared(sweepEndTable, ins) && !sweepDragAuthorized(sweepEndTable, ins)) {
-					promptSweepFork(sweepEndTable, ins);
+				if(!beginSweepDragMutation(sweepEndTable, ins)) {
 					sweepEndDragging = false; sweepEndTable = -1; sweepEndRow = -1;
 					return;
 				}
-				snapshotAllTables(false); sweepEndMoved = true;
+				sweepEndMoved = true;
 			}
 			sweepEndDragUpdate(g, y);
 			return;
@@ -3474,28 +5832,28 @@ class SoundEditor : Window, Undoable {
 			Geo g = layout();
 			if(!sweepJoinMoved) {
 				int ins = clampedIns();
-				if(sweepProgramShared(selectedSweepTable, ins) && !sweepDragAuthorized(selectedSweepTable, ins)) {
-					promptSweepFork(selectedSweepTable, ins);
+				if(!beginSweepDragMutation(selectedSweepTable, ins)) {
 					sweepJoinDragging = false;
+					sweepJoinLeftRow = sweepJoinRightRow = -1;
 					return;
 				}
-				snapshotAllTables(false); sweepJoinMoved = true;
+				sweepJoinMoved = true;
 			}
 			sweepJoinDragUpdate(g, y);
 			return;
 		}
-		// §21 P4c DURATION (box-edge) drag: on the first tick run the §20.2 shared check
-		// (prompt + abort if undecided), else snapshot all tables, then rewrite the row's b0.
+		// §21 P4c DURATION drag: first motion resolves ownership atomically, then rewrites
+		// the row's b0.
 		if(sweepDurDragging) {
 			Geo g = layout();
 			if(!sweepDurMoved) {
 				int ins = clampedIns();
-				if(sweepProgramShared(sweepDurTable, ins) && !sweepDragAuthorized(sweepDurTable, ins)) {
-					promptSweepFork(sweepDurTable, ins);
+				if(!beginSweepDragMutation(sweepDurTable, ins)) {
 					sweepDurDragging = false; sweepDurTable = -1; sweepDurRow = -1;
+					sweepDurViewLocked = false;
 					return;
 				}
-				snapshotAllTables(false); sweepDurMoved = true;
+				sweepDurMoved = true;
 			}
 			sweepDurDragUpdate(g, x);
 			return;
@@ -3505,6 +5863,12 @@ class SoundEditor : Window, Undoable {
 		if(pressedBtn >= 0) {
 			Geo g = layout();
 			pressedOver = (buttonAt(g, x, y) == pressedBtn);
+			return;
+		}
+		if(pressedFilterAction.length) {
+			Geo g = layout();
+			pressedFilterOver = filterActionAt(clampedIns(), g, x, y)
+				== pressedFilterAction;
 			return;
 		}
 		// §17.4 dragging the scrollbar thumb pans the viewport (span kept, thumb follows
@@ -3531,9 +5895,34 @@ class SoundEditor : Window, Undoable {
 	}
 
 	override void releasedAt(int x, int y) {
-		// §20.2 a mouse gesture ended: forget any one-shot "edit shared" grant so the next
-		// drag on a shared program warns again (warn-every-time). Harmless if unset.
-		sweepDragGrant = false; sweepDragGrantTable = -1; sweepDragGrantRow = -1;
+		if(waveLoopDragging) {
+			waveLoopDragging = false;
+			waveLoopAuthorizing = false;
+			waveLoopCloseRow = -1;
+			waveLoopIns = -1;
+			clickWasButton = false;
+			if(waveLoopMoved) retriggerIfSounding();
+			waveLoopMoved = false;
+			return;
+		}
+		if(waveBitPainting) {
+			waveBitPainting = false;
+			waveBitPaintIns = -1;
+			waveBitLastRow = waveBitLastBit = -1;
+			clickWasButton = false;
+			if(waveBitChanged) retriggerIfSounding();
+			waveBitChanged = false;
+			return;
+		}
+		if(waveGraphDragging) {
+			waveGraphDragging = false;
+			waveGraphAuthorizing = false;
+			waveGraphRow = -1;
+			clickWasButton = false;
+			if(waveGraphMoved) retriggerIfSounding();
+			waveGraphMoved = false;
+			return;
+		}
 		// §19 P4a end an ADSR-handle drag: make the new envelope audible once (if a note
 		// is held) — never per drag tick. A plain click with no drag wrote nothing.
 		if(adsrDragging) {
@@ -3558,7 +5947,7 @@ class SoundEditor : Window, Undoable {
 		// note is held. A plain click (no motion) wrote nothing.
 		if(sweepResDragging) {
 			sweepResDragging = false;
-			sweepResRow = -1;
+			sweepResRow = sweepResTargetRow = -1;
 			clickWasButton = false;
 			if(sweepResMoved) retriggerIfSounding();
 			sweepResMoved = false;
@@ -3581,6 +5970,7 @@ class SoundEditor : Window, Undoable {
 			sweepEndDragging = false;
 			sweepEndTable = -1;
 			sweepEndRow = -1;
+			sweepEndWinding = 0;
 			clickWasButton = false;
 			if(sweepEndMoved) retriggerIfSounding();
 			sweepEndMoved = false;
@@ -3589,6 +5979,7 @@ class SoundEditor : Window, Undoable {
 		// §21 P4c(v3) end a JOIN drag: make the new join(s) audible once.
 		if(sweepJoinDragging) {
 			sweepJoinDragging = false;
+			sweepJoinLeftRow = sweepJoinRightRow = -1;
 			clickWasButton = false;
 			if(sweepJoinMoved) retriggerIfSounding();
 			sweepJoinMoved = false;
@@ -3596,12 +5987,28 @@ class SoundEditor : Window, Undoable {
 		}
 		// §21 P4c end a duration (box-edge) drag: make the new window audible once.
 		if(sweepDurDragging) {
+			int table = sweepDurTable;
+			int requested = sweepDurTargetExit;
+			int legal = sweepDurLegalExit;
+			bool clipped = sweepDurClipped;
+			bool unitClipped = sweepDurUnitClipped;
 			sweepDurDragging = false;
+			sweepDurViewLocked = false;
 			sweepDurTable = -1;
 			sweepDurRow = -1;
 			clickWasButton = false;
 			if(sweepDurMoved) retriggerIfSounding();
+			if(sweepDurMoved && unitClipped) {
+				UI.statusline.display("Row duration limited to the table maximum of 128 ticks.");
+			} else if(sweepDurMoved && clipped && (table == 0 || table == 1)) {
+				int mask = table == 0 ? 0xfff : 0x7ff;
+				UI.statusline.display(format(
+					"%s endpoint limited: requested $%03X; legal $%03X.",
+					table == 0 ? "Pulse" : "Filter", requested & mask, legal & mask));
+			}
 			sweepDurMoved = false;
+			sweepDurClipped = false;
+			sweepDurUnitClipped = false;
 			return;
 		}
 		// §17.4 end any scrollbar-thumb drag.
@@ -3617,6 +6024,16 @@ class SoundEditor : Window, Undoable {
 			clickWasButton = false;
 			return;
 		}
+		if(pressedFilterAction.length) {
+			Geo g = layout();
+			string action = pressedFilterAction;
+			bool fire = filterActionAt(clampedIns(), g, x, y) == action;
+			if(fire) activateFilterAction(clampedIns(), action);
+			pressedFilterAction = "";
+			pressedFilterOver = false;
+			clickWasButton = false;
+			return;
+		}
 		// A press on a control button / the scrollbar consumes its paired release.
 		if(clickWasButton) { clickWasButton = false; return; }
 		if(!selecting) return;
@@ -3627,65 +6044,145 @@ class SoundEditor : Window, Undoable {
 
 	override int keypress(Keyinfo key) {
 		int ins = clampedIns();
+		bool ctrl = (key.mods & KMOD_CTRL) != 0;
+		bool alt = (key.mods & KMOD_ALT) != 0;
+		bool shift = (key.mods & KMOD_SHIFT) != 0;
+		bool gui = (key.mods & KMOD_GUI) != 0;
+		bool mode = (key.mods & KMOD_MODE) != 0;
+		bool exact(bool c, bool a, bool s) {
+			return ctrl == c && alt == a && shift == s
+				&& !gui && !mode && !key.fromGui;
+		}
+		Geo kg = layout();
+		auto kb = zoomButtons(kg);
+		void buttonKey(int id) {
+			if(id >= 0 && id < 18 && kb[id].enabled) activateZoomButton(id);
+		}
+		// R66-R68: portable primary chords. Exact modifiers prevent AltGr and
+		// GUI/Super compatibility translations from becoming Sound commands.
+		if(exact(true, false, true) && key.raw == SDLK_o) { buttonKey(BTN_ZOOMOUT); return OK; }
+		if(exact(true, false, true) && key.raw == SDLK_i) { buttonKey(BTN_ZOOMIN); return OK; }
+		if(exact(true, false, true) && key.raw == SDLK_a) { buttonKey(BTN_FIT); return OK; }
+		if(exact(true, false, true) && key.raw == SDLK_g) { buttonKey(BTN_SEL); return OK; }
+		if(exact(true, false, true) && key.raw == SDLK_j) { buttonKey(BTN_ADD); return OK; }
+		if(exact(true, false, true) && key.raw == SDLK_d) { buttonKey(BTN_DEL); return OK; }
+		if(exact(true, false, true) && key.raw == SDLK_s) { buttonKey(BTN_STOP); return OK; }
+		if(exact(true, false, false) && key.raw == SDLK_t) { buttonKey(BTN_TYPE); return OK; }
+		if(exact(true, false, false) && key.raw == SDLK_i) { buttonKey(BTN_CARRY); return OK; }
+		if(exact(true, false, true) && key.raw == SDLK_n) { buttonKey(BTN_NEW); return OK; }
+		if(exact(false, false, true) && key.raw == SDLK_PAGEUP) { buttonKey(BTN_WPREV); return OK; }
+		if(exact(false, false, true) && key.raw == SDLK_PAGEDOWN) { buttonKey(BTN_WNEXT); return OK; }
+		if(exact(true, false, true) && key.raw == SDLK_1) { buttonKey(BTN_W1); return OK; }
+		if(exact(true, false, true) && key.raw == SDLK_2) { buttonKey(BTN_W2); return OK; }
+		if(exact(true, false, false) && key.raw == SDLK_l) { buttonKey(BTN_WLOOP); return OK; }
+		if(exact(true, false, true) && key.raw == SDLK_3) { buttonKey(BTN_RESDEC); return OK; }
+		if(exact(true, false, true) && key.raw == SDLK_4) { buttonKey(BTN_RESINC); return OK; }
+		if(exact(true, false, true) && key.raw == SDLK_e) { buttonKey(BTN_LINKED); return OK; }
+		if(exact(true, false, true) && key.raw == SDLK_l) { toggleFilterModeBit(ins, 0x10); return OK; }
+		if(exact(true, false, true) && key.raw == SDLK_b) { toggleFilterModeBit(ins, 0x20); return OK; }
+		if(exact(true, false, true) && key.raw == SDLK_h) { toggleFilterModeBit(ins, 0x40); return OK; }
+		if(exact(true, false, true) && key.raw == SDLK_r) { cycleFilterRoute(ins); return OK; }
+
+		// Selected Pulse/Filter raw edits: start, end and duration.
+		if(exact(true, false, true) && key.raw >= SDLK_0 && key.raw <= SDLK_9) {
+			switch(key.raw) {
+				case SDLK_5: editSelectedSweepKeyboard(0, -1); return OK;
+				case SDLK_6: editSelectedSweepKeyboard(0, +1); return OK;
+				case SDLK_7: editSelectedSweepKeyboard(1, -1); return OK;
+				case SDLK_8: editSelectedSweepKeyboard(1, +1); return OK;
+				case SDLK_9: editSelectedSweepKeyboard(2, -1); return OK;
+				case SDLK_0: editSelectedSweepKeyboard(2, +1); return OK;
+				default: break;
+			}
+		}
+		if(exact(true, false, true) && key.raw == SDLK_PAGEDOWN) {
+			if(state.octave > 0) state.octave--;
+			return OK;
+		}
+		if(exact(true, false, true) && key.raw == SDLK_PAGEUP) {
+			if(state.octave < 6) state.octave++;
+			return OK;
+		}
+		void changeInstrument(int delta) {
+			UI.activateInstrument(state.activeInstrument + delta);
+			clearSweepSelection();
+			selectedWaveRow = -1;
+			linkedEditKind = linkedEditStart = -1;
+		}
+		if(exact(true, false, false) && key.raw == SDLK_PAGEUP) {
+			changeInstrument(-1); return OK;
+		}
+		if(exact(true, false, false) && key.raw == SDLK_PAGEDOWN) {
+			changeInstrument(+1); return OK;
+		}
+
+		// A physical GUI/Super chord is never a Sound command, even if the legacy
+		// platform translator produced a key that resembles one.
+		if(key.fromGui || gui || mode) return OK;
 		switch(key.raw) {
 		// Move the parameter cursor.
 		case SDLK_UP:
-			if(paramCursor > 0) paramCursor--;
+			if(exact(false, false, false) && paramCursor > 0) paramCursor--;
 			return OK;
 		case SDLK_DOWN:
-			if(paramCursor < PARAM_ROWS - 1) paramCursor++;
+			if(exact(false, false, false) && paramCursor < PARAM_ROWS - 1) paramCursor++;
 			return OK;
 		// §19 P4a Left/Right EDIT the selected value (decrement/increment); on the
 		// pointer rows (nothing editable) or with Shift held they PAN the viewport
 		// instead (view control moved off bare Left/Right). Letters/digits stay keyjam.
 		case SDLK_LEFT:
-			if(!(key.mods & KMOD_SHIFT) && isEditableRow(paramCursor)) editSelected(ins, -1);
-			else panBy(-(viewEndTick - viewStartTick) / 4.0);
+			if(exact(false, false, false) && isEditableRow(paramCursor)) editSelected(ins, -1);
+			else if(exact(false, false, true)) panBy(-(viewEndTick - viewStartTick) / 4.0);
 			return OK;
 		case SDLK_RIGHT:
-			if(!(key.mods & KMOD_SHIFT) && isEditableRow(paramCursor)) editSelected(ins, +1);
-			else panBy((viewEndTick - viewStartTick) / 4.0);
+			if(exact(false, false, false) && isEditableRow(paramCursor)) editSelected(ins, +1);
+			else if(exact(false, false, true)) panBy((viewEndTick - viewStartTick) / 4.0);
 			return OK;
 		case SDLK_HOME:
-			userZoomed = false; fitViewport();
+			if(exact(false, false, false)) { userZoomed = false; fitViewport(); }
 			return OK;
 		case SDLK_END:
-			zoomToSelection();
+			if(exact(false, false, false)) zoomToSelection();
 			return OK;
 		case SDLK_BACKSPACE:
-			hasSelection = false;
+			if(exact(false, false, false)) hasSelection = false;
 			return OK;
 		// §20 P4b-2 add / delete a sweep step (row-op) on the selected Pulse/Filter step.
 		case SDLK_INSERT:
-			if(selectedSweepTable >= 0) sweepRowOp(selectedSweepTable, true);
-			else UI.statusline.display("Select a pulse/filter step first (click it).");
+			if(exact(false, false, false)) {
+				if(selectedSweepTable >= 0) sweepRowOp(selectedSweepTable, true);
+				else if(selectedWaveNormal(ins)) waveRowOp(true);
+				else UI.statusline.display("Select a pulse/filter/wave step first.");
+			}
 			return OK;
 		case SDLK_DELETE:
-			if(selectedSweepTable >= 0) sweepRowOp(selectedSweepTable, false);
-			else UI.statusline.display("Select a pulse/filter step first (click it).");
+			if(exact(false, false, false)) {
+				if(selectedSweepTable >= 0) sweepRowOp(selectedSweepTable, false);
+				else if(selectedWaveNormal(ins)) waveRowOp(false);
+				else UI.statusline.display("Select a pulse/filter/wave step first.");
+			}
 			return OK;
 		// Octave nudges (mirrors the classic keypad octave keys).
 		case SDLK_KP_DIVIDE:
-			if(state.octave > 0) state.octave--;
+			if(exact(false, false, false) && state.octave > 0) state.octave--;
 			return OK;
 		case SDLK_KP_MULTIPLY:
-			if(state.octave < 6) state.octave++;
+			if(exact(false, false, false) && state.octave < 6) state.octave++;
 			return OK;
 		// Switch the instrument under view inline (shared activateInstrument keeps
 		// the classic screen in sync when we leave).
-		case SDLK_PLUS:
 		case SDLK_KP_PLUS:
-			UI.activateInstrument(state.activeInstrument + 1);
-			clearSweepSelection();   // §20 P4b-2 row index is table-local to the old ins
+			if(exact(false, false, false)) changeInstrument(+1);
 			return OK;
-		case SDLK_MINUS:
 		case SDLK_KP_MINUS:
-			UI.activateInstrument(state.activeInstrument - 1);
-			clearSweepSelection();
+			if(exact(false, false, false)) changeInstrument(-1);
 			return OK;
 		default:
 			break;
 		}
+		// Modified non-command chords are inert in Sound Editor. Shift-only note keys
+		// remain available to the existing piano layout.
+		if(ctrl || alt) return OK;
 		// Everything else is a note key for the screen's own keyjam.
 		inputKeyjam.keypress(key);
 		return OK;

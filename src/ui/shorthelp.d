@@ -25,6 +25,7 @@ private immutable CtxTitle[] CONTEXT_ORDER = [
 	CtxTitle(Ctx.instrumentTable, "Instrument table"),
 	CtxTitle(Ctx.subtable,        "Wave / pulse / filter tables"),
 	CtxTitle(Ctx.songInfo,        "Song info"),
+	CtxTitle(Ctx.soundEditor,     "Sound Editor"),
 ];
 
 private enum LEADER_WIDTH = 24;   // column where the description starts
@@ -52,9 +53,10 @@ private string mdShortcuts(Shortcut[] scs) {
 /// Platform-specific input notes (from the key translation in com/kbd.d).
 string[] platformNotes() {
 	return [
-		"macOS: the Cmd key acts as Ctrl+Shift for any shortcut.",
-		"macOS: Cmd+1..9 act as the numeric keypad 1..9.",
-		"macOS: Cmd+Up / Cmd+Down act as Shift+Home / Shift+End.",
+		"macOS outside Sound Editor: legacy Cmd translation acts as Ctrl+Shift.",
+		"macOS outside Sound Editor: Cmd+1..9 act as numeric keypad 1..9.",
+		"macOS outside Sound Editor: Cmd+Up / Cmd+Down act as Shift+Home / Shift+End.",
+		"Sound Editor uses physical Ctrl/Shift primaries; Cmd variants are inert.",
 		"macOS: F11 may be intercepted by the system (Show Desktop).",
 	];
 }

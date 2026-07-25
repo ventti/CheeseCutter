@@ -176,6 +176,13 @@ public:
 class Statusline : Window {
 	int counter;
 	string message;
+	// Rows 1..3 reserve the rightmost 42 cells for the live SID-register view.
+	// Status/help text owns the adjacent region to its left and never clears or
+	// paints through that boundary.
+	private int rightEdge() const { return screen.width > 42 ? screen.width - 42 : screen.width; }
+	private void clearRegion() {
+		foreach(x; 0 .. rightEdge()) screen.setChar(x, 2, 0x20);
+	}
 
 	this(Rectangle a) {
 		super(a);
@@ -184,7 +191,6 @@ class Statusline : Window {
 	void display(string msg) {
 		message = msg;
 		counter = CONFIRM_TIMEOUT;
-		screen.clrtoeol(2, 0);
 		update();
 	}
 
@@ -194,9 +200,14 @@ class Statusline : Window {
 	}
 
 	override void update() {
-		if(counter)
-			screen.fprint(4, 2, "`0f " ~ message);
-		else screen.clrtoeol(2, 0);
+		clearRegion();
+		if(counter) {
+			string text = " " ~ message;
+			int available = rightEdge() - 4;
+			if(available <= 0) return;
+			if(cast(int)text.length > available) text = text[0 .. available];
+			screen.cprint(4, 2, 15, 0, text);
+		}
 	}
 
 	void timerEvent() {

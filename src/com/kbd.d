@@ -21,6 +21,7 @@ void translate(ref Keyinfo key) {
 
 void translate_super(ref Keyinfo key) {
 	if(key.mods & KMOD_GUI) {
+		key.fromGui = true;
         switch(key.key) {
         case SDLK_0: key.key = SDLK_KP_0; break;
         case SDLK_1: key.key = SDLK_KP_1; break;
@@ -41,4 +42,3 @@ void translate_super(ref Keyinfo key) {
 		key.mods ^= KMOD_GUI; // meta off
     }
 }
-

@@ -61,6 +61,17 @@ void requestDump() {
 	dumpRequested = true;
 }
 
+// Capture the SID state which produced the PCM block that just finished. The caller
+// must invoke this after a complete player-tick sid_fillbuffer and before audio_frame
+// replaces `sidreg` with the next tick's register shadow. ENV and registers therefore
+// share one unambiguous end-of-rendered-tick timestamp.
+void recordRenderedSidTick() nothrow {
+	ubyte[3] env;
+	sid_read_envelopes(env.ptr);
+	audio.visualizer.recordRenderedSidFrame(
+		cast(ubyte[])sidreg[0 .. 0x19], env[]);
+}
+
 // called each frame from soundbuffer callback
 extern(C) __gshared void audio_frame() nothrow {
 	static char[0x19][5*50] dumpbak;
@@ -81,6 +92,9 @@ extern(C) __gshared void audio_frame() nothrow {
 	default:
 		return;
 	}
+	// Enforce the Sound Editor's exact one-shot gate boundary before this tick is
+	// copied to reSID/visualizer capture; the player's KEYOFF pipeline continues.
+	audio.player.applyFixedKeyjamGateMask();
 
 	frameCallCounter++;
 	totalFrameCallCounter++;
@@ -98,6 +112,9 @@ extern(C) __gshared void audio_frame() nothrow {
 	// Update visualizer with current SID register state and player memory.
 	int playerStateOffset = (song.offsets.length > Offsets.SHTRANS) ? song.offsets[Offsets.SHTRANS] : 0;
 	audio.visualizer.updateSidRegisters(cast(ubyte[])sidreg[0..0x19], song.memspace, playerStateOffset, audio.audio.multiplier);
+	// Sound Editor fixed keyjam duration: advance after recording this tick so an
+	// armed duration N produces exactly N gate-high visualizer/capture samples.
+	audio.player.advanceFixedKeyjamGate();
 
 	// if(com.session.debugMode) {
 	// 	dumpctr++;
@@ -189,4 +206,5 @@ void cpuCall(ushort pc, bool lockAudio, bool forcedump) nothrow {
 
 extern(C) {
 	__gshared extern char[0x19] sidreg;
+	void sid_read_envelopes(ubyte* outEnvelopes) nothrow;
 }

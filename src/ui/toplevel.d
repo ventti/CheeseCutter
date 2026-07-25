@@ -567,6 +567,7 @@ final package class Toplevel : WindowSwitcher, Undoable {
 
 	void startSoundEditor() {
 		if(soundEditorActive) return;
+		soundEditor.beginSession();
 		savedWindows = windows;
 		savedActiveWindowNum = activeWindowNum;
 		prevKeyjamStatus = state.keyjamStatus;
@@ -578,6 +579,11 @@ final package class Toplevel : WindowSwitcher, Undoable {
 		windows = [cast(Window)soundEditor];
 		soundEditorActive = true;
 		activateWindow(0);
+		// This window-set swap is not a normal WindowSwitcher tab change.  Push the
+		// explicit context as well so Sound Editor command bindings win immediately
+		// over the previously active sequencer/subtable shortcuts.
+		if(mainui !is null && mainui.sm !is null)
+			mainui.sm.setActiveContext(Ctx.soundEditor);
 		// Force keyjam ON so the piano keys sound the moment the screen opens, but
 		// v2 layout drops the whole-screen dark-blue keyjam tint: keep note routing
 		// (keyjamStatus) while forcing the cosmetic background off. The SoundEditor

@@ -12,6 +12,7 @@ import com.util;
 import ct.base;
 import seq.sequencer;
 import audio.player;
+static import audio.audio;
 import ui.ui;
 import std.string;
 import std.utf;
@@ -37,6 +38,13 @@ mixin template ValueChangedHandler() {
 
 struct Keyinfo {
 	int key, mods, unicode;
+	// True when com.kbd translated a physical GUI/Super chord. Sound-context
+	// portability bindings require physical Ctrl and must not inherit that legacy
+	// macOS compatibility translation.
+	bool fromGui;
+	this(int key, int mods, int unicode, bool fromGui = false) {
+		this.key = key; this.mods = mods; this.unicode = unicode; this.fromGui = fromGui;
+	}
 	alias key raw;
 }
 
@@ -872,15 +880,70 @@ class InputNote : ExtendedInput {
 }
 
 class InputKeyjam : ExtendedInput {
+	// ct.base.NOTES index for middle C as displayed by CheeseCutter (C-4).
+	enum int DEFAULT_PREVIEW_NOTE = 48;
+	static assert(NOTES[DEFAULT_PREVIEW_NOTE] == "C-4");
 	ubyte[4] dummy;
 	// Physical note keys currently held down (raw keycodes). Auto-repeat (a held
 	// key resends SDL_KEYDOWN) is ignored so it doesn't retrigger; the note gates
 	// off only when the last held key is released.
 	private int[] heldKeys;
+	// Element is a view over a four-byte row. Keep the preview on separate storage:
+	// keyrelease mutates `element` to KEYOFF, and a shallow Element assignment would
+	// otherwise mutate the supposedly remembered note too.
+	private ubyte[4] previewData;
+	private Element previewElement;
+	private bool previewAvailable = false;
+	private bool previewWasPlayed = false;
+	// -1 preserves the classic editor's legacy "currently active sequencer voice".
+	// SoundEditor sets an explicit 0..2 voice and a fixed gate duration.
+	private int selectedVoice = -1;
+	private int fixedGateTicks = 0;
 
 	this() {
 		element = Element(dummy);
+		previewElement = Element(previewData);
 		super(1, null);
+	}
+
+	void setKeyjamVoice(int voice) {
+		selectedVoice = voice < 0 ? -1 : (voice > 2 ? 2 : voice);
+	}
+	int keyjamVoice() const { return selectedVoice; }
+	void setFixedGateTicks(int ticks) { fixedGateTicks = ticks < 0 ? 0 : ticks; }
+	int configuredGateTicks() const { return fixedGateTicks; }
+
+	// Sound Editor's predictable no-keyjam baseline. C-4 is used only before the first
+	// played note; changing instruments keeps that last note as the preview baseline.
+	void ensurePreviewBaseline(int ins, int note = DEFAULT_PREVIEW_NOTE) {
+		if(previewAvailable) {
+			previewElement.instr = cast(ubyte)(ins < 0 ? 0 : ins);
+			return;
+		}
+		previewData[] = 0;
+		previewElement = Element(previewData);
+		previewElement.note = cast(ubyte)note;
+		previewElement.note.setTied(false);
+		previewElement.instr = cast(ubyte)(ins < 0 ? 0 : ins);
+		previewAvailable = true;
+		previewWasPlayed = false;
+	}
+
+	private void playConfigured(Element e, bool silent = false) {
+		if(selectedVoice >= 0) {
+			if(silent) audio.player.playNoteSilentOnVoice(e, selectedVoice);
+			else audio.player.playNoteOnVoice(e, selectedVoice);
+		} else {
+			if(silent) audio.player.playNoteSilent(e);
+			else audio.player.playNote(e);
+		}
+	}
+
+	private void playConfiguredWithFixedGate(Element e) {
+		if(fixedGateTicks > 0 && e.note.value >= 3) {
+			int voice = selectedVoice >= 0 ? selectedVoice : seq.sequencer.activeVoiceNum;
+			audio.player.playNoteOnVoiceWithFixedGate(e, voice, fixedGateTicks);
+		} else playConfigured(e);
 	}
 
 	override void setRowValue(int value) {
@@ -908,7 +971,13 @@ class InputKeyjam : ExtendedInput {
 		}
 		if(state.activeInstrument >= 0)
 			element.instr = cast(ubyte)(state.activeInstrument);
-		audio.player.playNote(element);
+		if(element.note.value >= 3) {
+			previewData[] = element.data[];
+			previewElement = Element(previewData);
+			previewAvailable = true;
+			previewWasPlayed = true;
+		}
+		playConfiguredWithFixedGate(element);
 	}
 
 	override int keypress(Keyinfo key) {
@@ -922,6 +991,37 @@ class InputKeyjam : ExtendedInput {
 	// True while at least one note key is held down (a keyjam note is sounding). Used by
 	// the Sound Editor to decide whether an envelope edit should re-trigger the note.
 	bool noteHeld() { return heldKeys.length > 0; }
+	bool hasPreviewNote() { return previewAvailable; }
+	bool hasPlayedPreviewNote() { return previewWasPlayed; }
+	bool previewMatchesInstrument(int ins) {
+		return previewAvailable && previewElement.instr.value == ins;
+	}
+	int previewInstrument() { return previewAvailable ? previewElement.instr.value : -1; }
+	int previewNote() { return previewAvailable ? previewElement.note.value : -1; }
+
+	// Rebuild the last struck note's reSID/capture state without sending samples to the
+	// audio device. Used by the Sound Editor after mouse-up when no key is held.
+	void rerenderLastSilently(int ticks, int holdTicks) {
+		if(!previewAvailable || ticks < 1) return;
+		if(holdTicks < 1) holdTicks = 1;
+		if(holdTicks > ticks) holdTicks = ticks;
+		SDL_AudioStatus oldStatus = SDL_GetAudioStatus();
+		SDL_PauseAudio(1);
+		playConfigured(previewElement, true);
+		audio.audio.renderKeyjamCapture(holdTicks);
+		if(holdTicks < ticks) {
+			// Element is a view over its backing bytes: a shallow copy would turn the
+			// remembered preview note itself into KEYOFF. Use independent storage so the
+			// durable last-note baseline survives every silent rerender.
+			ubyte[4] offData = previewData;
+			Element off = Element(offData);
+			off.note = NOTE_KEYOFF;
+			off.note.setTied(false);
+			playConfigured(off, true);
+			audio.audio.renderKeyjamCapture(ticks - holdTicks);
+		}
+		if(oldStatus == SDL_AUDIO_PLAYING) SDL_PauseAudio(0);
+	}
 
 	// Re-play the currently held note (same note + active instrument) so a just-edited
 	// envelope is heard immediately — AD/SR only take effect on the next note trigger.
@@ -930,7 +1030,7 @@ class InputKeyjam : ExtendedInput {
 		if(heldKeys.length == 0) return;
 		if(state.activeInstrument >= 0)
 			element.instr = cast(ubyte)(state.activeInstrument);
-		audio.player.playNote(element);
+		playConfiguredWithFixedGate(element);
 	}
 
 	override int keyrelease(Keyinfo key) {
@@ -938,13 +1038,14 @@ class InputKeyjam : ExtendedInput {
 		foreach(i, k; heldKeys) if(k == key.raw) { idx = i; break; }
 		if(idx == heldKeys.length) return OK;   // not a tracked note key
 		heldKeys = heldKeys[0 .. idx] ~ heldKeys[idx + 1 .. $];
-		// Gate off (note value 1) only once the last held key is released.
+		// Legacy keyjam gates off on release. A configured Sound Editor one-shot does
+		// not: its player-tick clock owns key-off, independent of physical press length.
 		if(heldKeys.length == 0) {
 			element.note = NOTE_KEYOFF;
 			element.note.setTied(false);
 			if(state.activeInstrument >= 0)
 				element.instr = cast(ubyte)(state.activeInstrument);
-			audio.player.playNote(element);
+			if(fixedGateTicks <= 0) playConfigured(element);
 		}
 		return OK;
 	}

@@ -952,7 +952,7 @@ class Song {
 					wave2[i] = wave2[i + 1];
 				}
 				for(i=0;i < 256;i++) {
-					if((wave1[i] == 0x7f || wave1[i] == 0x7e) &&
+					if(wave1[i] == 0x7f &&
 					   wave2[i] >= pos) {
 						if(wave2[i] > 0) --wave2[i];
 					}

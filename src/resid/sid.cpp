@@ -178,6 +178,11 @@ reg8 SID::read(reg8 offset)
   }
 }
 
+reg8 SID::readENV(reg8 voice_num)
+{
+  return voice_num < 3 ? voice[voice_num].envelope.readENV() : 0;
+}
+
 
 // ----------------------------------------------------------------------------
 // Write registers.

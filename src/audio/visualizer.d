@@ -142,18 +142,60 @@ private __gshared int[RECORD_FRAMES][3]   recCutoff;  // 11-bit filter cutoff
 private __gshared int[RECORD_FRAMES][3]   recRes;     // resonance 0..15
 private __gshared int[RECORD_FRAMES][3]   recRoute;   // filter routing (b0..b2)
 private __gshared int[RECORD_FRAMES][3]   recMode;    // filter mode (sidreg[0x18]&0x70)
-private __gshared float[RECORD_FRAMES][3] recAmp;     // envelope amplitude 0..1
+private __gshared ubyte[RECORD_FRAMES][3] recEnv;     // actual reSID ENV counter 0..255
+private __gshared float[RECORD_FRAMES][3] recAmp;     // exact recEnv/255 for graph geometry
 private __gshared int[3]  recLen     = [0, 0, 0];       // frames recorded since trigger
 private __gshared bool[3] recActive  = [false, false, false]; // a note has played
 private __gshared bool[3] recPrevGate = [false, false, false];// gate edge tracking
+private __gshared bool[3] recArmed = [false, false, false];
+private __gshared bool[3] recSawLow = [false, false, false];
 
-// Append one frame of the voice's real SID state to its rolling recording log.
-// Resets the log on a gate 0->1 edge (new note). Independent gate tracking so it
-// doesn't disturb the envelope state machine's own voice.gateOn.
-private void recordVoiceFrame(int v, const ubyte[] sidreg) nothrow {
+/// Explicit note boundary from audio.player. A retrigger can take gate low and high
+/// between two visualizer samples, so edge detection alone may miss it and leave the
+/// Sound Editor displaying stale pre-edit frames. Clear first; the next sampled tick
+/// starts a fresh recording from the edited instrument state.
+void beginVoiceRecording(int voiceNum) nothrow {
+	if(voiceNum < 0 || voiceNum >= 3) return;
+	recLen[voiceNum] = 0;
+	recActive[voiceNum] = false;
+	recArmed[voiceNum] = true;
+	recSawLow[voiceNum] = false;
+}
+
+/// Drop a frozen/stale note view so the Sound Editor can immediately fall back to
+/// its table simulation after an edit. A held-note retrigger will arm it again.
+void invalidateVoiceRecording(int voiceNum) nothrow {
+	if(voiceNum < 0 || voiceNum >= 3) return;
+	recLen[voiceNum] = 0;
+	recActive[voiceNum] = false;
+	recArmed[voiceNum] = false;
+	recSawLow[voiceNum] = false;
+}
+
+// Append one rendered tick of real SID state to the rolling log. `sidreg` and
+// `envelope` are sampled together after sid_fillbuffer, before the player computes
+// the next register shadow. Resets on gate 0->1 without disturbing the unrelated
+// tracker-brightness state machine's own voice.gateOn.
+private void recordVoiceFrame(int v, const ubyte[] sidreg,
+		const ubyte[] envelope) nothrow {
 	int baseReg = v * 7;
 	ubyte ctrl = sidreg[baseReg + 4];
 	bool gate = (ctrl & 0x01) != 0;
+	// A retrigger is requested while the old note may still be gate-high. Do not
+	// mistake that old high level for the new onset: wait through the player's
+	// hard/soft-restart gate-low phase, then start on the following rise.
+	if(recArmed[v]) {
+		if(!gate) {
+			recSawLow[v] = true;
+			recPrevGate[v] = false;
+			return;
+		}
+		if(!recSawLow[v]) return;
+		recLen[v] = 0;
+		recActive[v] = true;
+		recArmed[v] = false;
+		recPrevGate[v] = true;
+	}
 	if(gate && !recPrevGate[v]) {   // new note: restart the log at frame 0
 		recLen[v] = 0;
 		recActive[v] = true;
@@ -169,8 +211,18 @@ private void recordVoiceFrame(int v, const ubyte[] sidreg) nothrow {
 	recRes[v][i]    = sidreg[0x17] >> 4;
 	recRoute[v][i]  = sidreg[0x17] & 0x0f;
 	recMode[v][i]   = sidreg[0x18] & 0x70;
-	recAmp[v][i]    = voices[v].brightness;
+	recEnv[v][i]    = envelope[v];
+	recAmp[v][i]    = envelope[v] / 255.0f;
 	recLen[v]++;
+}
+
+/// Record the registers and raw reSID envelope counters for one completed PCM tick.
+/// `recLen` is published last by recordVoiceFrame, so UI readers never observe an
+/// index before all fields for that index have been copied.
+void recordRenderedSidFrame(const ubyte[] sidreg,
+		const ubyte[] envelope) nothrow {
+	if(sidreg.length < 0x19 || envelope.length < 3) return;
+	for(int v = 0; v < 3; v++) recordVoiceFrame(v, sidreg, envelope);
 }
 
 /**
@@ -275,13 +327,10 @@ void updateSidRegisters(const ubyte[] sidreg, const ubyte[] playerMem, int playe
 		activeFilterRow = playerMem[playerStateOffset + 45] >> 2;
 	}
 
-	// Advance each voice's envelope ONE PLAYER TICK, then append this tick's real SID
-	// state to its recording log (§11.1). Advancing per tick (not per screen frame)
-	// with tick-scaled phase lengths keeps the recorded envelope a SMOOTH curve at any
-	// multiplier — sampling a per-screen-frame envelope per tick made a staircase.
+	// This synthetic state is retained only for the classic track/instrument brightness
+	// display. Sound Editor ADSR truth is recordRenderedSidFrame's raw reSID ENV trace.
 	for(int v = 0; v < 3; v++) {
 		advanceEnvelope(v);
-		recordVoiceFrame(v, sidreg);
 	}
 }
 
@@ -575,6 +624,10 @@ const(int)[] getRecordedMode(int voiceNum) nothrow {
 const(float)[] getRecordedAmp(int voiceNum) nothrow {
 	if(voiceNum < 0 || voiceNum >= 3) return null;
 	return recAmp[voiceNum][0 .. recLen[voiceNum]];
+}
+const(ubyte)[] getRecordedEnvelope(int voiceNum) nothrow {
+	if(voiceNum < 0 || voiceNum >= 3) return null;
+	return recEnv[voiceNum][0 .. recLen[voiceNum]];
 }
 
 /// §12.1: one past the index of the LAST recorded frame whose envelope amplitude

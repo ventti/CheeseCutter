@@ -26,6 +26,7 @@ import std.file : dirEntries, getcwd, isDir, FileException, SpanMode;
 import std.path : baseName, extension;
 import std.string : indexOf, toLower, CaseSensitive;
 import com.session;      // screen
+import com.fb : FONT_X, FONT_Y;
 import com.shortcuts;
 import ui.input : Keyinfo;
 import ui.menubar : MenuBar;
@@ -77,6 +78,11 @@ final class CommandPalette {
 	}
 
 	@property bool active() const { return _active; }
+
+	void maskOverlay() {
+		if(_active && boxW > 0 && boxH > 0)
+			video.olMaskRect(boxX * FONT_X, boxY * FONT_Y, boxW * FONT_X, boxH * FONT_Y);
+	}
 
 	/// Open with an initial query (may be empty), e.g. the character typed
 	/// while the menu bar was focused.

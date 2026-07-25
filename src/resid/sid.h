@@ -50,6 +50,8 @@ public:
   
   // Read/write registers.
   reg8 read(reg8 offset);
+  // Read one voice's raw 8-bit envelope counter without SID bus side effects.
+  reg8 readENV(reg8 voice_num);
   void write(reg8 offset, reg8 value);
 
   // Read/write state.

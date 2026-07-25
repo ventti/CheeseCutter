@@ -150,6 +150,11 @@ class ShortcutManager {
 		// Incrementing counter stamped onto each action as it is registered, so
 		// menus can present commands in deliberate registration order.
 		int orderCounter;
+
+		// Read-only regression trace for the headless usage driver. It records the
+		// real UI dispatch result without changing dispatch or invoking anything twice.
+		bool lastConsumed, lastInvoked;
+		string lastActionId;
 	}
 
 	this() {
@@ -301,7 +306,29 @@ class ShortcutManager {
 	 * Returns true if a shortcut was found and invoked.
 	 */
 	bool handleKeypress(Keyinfo key) {
+		lastConsumed = false;
+		lastInvoked = false;
+		lastActionId = "";
 		Shortcut sc = Shortcut(key);
+		if(activeContext == Ctx.soundEditor) {
+			// AltGr is reported either as MODE+RightAlt or LeftCtrl+RightAlt depending
+			// on OS/backend. It is text composition, never a Sound command.
+			if((key.mods & KMOD_MODE)
+					|| ((key.mods & KMOD_RALT) && (key.mods & KMOD_CTRL))) {
+				lastConsumed = true;
+				return true;
+			}
+			// Legacy macOS GUI translation may synthesize Ctrl+Shift. Consume it only
+			// when it would impersonate a Sound binding; unrelated global Cmd behavior
+			// keeps its existing fallback outside/inside this context.
+			if(key.fromGui)
+				if(auto m = Ctx.soundEditor in contextBindings)
+					if(auto id = sc in *m) {
+						lastConsumed = true;
+						lastActionId = *id;
+						return true;
+					}
+		}
 		// Walk the active context and its parents, then fall back to global.
 		for(string ctx = activeContext; ctx.length; ) {
 			if(auto m = ctx in contextBindings)
@@ -317,13 +344,23 @@ class ShortcutManager {
 
 	private bool invoke(string actionId) {
 		if(auto def = actionId in actions) {
-			if(def.enabled is null || def.enabled()) {
+			lastConsumed = true;
+			lastActionId = actionId;
+			if(isActionEnabled(actionId)) {
+				lastInvoked = true;
 				def.callback();
-				return true;
 			}
+			// A registered but disabled shortcut is still consumed: allowing the raw
+			// key to fall through would execute a context-inappropriate widget action.
+			return true;
 		}
 		return false;
 	}
+
+	// Read-only usage-test oracle for the most recent real UI shortcut dispatch.
+	bool debugLastConsumed() const { return lastConsumed; }
+	bool debugLastInvoked() const { return lastInvoked; }
+	string debugLastAction() const { return lastActionId; }
 
 	// --- Queries (for docs/menus) ---
 
@@ -332,6 +369,7 @@ class ShortcutManager {
 	 * context bindings). Returns Shortcut(0,0) if not bound.
 	 */
 	Shortcut getShortcut(string actionId) {
+		if(auto def = actionId in actions) if(def.primary.isValid) return def.primary;
 		foreach(sc, id; bindings)
 			if(id == actionId) return sc;
 		foreach(ctx, m; contextBindings)
@@ -345,18 +383,37 @@ class ShortcutManager {
 	 * global and context bindings), sorted for stable output.
 	 */
 	Shortcut[] getShortcuts(string actionId) {
-		Shortcut[] result;
+		Shortcut[] result, aliases;
+		Shortcut primary;
+		if(auto def = actionId in actions) primary = def.primary;
+		if(primary.isValid) result ~= primary;
 		foreach(sc, id; bindings)
-			if(id == actionId) result ~= sc;
+			if(id == actionId && sc != primary) aliases ~= sc;
 		foreach(ctx, m; contextBindings)
 			foreach(sc, id; m)
-				if(id == actionId) result ~= sc;
-		result.sort!((a, b) => formatShortcut(a) < formatShortcut(b));
+				if(id == actionId && sc != primary) aliases ~= sc;
+		aliases.sort!((a, b) => formatShortcut(a) < formatShortcut(b));
+		result ~= aliases;
 		return result;
 	}
 
 	bool isActionRegistered(string actionId) {
 		return (actionId in actions) !is null;
+	}
+
+	final bool isActionEnabled(string actionId) {
+		auto def = actionId in actions;
+		if(def is null) return false;
+		if(activeContext == Ctx.soundEditor && def.context == Ctx.global) {
+			if(def.category == "Window navigation") return false;
+			switch(actionId) {
+				case "toggle_filter_track": case "toggle_oscilloscope":
+				case "scope_zoom_in": case "scope_zoom_out": case "toggle_keyjam":
+					return false;
+				default: break;
+			}
+		}
+		return def.enabled is null || def.enabled();
 	}
 
 	const(ActionDef)* getAction(string actionId) {
@@ -454,6 +511,8 @@ string keyName(int key) {
 	case SDLK_PERIOD: return ".";
 	case SDLK_COMMA: return ",";
 	case SDLK_SEMICOLON: return ";";
+	case SDLK_LEFTBRACKET: return "[";
+	case SDLK_RIGHTBRACKET: return "]";
 	case SDLK_KP_PLUS: return "Keypad +";
 	case SDLK_KP_MINUS: return "Keypad -";
 	case SDLK_KP_MULTIPLY: return "Keypad *";

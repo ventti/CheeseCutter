@@ -281,23 +281,7 @@ final class UI {
 			toplevel.timerEvent();
 
 			if(audio.player.isPlaying || audio.player.keyjamEnabled) {
-				if(vismode == VisMode.Regs) {
-					int x = screen.width - 42;
-					screen.cprint(x, 1, 15, 0, "V1:");
-					screen.cprint(x, 2, 15, 0, "V2:");
-					screen.cprint(x, 3, 15, 0, "V3:");
-					screen.cprint(x+26, 1, 15, 0, "$D415 16 17 18");
-
-					for(int i = 0; i < 7; i++) {
-						screen.cprint(x+3+i*3, 1, 5,0, format("%02X", audio.audio.sidreg[i]));
-						screen.cprint(x+3+i*3, 2, 5,0, format("%02X", audio.audio.sidreg[i+7]));
-						screen.cprint(x+3+i*3, 3, 5,0, format("%02X", audio.audio.sidreg[i+14]));
-					}
-
-					for(int i = 0; i < 4;i++) {
-						screen.cprint(x+8+21+i*3, 2, 5,0, format("%02X", audio.audio.sidreg[i+0x15]));
-					}
-				}
+				drawRegisterStatus();
 				update();  // TESTME: just do video.updateFrame()
 
 				// Apply playback row tinting only when no dialog is covering
@@ -324,10 +308,41 @@ final class UI {
 	void update() {
 		infobar.update();
 		toplevel.update();
+		// Immediate refreshes (notably opening/closing a menu or modal) clear the
+		// framebuffer before the next timer tick.  Repaint the same adjacent register
+		// rectangle here so help-suppression transitions never make it blink blank.
+		drawRegisterStatus();
 		drawMenu();
-		if(dialog)
+		if(dialog) {
 			dialog.update();
+			maskDialogOverlay();
+		}
 		drawScope();
+	}
+
+	private void drawRegisterStatus() {
+		if(vismode != VisMode.Regs) return;
+		int x = screen.width - 42;
+		screen.cprint(x, 1, 15, 0, "V1:");
+		screen.cprint(x, 2, 15, 0, "V2:");
+		screen.cprint(x, 3, 15, 0, "V3:");
+		screen.cprint(x + 26, 1, 15, 0, "$D415 16 17 18");
+		for(int i = 0; i < 7; i++) {
+			screen.cprint(x + 3 + i * 3, 1, 5, 0, format("%02X", audio.audio.sidreg[i]));
+			screen.cprint(x + 3 + i * 3, 2, 5, 0, format("%02X", audio.audio.sidreg[i + 7]));
+			screen.cprint(x + 3 + i * 3, 3, 5, 0, format("%02X", audio.audio.sidreg[i + 14]));
+		}
+		for(int i = 0; i < 4; i++)
+			screen.cprint(x + 29 + i * 3, 2, 5, 0,
+				format("%02X", audio.audio.sidreg[i + 0x15]));
+	}
+
+	private void maskDialogOverlay() {
+		if(dialog is null) return;
+		// Window.drawFrame also paints a one-cell border and a small right/bottom shadow.
+		Rectangle a = dialog.area;
+		video.olMaskRect((a.x - 1) * FONT_X, a.y * FONT_Y,
+			(a.width + 3) * FONT_X, (a.height + 1) * FONT_Y);
 	}
 
 	// Non-modal oscilloscope overlay. Suppressed while a modal dialog is open
@@ -359,7 +374,11 @@ final class UI {
 		if(menubar is null) return;
 		menubar.drawBar();
 		menubar.drawDropdown();
-		if(palette !is null) palette.draw();
+		menubar.maskOverlay();
+		if(palette !is null) {
+			palette.draw();
+			palette.maskOverlay();
+		}
 	}
 
 	package void F1orF2(Keyinfo key, bool fromStart) {
@@ -458,9 +477,13 @@ final class UI {
 		int r;
 		if(dialog && !skip_imm_keypress) {
 			if(key.mods & KMOD_ALT) return OK;
-			r = dialog.keypress(key);
+			Window handledDialog = dialog;
+			r = handledDialog.keypress(key);
 			if(r != OK) {
-				closeDialog();
+				// A dialog callback may replace itself with a follow-up confirmation.
+				// Close only the dialog that handled this key; never immediately close
+				// the newly activated authorization dialog.
+				if(dialog is handledDialog) closeDialog();
 				return r;
 			}
 		}
@@ -515,12 +538,19 @@ final class UI {
 	// focused menu bar reacts (its highlight cursor follows the pointer). Returns
 	// true if a redraw is needed.
 	bool hoverAt(int x, int y) {
+		// Foreground UI owns hover. Clearing the background Sound Editor target also
+		// makes the first hover after the foreground closes a fresh help target.
+		if(dialog || palette.active || menubar.active) {
+			if(toplevel !is null && toplevel.soundEditorActive)
+				toplevel.activeWindow.hoverAt(-1, -1);
+			if(menubar.active) return menubar.hoverAt(x, y, false);
+			return false;
+		}
 		if(toplevel !is null && toplevel.soundEditorActive) {
 			toplevel.activeWindow.hoverAt(x, y);
 			return true;
 		}
-		if(!menubar.active) return false;
-		return menubar.hoverAt(x, y, false);
+		return false;
 	}
 
 	package void saveCallback(string s) {
@@ -794,7 +824,11 @@ final class UI {
 	}
 
 	void activateDialog(Window d) {
-		enableKeyjamMode(false);
+		// Sound Editor authorization is part of a held mouse gesture. Keep its
+		// audition routing alive behind the modal so answering Fork/Edit neither
+		// clears the reSID capture nor creates a phantom trigger before mouse-up.
+		if(toplevel is null || !toplevel.soundEditorActive)
+			enableKeyjamMode(false);
 		closeDialog();
 		dialog = d;
 		d.activate();

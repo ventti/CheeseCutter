@@ -21,6 +21,7 @@ module ui.menubar;
 import derelict.sdl2.sdl;
 import std.algorithm : max, sort;
 import com.session;      // screen, mainui, state
+import com.fb : FONT_X, FONT_Y;
 import com.shortcuts;
 import com.util;         // APP_VERSION, versionInfo
 import com.palette : Role, idx;
@@ -88,6 +89,15 @@ final class MenuBar {
 	}
 
 	@property bool active() const { return _active; }
+
+	// Repaint the dropdown (and optional tooltip) over the pixel graph overlay.
+	// Called after drawing, so the current dynamic geometry is authoritative.
+	void maskOverlay() {
+		if(!_active || boxW <= 0 || boxH <= 0) return;
+		video.olMaskRect(boxX * FONT_X, boxY * FONT_Y, boxW * FONT_X, boxH * FONT_Y);
+		if(hasTip)
+			video.olMaskRect(tpX * FONT_X, tpY * FONT_Y, tpW * FONT_X, tpH * FONT_Y);
+	}
 
 	/// Esc entry point: focus the bar, restoring the last menu + item.
 	void openMenu() {
@@ -455,19 +465,22 @@ final class MenuBar {
 
 	void rebuild() {
 		menus.length = 0;
+		bool soundEditor = sm.getActiveContext() == Ctx.soundEditor;
 		addGlobalMenu("File", ["File", "Properties", "Application"]);   // Application = Quit (last group)
 		addGlobalMenu("Edit", ["Edit", "Song management", "Song variables"]);
 		addGlobalMenu("View", ["Display"]);
 		addGlobalMenu("Playback", ["Playback", "Playback options",
 								   "Voice control", "Keyjam"]);
-		addGlobalMenu("Navigate", ["Window navigation"]);
+		if(!soundEditor) addGlobalMenu("Navigate", ["Window navigation"]);
 		addContextMenus();
 		addGlobalMenu("Help", ["Help"]);
 		clampIndices();
 	}
 
 	Item makeItem(ActionDef def) {
-		bool en = def.enabled is null || def.enabled();
+		bool en = sm.isActionEnabled(def.actionId);
+		if(en && def.context == Ctx.soundEditor && mainui.toplevel.soundEditorActive)
+			en = mainui.toplevel.soundEditor.commandEnabled(def.actionId);
 		bool tog = def.checked !is null;
 		bool on = tog && def.checked();
 		return Item(def.actionId, false, def.label(), def.primary, en, tog, on,
@@ -543,6 +556,10 @@ final class MenuBar {
 			auto tbl = gather(cast(string)Ctx.subtable,
 							  sm.categoriesForContext(cast(string)Ctx.subtable), false);
 			if(tbl.length) menus ~= DMenu("Tables", tbl);
+		}
+		else if(ctx == Ctx.soundEditor) {
+			auto sound = gather(cast(string)Ctx.soundEditor, ["Sound"], false);
+			if(sound.length) menus ~= DMenu("Sound", sound);
 		}
 	}
 

@@ -15,6 +15,45 @@
 //#include <assert.h>
 #include <stdio.h>
 
+// Run one complete player-tick register-write schedule against an isolated SID.
+// This is the same 25-register order and 9-cycle write cost used by sid_fillbuffer;
+// generated PCM is discarded by the caller.
+template<class Engine>
+static int fill_tick(Engine& engine, const unsigned char regs[0x19],
+		int clock_rate, int sample_rate, short *scratch, int sample_count,
+		int player_cycles)
+{
+	static const unsigned char order[] = {
+		0x0e,0x0f,0x14,0x13,0x10,0x11,0x12,
+		0x07,0x08,0x0d,0x0c,0x09,0x0a,0x0b,
+		0x00,0x01,0x06,0x05,0x02,0x03,0x04,
+		0x16,0x17,0x18,0x15
+	};
+	int remaining_samples = sample_count;
+	short *ptr = scratch;
+	int remaining_cycles = clock_rate * sample_count / sample_rate;
+	for(unsigned c = 0; c < sizeof(order); ++c) {
+		// The music routine's execution time is split before each voice, exactly as
+		// in the realtime path. This matters when AD/SR/GATE change on this tick.
+		if(player_cycles > 0 && (c == 0 || c == 7 || c == 14)) {
+			cycle_count delay = player_cycles / 3;
+			int produced = engine.clock(delay, ptr, remaining_samples);
+			ptr += produced;
+			remaining_samples -= produced;
+			remaining_cycles -= player_cycles / 3;
+		}
+		unsigned char reg = order[c];
+		engine.write(reg, regs[reg]);
+		cycle_count delay = SIDWRITEDELAY;
+		int produced = engine.clock(delay, ptr, remaining_samples);
+		ptr += produced;
+		remaining_samples -= produced;
+		remaining_cycles -= SIDWRITEDELAY;
+	}
+	cycle_count tail = remaining_cycles;
+	return (ptr - scratch) + engine.clock(tail, ptr, remaining_samples);
+}
+
 extern "C" {
 	typedef struct
 	{
@@ -45,8 +84,69 @@ extern "C" {
 	int usefp = 0;
 
 	void sid_close() {
-		if(sid) delete sid;
-		if(sidfp) delete sidfp;
+		if(sid) { delete sid; sid = 0; }
+		if(sidfp) { delete sidfp; sidfp = 0; }
+	}
+
+	// Snapshot the selected backend's three raw 8-bit envelope counters. This is
+	// deliberately separate from SID register reads: ENV3 exposes only voice 3 and
+	// also models bus behaviour, while the visualizer needs a side-effect-free value
+	// for every voice at the end of the PCM block just rendered.
+	void sid_read_envelopes(unsigned char out[3])
+	{
+		if(!out) return;
+		for(int i = 0; i < 3; ++i) {
+			if(usefp && sidfp) out[i] = sidfp->readENV((reg8)i);
+			else if(sid) out[i] = sid->readENV((reg8)i);
+			else out[i] = 0;
+		}
+	}
+
+	// Render an isolated, silent envelope trace with the same digital envelope core as
+	// the selected audio backend. No global SID instance, register shadow, PCM buffer,
+	// SDL device, capture state, or remote backend is touched.
+	int sid_render_envelope_preview(unsigned char attack_decay,
+		unsigned char sustain_release, int gate_ticks, int multiplier, int restart_ticks,
+		unsigned char *out, int ticks)
+	{
+		if(!out || ticks < 1) return 0;
+		if(gate_ticks < 1) gate_ticks = 1;
+		if(multiplier < 1) multiplier = 1;
+		int screenrate = clockrate == NTSCCLOCKRATE ? 60 : 50;
+		int samples = samplerate / (screenrate * multiplier);
+		if(samples < 1) samples = 1;
+		if(restart_ticks < 0) restart_ticks = 0;
+		short *scratch = new short[samples];
+		unsigned char regs[NUMSIDREGS] = {0};
+		if(usefp) {
+			SIDFP preview;
+			preview.set_sampling_parameters(clockrate, SAMPLE_INTERPOLATE, samplerate);
+			preview.reset();
+			for(int tick = 0; tick < restart_ticks; ++tick)
+				fill_tick(preview, regs, clockrate, samplerate, scratch, samples, 0);
+			for(int tick = 0; tick < ticks; ++tick) {
+				regs[5] = attack_decay;
+				regs[6] = sustain_release;
+				regs[4] = tick < gate_ticks ? 0x11 : 0x10;
+				fill_tick(preview, regs, clockrate, samplerate, scratch, samples, 0);
+				out[tick] = preview.readENV(0);
+			}
+		} else {
+			SID preview;
+			preview.set_sampling_parameters(clockrate, SAMPLE_FAST, samplerate, 20000);
+			preview.reset();
+			for(int tick = 0; tick < restart_ticks; ++tick)
+				fill_tick(preview, regs, clockrate, samplerate, scratch, samples, 0);
+			for(int tick = 0; tick < ticks; ++tick) {
+				regs[5] = attack_decay;
+				regs[6] = sustain_release;
+				regs[4] = tick < gate_ticks ? 0x11 : 0x10;
+				fill_tick(preview, regs, clockrate, samplerate, scratch, samples, 0);
+				out[tick] = preview.readENV(0);
+			}
+		}
+		delete[] scratch;
+		return ticks;
 	}
 	
 	void sid_init(int fp, FILTERPARAMS *fparams, int speed, unsigned m, unsigned ntsc, unsigned interpolate, unsigned customclockrate)
@@ -130,68 +230,7 @@ extern "C" {
 	}
 	
 	int sid_fillbuffer(short *ptr, int samples, const int cyc) {
-		int os = samples;
-		int rc = cyc / 3; // NUMVOICE
-		int badline = rand() % NUMSIDREGS;
-		int tdelta;
-		int tdelta2;
-		int result;
-		int total = 0;
-		int c;
-
-		tdelta = clockrate * samples / samplerate;
-		
-		for (c = 0; c < NUMSIDREGS; c++) {
-			unsigned char o = sid_getorder(c);
-			
-			// Extra delay per music routine iteration
-			if (cyc > 0 &&
-				((c == 0) || (c == 7) || (c == 14))) {
-				tdelta2 = rc;
-				if(usefp)
-					result = sidfp->clock(tdelta2, ptr, samples);
-				else
-					result = sid->clock(tdelta2, ptr, samples);
-				total += result;
-				ptr += result;
-				samples -= result;
-				tdelta -= rc;
-			}
-			
-			// Possible random badline delay once per writing
-			/*
-			if ((badline == c) && (residdelay)) {
-				tdelta2 = residdelay;
-				result = sid->clock(tdelta2, ptr, samples);
-				total += result;
-				ptr += result;
-				samples -= result;
-				tdelta -= residdelay;
-			}
-			*/
-			if(usefp)
-				sidfp->write(o, sidreg[o]);
-			else
-				sid->write(o, sidreg[o]);
-		
-			tdelta2 = SIDWRITEDELAY;
-			if(usefp)
-				result = sidfp->clock(tdelta2, ptr, samples);
-			else
-				result = sid->clock(tdelta2, ptr, samples);
-			total += result;
-			ptr += result;
-			samples -= result;
-			tdelta -= SIDWRITEDELAY;
-		}
-
-		if(usefp)
-			result = sidfp->clock(tdelta, ptr, samples);
-		else
-			result = sid->clock(tdelta, ptr, samples);
-		
-		total += result;
-//		assert(total <= os);
-		return total;
+		if(usefp) return fill_tick(*sidfp, sidreg, clockrate, samplerate, ptr, samples, cyc);
+		return fill_tick(*sid, sidreg, clockrate, samplerate, ptr, samples, cyc);
 	}
 }
