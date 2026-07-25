@@ -4,6 +4,7 @@
 # Quick start (any OS):
 #   mise run setup    # install system dependencies for the current platform
 #   mise run build    # build CheeseCutter (+ refresh doc/ARCHITECTURE.md)
+#   mise run test     # run Sound Editor regression tests
 #   mise run run       # build and run
 # See doc/BUILD.md for the full cross-platform guide.
 #
@@ -19,9 +20,9 @@
 # - libcurl   macOS: bundled | Linux: libcurl*-dev | Windows: mingw-w64-x86_64-curl
 # - make/gcc/g++  macOS: xcode-select --install
 
-# Task catalog: local file-task dirs (kept so file tasks stay discoverable) plus
-# the remote release toolkit (github.com/superteppo/release-scripts). Pin `ref`
-# to an exact release (e.g. ref=v1.4.0) for reproducible CI; `main` tracks latest.
+# Default task catalog is deliberately local/offline. Release tasks are remote and
+# opt-in via `MISE_CONFIG_FILE=config/mise-release.toml mise run release:<task>`, so ordinary
+# builds and tests never require a GitHub OAuth token merely to parse this file.
 [task_config]
 includes = [
   "mise-tasks",
@@ -29,7 +30,6 @@ includes = [
   ".mise/tasks",
   ".config/mise/tasks",
   "mise/tasks",
-  "git::https://github.com/superteppo/release-scripts.git//mise-tasks?ref=main"
 ]
 
 [env]
@@ -71,6 +71,10 @@ else
   exit 1
 fi
 """
+
+[tasks.test]
+description = "Run the headless Sound Editor regression suite"
+run = "make -f Makefile.mac test-sound-editor LIBSPATH=${LIBSPATH:-/opt/homebrew/lib}"
 
 [tasks.build-utils]
 description = "Build ct2util utility"
@@ -206,4 +210,3 @@ else
   mise run setup-linux
 fi
 """
-
