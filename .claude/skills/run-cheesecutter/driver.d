@@ -18,6 +18,7 @@ module main;
 
 import derelict.sdl2.sdl;
 import com.fb, com.session, com.kbd, com.util, ct.base;
+import com.shortcuts : formatShortcuts;
 static import com.palette;
 import ui.ui, ui.input, seq.sequencer;
 import audio.player;
@@ -27,6 +28,7 @@ static import audio.vice;
 static import audio.remote;
 import std.stdio, std.conv, std.string;
 import std.algorithm.searching : startsWith, findSplit;
+import std.range : walkLength;
 static import core.thread;
 import core.time : dur;
 
@@ -74,6 +76,9 @@ private void press(string spec) {
 	for(;;) {
 		if(spec.startsWith("Ctrl-"))  { mods |= KMOD_LCTRL;  spec = spec[5..$]; }
 		else if(spec.startsWith("Alt-"))   { mods |= KMOD_LALT;   spec = spec[4..$]; }
+		else if(spec.startsWith("RAlt-"))  { mods |= KMOD_RALT;   spec = spec[5..$]; }
+		else if(spec.startsWith("Mode-"))  { mods |= KMOD_MODE;   spec = spec[5..$]; }
+		else if(spec.startsWith("Gui-"))   { mods |= KMOD_LGUI;   spec = spec[4..$]; }
 		else if(spec.startsWith("Shift-")) { mods |= KMOD_LSHIFT; spec = spec[6..$]; }
 		else break;
 	}
@@ -132,7 +137,8 @@ private void usage(File f) {
 "Editor commands:\n" ~
 "  load:<file.ct>   load a song\n" ~
 "  palette:<file>   load a JSON color palette at runtime (repaints)\n" ~
-"  key:<spec>       inject a keypress; spec = [Ctrl-][Alt-][Shift-]NAME\n" ~
+"  key:<spec>       inject a keypress; spec = [Ctrl-][Alt-/RAlt-][Mode-][Gui-][Shift-]NAME\n" ~
+"  keyprobe:<spec>  inject through the real UI and report shortcut consumed/action/invoked\n" ~
 "                   NAME = F1..F12, ESC, RET, SPACE, TAB, UP/DOWN/LEFT/RIGHT,\n" ~
 "                   HOME, END, PGUP, PGDN, INS, DEL, BACKSPACE, SCRLOCK,\n" ~
 "                   KP0..KP9, KP_PLUS/KP_MINUS/KP_MUL/KP_DIV/KP_PERIOD/KP_ENTER,\n" ~
@@ -143,9 +149,11 @@ private void usage(File f) {
 "  press:cx,cy[,b]  mouse button-down only (no release) — e.g. to capture the\n" ~
 "                   menu bar's armed/yellow pressed state in a screenshot\n" ~
 "  release:cx,cy    mouse button-up at a cell (pairs with press)\n" ~
+"  move:cx,cy       mouse drag-motion only (between press and release)\n" ~
 "  hover:cx,cy      mouse motion with no button held (drives menu-bar hover)\n" ~
 "  play             start playback (player.start)\n" ~
 "  mult:<n>         set the multispeed multiplier (1..16)\n" ~
+"  backend:<name>   select local SID engine: resid-fp (default) or resid\n" ~
 "  ff:<n>           advance playback n*16 frames (synchronous; no audio device)\n" ~
 "  jamrender:<k>,<t>  press keyjam key k, then offline-render t player ticks so the\n" ~
 "                   Output waveform (captureBuf) fills headless (default t=120)\n" ~
@@ -157,11 +165,26 @@ private void usage(File f) {
 "  shot:<file.png>  write a screenshot (PNG) of the current screen\n" ~
 "  sleep:<ms>       sleep this many milliseconds\n" ~
 "  state            print editor state to stderr (title/seqs/playing/SID regs)\n" ~
+"  undostate        print undo/redo depths and edit generation (read-only)\n" ~
+"  checkpoint:<id>  print an ordered protocol marker for persistent test sessions\n" ~
+"  capturestate     dump deterministic keyjam PCM/gate signatures + active voice\n" ~
+"  sounddump        dump every instrument and wave/pulse/filter byte (read-only)\n" ~
 "  seqdump:<n>      dump sequence n's rows as hex (read-only edit oracle)\n" ~
 "  tracks           dump each voice's tracklist entries (trans,number)\n" ~
 "  voices           per-voice visualizer: instrument, brightness, recording len\n" ~
 "  wavedump:<row>   dump 24 wave-table rows (w1/w2) from row (Sound Editor oracle)\n" ~
+"  wavepreview:<n>  independently evaluate the active instrument's wave rows for n\n" ~
+"                   player ticks, including wave-speed, delay and loop semantics\n" ~
 "  recdump:<voice>  dump a voice's recorded per-frame control/freq/pulse arrays\n" ~
+"  envpreview:<n>   dump the Sound Editor's silent reSID envelope preview\n" ~
+"  filtershape[:mode,cutoff] dump filter response regions or active one-axis handles\n" ~
+"  soundstate       dump semantic Sound Editor viewport/recording/cursor state\n" ~
+"  waveaddstate     dump the trailing in-band Wave-row creation target\n" ~
+"  waveloopstate    dump Wave END/LOOP triangle geometry\n" ~
+"  sweeploopstate:P|F dump Pulse/Filter END/LOOP triangle geometry\n" ~
+"  wavefixture:<state> seed Wave edge/shared states for tests\n" ~
+"  ownershipfixture:<state> seed full-table/fixed-P/shared-F ownership states\n" ~
+"  screendump       dump the 160x50 text framebuffer (usage-test oracle)\n" ~
 "\n" ~
 "Remote backend (--vice/--ultimate) testing:\n" ~
 "  vice:[target]    enable the VICE backend: empty = launch x64sc from PATH,\n" ~
@@ -184,6 +207,22 @@ private bool processCommand(string arg) {
 	auto c = arg.findSplit(":");
 	string cmd = c[0], val = c[2];
 	switch(cmd) {
+		case "keyprobe": {
+			press(val);
+			stderr.writefln("shortcut probe: consumed=%s action=%s invoked=%s",
+				mainui.sm.debugLastConsumed(), mainui.sm.debugLastAction(),
+				mainui.sm.debugLastInvoked());
+			break;
+		}
+		case "backend": {
+			string name = val.toLower;
+			if(name == "resid-fp" || name == "fp") audio.player.usefp = 1;
+			else if(name == "resid" || name == "standard") audio.player.usefp = 0;
+			else throw new Exception("backend must be resid-fp or resid");
+			audio.player.init();
+			stderr.writefln("backend: %s", audio.player.usefp ? "resid-fp" : "resid");
+			break;
+		}
 		case "load":
 			mainui.loadCallback(val);
 			stderr.writefln("loaded %s", val);
@@ -303,6 +342,14 @@ private bool processCommand(string arg) {
 			stderr.writefln("release %d,%d", cx, cy);
 			break;
 		}
+		case "move": {
+			// move:CX,CY — motion with the left button already held by `press`.
+			auto parts = val.split(",");
+			int cx = to!int(parts[0]), cy = to!int(parts[1]);
+			mainui.draggedTo(cx, cy); mainui.update();
+			stderr.writefln("move %d,%d", cx, cy);
+			break;
+		}
 		case "hover": {
 			// hover:CX,CY — mouse motion with no button held (drives ui.hoverAt).
 			auto parts = val.split(",");
@@ -414,6 +461,303 @@ private bool processCommand(string arg) {
 		case "state":
 			dumpState();
 			break;
+		case "undostate":
+			stderr.writefln("undo: depth=%d redo=%d generation=%d",
+				state.undoQueue.stages[].walkLength,
+				state.redoQueue.stages[].walkLength, state.editGeneration);
+			break;
+		case "checkpoint":
+			// A flush-delimited marker for stateful `serve` clients. It deliberately
+			// changes no editor state, so a Python master test can bracket each user
+			// action and fail at the first named checkpoint without restarting ccdriver.
+			stderr.writefln("checkpoint: %s", val);
+			break;
+		case "capturestate": {
+			// Stable, read-only keyjam oracle. FNV-1a covers the exact signed PCM bytes;
+			// gateOn/gateOff are player-tick indices (including any restart pre-roll).
+			uint hash = 2_166_136_261u;
+			int peak = 0;
+			ulong sumAbs = 0;
+			int n = audio.audio.captureLen;
+			if(n > cast(int)audio.audio.captureBuf.length)
+				n = cast(int)audio.audio.captureBuf.length;
+			foreach(i; 0 .. n) {
+				ushort bits = cast(ushort)audio.audio.captureBuf[i];
+				hash = (hash ^ (bits & 0xff)) * 16_777_619u;
+				hash = (hash ^ (bits >> 8)) * 16_777_619u;
+				int sample = audio.audio.captureBuf[i];
+				int magnitude = sample < 0 ? -sample : sample;
+				if(magnitude > peak) peak = magnitude;
+				sumAbs += cast(ulong)magnitude;
+			}
+			int gateOn = -1, gateOff = -1, gateHigh = 0;
+			int gn = audio.audio.captureGateLen;
+			if(gn > cast(int)audio.audio.captureGate.length)
+				gn = cast(int)audio.audio.captureGate.length;
+			foreach(i; 0 .. gn) {
+				bool high = audio.audio.captureGate[i] != 0;
+				if(high) {
+					if(gateOn < 0) gateOn = cast(int)i;
+					gateHigh++;
+				} else if(gateOn >= 0 && gateOff < 0) gateOff = cast(int)i;
+			}
+			stderr.writefln(
+				"capture: samples=%d hash=%08x peak=%d sumAbs=%d gates=%d gateOn=%d gateOff=%d gateHigh=%d onsetSample=%d frameSamples=%d instr=%d voice=%d",
+				n, hash, peak, sumAbs, gn, gateOn, gateOff, gateHigh,
+				audio.audio.captureOnsetSample, audio.audio.captureFrameSamples,
+				audio.audio.captureInstr, audio.audio.captureVoice + 1);
+			break;
+		}
+		case "sounddump": {
+			// Complete read-only isolation oracle. Tests mask only the active sound's
+			// newly allocated rows; every byte outside those ranges must remain identical.
+			stderr.writef("all instruments:");
+			foreach(x; song.instrumentTable) stderr.writef("%02x", x);
+			stderr.writeln();
+			stderr.writef("all wave:");
+			foreach(x; song.waveTable) stderr.writef("%02x", x);
+			stderr.writeln();
+			stderr.writef("all pulse:");
+			foreach(x; song.pulseTable) stderr.writef("%02x", x);
+			stderr.writeln();
+			stderr.writef("all filter:");
+			foreach(x; song.filterTable) stderr.writef("%02x", x);
+			stderr.writeln();
+			break;
+		}
+		case "soundstate": {
+			if(!mainui.toplevel.soundEditorActive) {
+				stderr.writeln("sound: inactive");
+				break;
+			}
+			auto s = mainui.toplevel.soundEditor.debugState();
+			stderr.writefln("sound: tickUs=%d stepTicks=%d vis=%d preroll=%d view=%.3f..%.3f zoomed=%s selection=%s:%d..%d recording=%s cursor=%d captureLen=%d captureInstr=%d trigger=%d preview=%d/%d ownership=%s",
+				s.tickMillis1000, s.trackStepTicks, s.visibleFrames, s.prerollTicks,
+				s.viewStartTick, s.viewEndTick, s.userZoomed, s.hasSelection,
+				s.selectionStart, s.selectionEnd, s.usesRecording,
+				s.cursorDirection, audio.audio.captureLen, audio.audio.captureInstr,
+				audio.player.keyjamNoteTrigger, s.previewInstrument, s.previewNote,
+				mainui.toplevel.soundEditor.debugOwnershipMode());
+			break;
+		}
+		case "waveaddstate": {
+			if(!mainui.toplevel.soundEditorActive) {
+				stderr.writeln("wave add: inactive");
+				break;
+			}
+			auto a = mainui.toplevel.soundEditor.debugWaveAdd();
+			stderr.writefln("wave add: visible=%d enabled=%d frame=%d x=%d y=%d close=%d reason=%s",
+				a.visible ? 1 : 0, a.enabled ? 1 : 0, a.frame, a.x, a.y, a.close, a.reason);
+			break;
+		}
+		case "waveloopstate": {
+			if(!mainui.toplevel.soundEditorActive) {
+				stderr.writeln("wave loop: inactive");
+				break;
+			}
+			auto s = mainui.toplevel.soundEditor.debugWaveLoopGeometry();
+			stderr.writefln("wave loop: looped=%d stopped=%d startVisible=%d endVisible=%d startFrame=%d endFrame=%d start=%d..%d end=%d..%d top=%d..%d startDir=%s endDir=%s",
+				s.looped ? 1 : 0, s.stopped ? 1 : 0,
+				s.startVisible ? 1 : 0, s.endVisible ? 1 : 0,
+				s.startFrame, s.endFrame,
+				s.startLeft, s.startRight, s.endLeft, s.endRight,
+				s.top, s.bottom,
+				s.startVisible ? "right" : "none",
+				s.endVisible ? "left" : "none");
+			break;
+		}
+		case "sweeploopstate": {
+			if(!mainui.toplevel.soundEditorActive) {
+				stderr.writeln("sweep loop: inactive");
+				break;
+			}
+			int table = val == "P" ? 0 : val == "F" ? 1 : -1;
+			if(table < 0) throw new Exception("sweeploopstate expects P or F");
+			auto s = mainui.toplevel.soundEditor.debugSweepLoopGeometry(table);
+			stderr.writefln("sweep loop: table=%s looped=%d stopped=%d startVisible=%d endVisible=%d start=%d..%d end=%d..%d top=%d..%d",
+				val, s.looped ? 1 : 0, s.stopped ? 1 : 0,
+				s.startVisible ? 1 : 0, s.endVisible ? 1 : 0,
+				s.startLeft, s.startRight, s.endLeft, s.endRight, s.top, s.bottom);
+			break;
+		}
+		case "ownershipfixture": {
+			// Deterministic destination-capacity setup. The active shared programme stays
+			// intact; only the table tail is occupied so automatic COW must fail safely.
+			if(val == "full-W") {
+				// WaveTable.seekTableEnd scans wave1[254] as the last allocatable row.
+				song.waveTable[254] = 1;
+				song.waveTable[510] = 1;
+			} else if(val == "full-P") {
+				song.pulseTable[0x3f * 4 .. 0x3f * 4 + 4] = [1, 1, 1, 0x7f];
+			} else if(val == "full-F") {
+				song.filterTable[0x3f * 4 .. 0x3f * 4 + 4] = [0x90, 1, 1, 0x7f];
+			} else if(val == "fixed-P-84") {
+				// Direct fixed Pulse $84 audibly starts at width $400. The real first-drag
+				// path must preserve that value before applying the same gesture's motion.
+				song.instrumentTable[state.activeInstrument + 5 * 48] = 0x84;
+			} else if(val == "shared-F-struct") {
+				// Two shared logical Filter blocks with a loop to block one. This gives
+				// Add/Delete/loop ownership tests real structure without UI setup edits.
+				song.filterTable[1 * 4 .. 1 * 4 + 4] = [0x90, 0x01, 0x20, 0x00];
+				song.filterTable[2 * 4 .. 2 * 4 + 4] = [0x04, 0x01, 0xff, 0x00];
+				song.filterTable[3 * 4 .. 3 * 4 + 4] = [0xa0, 0x11, 0x60, 0x00];
+				song.filterTable[4 * 4 .. 4 * 4 + 4] = [0x04, 0xff, 0xff, 0x01];
+			} else throw new Exception("unknown ownershipfixture state");
+			stderr.writefln("ownership fixture: %s", val);
+			break;
+		}
+		case "wavefixture": {
+			// Edge-state setup only; all behavior under test still goes through the real
+			// rendered target and mouse path. The disposable master fixture contains the
+			// mutations, never a user's song.
+			int ins = state.activeInstrument;
+			int start = song.instrumentTable[ins + 7 * 48];
+			if(val == "end-only") {
+				song.waveTable[start] = 0x7e;
+				song.waveTable[start + 256] = 0;
+				if(start < 255) { song.waveTable[start + 1] = 0; song.waveTable[start + 257] = 0; }
+			} else if(val == "invalid") {
+				// Point only the active instrument at a markerless final row. Existing
+				// programmes and free append capacity remain intact for New sound.
+				song.instrumentTable[ins + 7 * 48] = 0xff;
+				song.waveTable[255] = 0;
+				song.waveTable[511] = 0;
+			} else if(val == "full") {
+				song.waveTable[254] = 1;
+				song.waveTable[510] = 0;
+				song.waveTable[255] = 1;
+				song.waveTable[511] = 0;
+			} else if(val == "shared-delay") {
+				// Authorization tests address player frames directly. Remove the
+				// instrument-level Wave delay so only the authored row delay below
+				// determines which row owns each frame.
+				song.instrumentTable[ins + 2 * 48] &= 0xf0;
+				song.waveTable[start] = 0xcf;
+				song.waveTable[start + 256] = 0x04;
+			} else if(val == "shared-two") {
+				// Two adjacent player frames must be two adjacent authored rows;
+				// otherwise a fixture instrument with Wave speed > 0 makes a drag
+				// revisit the first row and cannot exercise multi-row painting.
+				song.instrumentTable[ins + 2 * 48] &= 0xf0;
+				song.waveTable[start] = 0xcf;
+				song.waveTable[start + 256] = 0x81;
+				song.waveTable[start + 1] = 0x00;
+				song.waveTable[start + 257] = 0x41;
+				song.waveTable[start + 2] = 0x7f;
+				song.waveTable[start + 258] = cast(ubyte)start;
+			} else if(val == "timing-a") {
+				ubyte[6] w1 = [0xb0, 0x00, 0x02, 0x01, 0x00, 0x7e];
+				ubyte[6] w2 = [0x81, 0x04, 0x41, 0x41, 0x41, 0x00];
+				song.waveTable[start .. start + 6] = w1[];
+				song.waveTable[start + 256 .. start + 262] = w2[];
+				song.instrumentTable[ins + 2 * 48] &= 0xf0;
+			} else if(val == "timing-b" || val == "timing-b1") {
+				ubyte[7] w1 = [0xc0, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x7f];
+				ubyte[7] w2 = [0x81, 0x02, 0x41, 0x0c, 0x41, 0x0c,
+					cast(ubyte)(start + 2)];
+				song.waveTable[start .. start + 7] = w1[];
+				song.waveTable[start + 256 .. start + 263] = w2[];
+				song.instrumentTable[ins + 2 * 48] = cast(ubyte)(
+					(song.instrumentTable[ins + 2 * 48] & 0xf0)
+					| (val == "timing-b1" ? 1 : 0));
+			} else throw new Exception("unknown wavefixture state");
+			mainui.update();
+			stderr.writefln("wave fixture: %s start=%02x", val, start);
+			break;
+		}
+		case "shortcutstate": {
+			stderr.writefln("shortcut: context=%s id=%s enabled=%s keys=%s",
+				mainui.sm.getActiveContext(), val, mainui.sm.isActionEnabled(val),
+				formatShortcuts(mainui.sm.getShortcuts(val)));
+			break;
+		}
+		case "controlstate": {
+			stderr.write("controls:");
+			if(mainui.toplevel.soundEditorActive)
+				foreach(control; mainui.toplevel.soundEditor.debugControls())
+					stderr.writef(" %s@%d..%d,%d:%s", control.actionId,
+						control.x0, control.x1, control.row, control.enabled ? "on" : "off");
+			stderr.writeln();
+			break;
+		}
+		case "cellstate": {
+			auto parts = val.split(",");
+			if(parts.length != 2) throw new Exception("cellstate expects x,y");
+			int x = to!int(parts[0]), y = to!int(parts[1]);
+			Uint32 cell = screen.getChar(x, y);
+			stderr.writefln("cell: x=%d y=%d ch=%d fg=%d bg=%d raw=%08x",
+				x, y, cell & 0xff, (cell >> 8) & 0xff, (cell >> 16) & 0xff, cell);
+			break;
+		}
+		case "regstate": {
+			int x0 = screen.width - 42;
+			stderr.write("regs:");
+			foreach(y; 1 .. 4) {
+				stderr.writef(" row%d=", y);
+				foreach(x; x0 .. screen.width) stderr.writef("%08x", screen.getChar(x, y));
+			}
+			stderr.writeln();
+			break;
+		}
+		case "status": {
+			UI.statusline.display(val);
+			mainui.update();
+			stderr.writefln("status: %s", val);
+			break;
+		}
+		case "envpreview": {
+			int ticks = val.length ? to!int(val) : 64;
+			if(!mainui.toplevel.soundEditorActive) {
+				stderr.writeln("env preview: inactive");
+				break;
+			}
+			auto preview = mainui.toplevel.soundEditor.debugEnvelopePreview(ticks);
+			stderr.writefln("env preview: source=resid-estimate note=%d pcm=0 remote=0 render=%d",
+				preview.note, preview.generation);
+			stderr.writef("env preview env:");
+			foreach(value; preview.envelope) stderr.writef(" %02X", value);
+			stderr.writeln();
+			break;
+		}
+		case "filtershape": {
+			if(!mainui.toplevel.soundEditorActive) {
+				stderr.writeln("filter shapes: inactive");
+				break;
+			}
+			if(val.length) {
+				auto parts = val.split(",");
+				if(parts.length != 2) throw new Exception("filtershape expects mode,cutoff");
+				int mode = to!int(parts[0]), cutoff = to!int(parts[1]);
+				auto r = mainui.toplevel.soundEditor.debugFilterShape(mode, cutoff);
+				stderr.writefln("filter shape: mode=%d cutoff=%d axis=%d..%d y=%d lp=%d:%d..%d bp=%d:%d..%d hp=%d:%d..%d",
+					r.mode, r.cutoff, r.top, r.bottom, r.y,
+					r.lp ? 1 : 0, r.lpTop, r.lpBottom,
+					r.bp ? 1 : 0, r.bpTop, r.bpBottom,
+					r.hp ? 1 : 0, r.hpTop, r.hpBottom);
+				break;
+			}
+			foreach(item; mainui.toplevel.soundEditor.debugFilterShapes())
+				stderr.writefln("filter step: row=%d mode=%d frames=%d..%d x=%d..%d cutoff=%d..%d y=%d..%d handles=%d",
+					item.row, item.mode, item.frame0, item.frame1,
+					item.x0, item.x1, item.cutoff0, item.cutoff1,
+					item.y0, item.y1, item.handles);
+			break;
+		}
+		case "screendump": {
+			// Text is the durable oracle; pixel graphs are covered through their semantic
+			// SoundEditor state and real SID recordings rather than fragile PNG goldens.
+			mainui.update();
+			foreach(y; 0 .. screen.height) {
+				char[] line;
+				line.length = screen.width;
+				foreach(x; 0 .. screen.width) {
+					int ch = screen.getChar(x, y) & 0xff;
+					line[x] = (ch >= 0x20 && ch <= 0x7e) ? cast(char)ch : ' ';
+				}
+				stderr.writefln("screen%02d:%s", y, line);
+			}
+			break;
+		}
 		case "wavedump": {
 			// wavedump:<startRow> — print 24 wave-table rows (w1/w2) from startRow, a
 			// read-only oracle for verifying the Sound Editor's wave loop simulation.
@@ -424,6 +768,82 @@ private bool processCommand(string arg) {
 				stderr.writef(" %02X:%02x/%02x", r, song.waveTable[r], song.waveTable[r+256]);
 			}
 			stderr.writeln();
+			break;
+		}
+		case "wavepreview": {
+			// Read-only independent wave-program timing oracle. This deliberately does
+			// not call SoundEditor's simulator: a one-row-per-tick UI implementation must
+			// disagree with this output when a $01..$0f delay is present and fail the
+			// usage test. Semantics mirror player_v4: the NEXT selected row's low control
+			// byte overrides the countdown, so delay N holds the current row for N+1 ticks.
+			int ticks = val.length ? to!int(val) : 40;
+			if(ticks < 1) ticks = 1;
+			if(ticks > 256) ticks = 256;
+			int ins = state.activeInstrument;
+			int startRow = song.instrumentTable[ins + 7 * 48];
+			int waveTime = song.instrumentTable[ins + 2 * 48] & 0x0f;
+			int nextRow = startRow, currentRow = startRow;
+			int waveCnt = 0, currentW1 = 0, currentCtrl = 0;
+			int[] rows, wave1, controls;
+			foreach(tick; 0 .. ticks) {
+				if(--waveCnt < 0) {
+					waveCnt = waveTime;
+					// A valid pointer lands on an authored row, never a marker. Be robust
+					// to malformed input without mutating or walking forever.
+					int guard = 0;
+					while(song.waveTable[nextRow] == 0x7f && guard++ < 256)
+						nextRow = song.waveTable[nextRow + 256];
+					currentRow = nextRow;
+					currentW1 = song.waveTable[currentRow];
+					int w2 = song.waveTable[currentRow + 256];
+					if(w2 >= 0x10)
+						currentCtrl = (w2 >= 0xe0 && w2 <= 0xef) ? (w2 & 0x0f) : w2;
+
+					int candidate = (currentRow + 1) & 0xff;
+					int marker = song.waveTable[candidate];
+					if(marker == 0x7e) candidate = currentRow;
+					else if(marker == 0x7f) candidate = song.waveTable[candidate + 256];
+					int delay = song.waveTable[candidate + 256];
+					if(delay >= 1 && delay <= 0x0f) waveCnt = delay;
+					nextRow = candidate;
+				}
+				rows ~= currentRow;
+				wave1 ~= currentW1;
+				controls ~= currentCtrl;
+			}
+			stderr.writefln("wave preview: ins=%02X start=%02X speed=%X ticks=%d",
+				ins, startRow, waveTime, ticks);
+			stderr.writef("wave preview rows:");
+			foreach(x; rows) stderr.writef(" %02X", x);
+			stderr.writeln();
+			stderr.writef("wave preview w1:");
+			foreach(x; wave1) stderr.writef(" %02X", x);
+			stderr.writeln();
+			stderr.writef("wave preview ctrl:");
+			foreach(x; controls) stderr.writef(" %02X", x);
+			stderr.writeln();
+			break;
+		}
+		case "uipreview": {
+			// Read-only semantic state produced by the Sound Editor's own graph simulator.
+			// Tests compare this with wavepreview's independent player-order oracle.
+			int ticks = val.length ? to!int(val) : 40;
+			if(ticks < 1) ticks = 1;
+			if(ticks > 256) ticks = 256;
+			auto rows = mainui.toplevel.soundEditor.debugWaveRows(ticks);
+			auto wave1 = mainui.toplevel.soundEditor.debugWaveTranspose(ticks);
+			auto controls = mainui.toplevel.soundEditor.debugWaveControls(ticks);
+			auto loop = mainui.toplevel.soundEditor.debugWaveLoop();
+			stderr.writef("ui preview rows:");
+			foreach(x; rows) stderr.writef(" %02X", x);
+			stderr.writeln();
+			stderr.writef("ui preview w1:");
+			foreach(x; wave1) stderr.writef(" %02X", x);
+			stderr.writeln();
+			stderr.writef("ui preview ctrl:");
+			foreach(x; controls) stderr.writef(" %02X", x);
+			stderr.writeln();
+			stderr.writefln("ui preview loop: %d/%d", loop[0], loop[1]);
 			break;
 		}
 		case "voices": {
@@ -449,6 +869,12 @@ private bool processCommand(string arg) {
 			auto ctrl = audio.visualizer.getRecordedControl(v);
 			auto freq = audio.visualizer.getRecordedFreq(v);
 			auto pw   = audio.visualizer.getRecordedPulse(v);
+			auto amp  = audio.visualizer.getRecordedAmp(v);
+			auto env  = audio.visualizer.getRecordedEnvelope(v);
+			auto cut  = audio.visualizer.getRecordedCutoff(v);
+			auto mode = audio.visualizer.getRecordedMode(v);
+			auto res  = audio.visualizer.getRecordedResonance(v);
+			auto route = audio.visualizer.getRecordedRouting(v);
 			stderr.writef("rec v%d ctrl:", v);
 			foreach(x; ctrl) stderr.writef(" %02X", x & 0xff);
 			stderr.writeln();
@@ -457,6 +883,24 @@ private bool processCommand(string arg) {
 			stderr.writeln();
 			stderr.writef("rec v%d pulse:", v);
 			foreach(x; pw) stderr.writef(" %d", x);
+			stderr.writeln();
+			stderr.writef("rec v%d amp:", v);
+			foreach(x; amp) stderr.writef(" %.4f", x);
+			stderr.writeln();
+			stderr.writef("rec v%d env:", v);
+			foreach(x; env) stderr.writef(" %02X", x);
+			stderr.writeln();
+			stderr.writef("rec v%d cutoff:", v);
+			foreach(x; cut) stderr.writef(" %d", x);
+			stderr.writeln();
+			stderr.writef("rec v%d mode:", v);
+			foreach(x; mode) stderr.writef(" %02X", x & 0x70);
+			stderr.writeln();
+			stderr.writef("rec v%d resonance:", v);
+			foreach(x; res) stderr.writef(" %X", x & 0x0f);
+			stderr.writeln();
+			stderr.writef("rec v%d route:", v);
+			foreach(x; route) stderr.writef(" %X", x & 0x0f);
 			stderr.writeln();
 			break;
 		}
