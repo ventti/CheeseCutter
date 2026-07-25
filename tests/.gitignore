@@ -3,3 +3,6 @@ __pycache__/
 # Visual-regression failure output (actual frame + diff mask), written by
 # tests/visual_regression.py; uploaded as a CI artifact, never committed.
 _artifacts/
+# Test fixtures are committed song files — re-include them despite the repo-root
+# `*.ct` ignore (which exists to keep users' own tunes out of git).
+!fixtures/*.ct
