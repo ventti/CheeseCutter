@@ -521,9 +521,16 @@ class SoundEditor : Window, Undoable {
 	}
 	//  - JOIN drag (only when both adjacent blocks are selected): edits the one clicked
 	//    shared boundary (left END + right START), never unrelated joins in the range.
-	private bool sweepJoinDragging = false;
-	private bool sweepJoinMoved = false;
-	private int sweepJoinLeftRow = -1, sweepJoinRightRow = -1;
+	private final class SweepJoinDrag : DragGesture {
+		int leftRow, rightRow;
+		this(int l, int r) { leftRow = l; rightRow = r; }
+		override bool onFirstMotion() { return beginSweepDragMutation(selectedSweepTable, clampedIns()); }
+		override void update(ref Geo g, int x, int y) { sweepJoinDragUpdate(g, y, leftRow, rightRow); }
+		override void remapRows() {
+			leftRow = remapForkedSweepRow(leftRow);
+			rightRow = remapForkedSweepRow(rightRow);
+		}
+	}
 	// §20 P4b-3 the filter mode chip cycles through the LP/BP/HP combos (§10.1) writing the
 	// first config row's b0 mode bits (0x70). This is the requested cycle order.
 	// Wave control-bit editing is deliberately immediate: clicking a lane cell toggles
@@ -3115,8 +3122,6 @@ class SoundEditor : Window, Undoable {
 			if(activeGesture) activeGesture.remapRows();
 			sweepResRow = remapForkedSweepRow(sweepResRow);
 			sweepResTargetRow = remapForkedSweepRow(sweepResTargetRow);
-			sweepJoinLeftRow = remapForkedSweepRow(sweepJoinLeftRow);
-			sweepJoinRightRow = remapForkedSweepRow(sweepJoinRightRow);
 			sweepDurRow = remapForkedSweepRow(sweepDurRow);
 			return true;
 		}
@@ -4095,7 +4100,8 @@ class SoundEditor : Window, Undoable {
 				foreach(i; 0 .. cast(int)range.length - 1) {
 					int a0, a1, aa, ab, as0, as1;
 					if(!sweepStepGeom(selectedSweepTable, ins, range[i], g, a0, a1, aa, ab, as0, as1)) continue;
-					bool joinHot = (sweepJoinDragging && sweepJoinLeftRow == range[i])
+					auto joinDrag = cast(SweepJoinDrag)activeGesture;
+					bool joinHot = (joinDrag && joinDrag.leftRow == range[i])
 						|| (hovering && nearSweepHandle(selectedSweepTable, hx, hy, ab, as1));
 					video.olFillRect(ab - 2, as1 - 2, 5, 5, joinHot ? COL_BOX_HOT : COL_HEAD);
 				}
@@ -4330,7 +4336,7 @@ class SoundEditor : Window, Undoable {
 	}
 
 	// Apply the clicked JOIN only: both sides move because both adjacent blocks are selected.
-	private void sweepJoinDragUpdate(ref Geo g, int celly) {
+	private void sweepJoinDragUpdate(ref Geo g, int celly, int sweepJoinLeftRow, int sweepJoinRightRow) {
 		if(sweepJoinLeftRow < 1 || sweepJoinRightRow < 1) return;
 		int v = sweepValueForCell(selectedSweepTable, g, celly, sweepJoinLeftRow);
 		setStepEndValue(selectedSweepTable, sweepJoinLeftRow, v);
@@ -5927,9 +5933,7 @@ class SoundEditor : Window, Undoable {
 			int jl, jr;
 			if(sweepJoinAt(ins, g, x, y, jl, jr)) {
 				clickWasButton = true;
-				sweepJoinDragging = true;
-				sweepJoinMoved = false;
-				sweepJoinLeftRow = jl; sweepJoinRightRow = jr;
+				activeGesture = new SweepJoinDrag(jl, jr);
 				return;
 			}
 		}
@@ -6086,21 +6090,6 @@ class SoundEditor : Window, Undoable {
 			sweepResDragUpdate(g, y);
 			return;
 		}
-		// §21 P4c(v3) JOIN drag over a multi-block selection: first tick runs the shared
-		// check, else snapshot, then set every shared join in the range to the pointer value.
-		if(sweepJoinDragging) {
-			Geo g = layout();
-			if(!sweepJoinMoved) {
-				if(!beginSweepDragMutation(selectedSweepTable, ins)) {
-					sweepJoinDragging = false;
-					sweepJoinLeftRow = sweepJoinRightRow = -1;
-					return;
-				}
-				sweepJoinMoved = true;
-			}
-			sweepJoinDragUpdate(g, y);
-			return;
-		}
 		// §21 P4c DURATION drag: first motion resolves ownership atomically, then rewrites
 		// the row's b0.
 		if(sweepDurDragging) {
@@ -6203,15 +6192,6 @@ class SoundEditor : Window, Undoable {
 			clickWasButton = false;
 			if(sweepResMoved) retriggerIfSounding();
 			sweepResMoved = false;
-			return;
-		}
-		// §21 P4c(v3) end a JOIN drag: make the new join(s) audible once.
-		if(sweepJoinDragging) {
-			sweepJoinDragging = false;
-			sweepJoinLeftRow = sweepJoinRightRow = -1;
-			clickWasButton = false;
-			if(sweepJoinMoved) retriggerIfSounding();
-			sweepJoinMoved = false;
 			return;
 		}
 		// §21 P4c end a duration (box-edge) drag: make the new window audible once.
