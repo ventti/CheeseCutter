@@ -1,0 +1,1 @@
+sweep loop: table=P looped=1 stopped=0 startVisible=1 endVisible=1 start=365..373 end=392..400 top=255..269

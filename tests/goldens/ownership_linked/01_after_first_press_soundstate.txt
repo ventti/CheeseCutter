@@ -1,0 +1,1 @@
+sound: tickUs=9975 stepTicks=10 vis=194 preroll=3 view=-3.000..194.000 zoomed=false selection=false:0..0 recording=true cursor=0 captureLen=57597 captureInstr=6 trigger=1 preview=6/36 ownership=linked

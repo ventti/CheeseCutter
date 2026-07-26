@@ -1,0 +1,50 @@
+screen00:  File  Edit  View  Playback  Sound  Help   KEYJAM                                                              CheeseCutter EXTended 0.5.1 (Jul 26 2026 12:02) 
+screen01:                                                                                                                      V1:00 00 00 00 00 00 00   $D415 16 17 18  
+screen02:     New sound: Wave $22 Pulse $08 Filter $02.                                                                        V2:00 00 00 00 00 00 00      00 00 00 00  
+screen03:                                                                                                                      V3:00 00 00 00 00 00 00                   
+screen04:    Sound Editor  -  00 New Sound   (F12 help)                                                                                                                  
+screen05:   Octave 3   Keyjam Ch 1   Gate high 50 Ticks                                                                                                                  
+screen06:   Parameters                  scale 0-51 Ticks (~0.5s)                                                                                                         
+screen07:   <Attack         0 ...... >  Output                                                                                                                           
+screen08:    Decay          0 ......                                                                                                                                     
+screen09:    Sustain        0 ......                                                                                                                                     
+screen10:    Release        0 ......    ADSR                                                                                                                             
+screen11:    Waveform       noi                 rst:soft                                                                                                                 
+screen12:    Wave ptr       $22                                                                                                                                          
+screen13:    Pulse ptr      $08                                                                                                                                          
+screen14:    Filter ptr     $02         Freq                                                                                                                             
+screen15:    Restart        Soft                                                             +                                                                           
+screen16:    Arpeggio speed 0 ......                                                                                                                                     
+screen17:    HR wave        $80                                                                                                                                          
+screen18:    HR SR          $00         Pulse                                                                                                                            
+screen19:    Keyjam channel Voice 1                                                                                                                                      
+screen20:    Gate hold      50 T                                                                                                                                         
+screen21:    Duration unit  Ticks       Filter                                                                                                                           
+screen22:   L/R edit  Shift+L/R pan      LP                                                                                                                              
+screen23:                                BP                                                                                                                              
+screen24:                                HP                                                                                                                              
+screen25:                                Rt1                                                                                                                             
+screen26:                               Noise                                                                                                                            
+screen27:                               Pulse                                                                                                                            
+screen28:                               Saw                                                                                                                              
+screen29:                               Tri                                                                                                                              
+screen30:                               Test                                                                                                                             
+screen31:                               Ring                                                                                                                             
+screen32:                               Sync                                                                                                                             
+screen33:                               Gate                                                                                                                             
+screen34:                                                                                                                                                                
+screen35:                                        -   +   Fit   Selection   Linked edits    Add   Delete   Previous   Next   Loop  view -2-51 t   (drag to select)        
+screen36:                                                                                                                                                                
+screen37:     Raw table data / edit state                                                                                                                                
+screen38:   Ins 00:  AD 00  SR 00  Rst 40  HRw 80  Flt 02  Pul 08  HRsr 00  Wav 22                                                                                       
+screen39:   Wave $22 [row $26]: C0/81 00/02 00/41 00/0C 0C/41  LOOP $27->$24                                                                                             
+screen40:   Pulse $08 END $08: 08:00 00 00 7F                                                                                                                            
+screen41:   Filter $02 END $03: 02:90 01 00 00  03:00 00 FF 7F                                                                                                           
+screen42:   Live filter: Res 0  Route -  Mode off (SID-global)                                                                                                           
+screen43:                                                                                                                                                                
+screen44:                                                                                                                                                                
+screen45:                                                                                                                                                                
+screen46:    Time: 00:00 / $00  Oct: 3  Spd: 4  St: 1          Title: arkijuusto (toinen siivu)         Rate:   2*50hz                                                   
+screen47:    Filename: sound-editor-master.ct *               Author: vent                              SID:    8580R5 1489                                              
+screen48:                                                    Release: 2013 triad                        Player: CC4.07                                                   
+screen49:                                                                                                                                                                

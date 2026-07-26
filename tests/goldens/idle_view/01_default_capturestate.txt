@@ -1,0 +1,1 @@
+capture: samples=0 hash=811c9dc5 peak=0 sumAbs=0 gates=0 gateOn=-1 gateOff=-1 gateHigh=0 onsetSample=0 frameSamples=0 instr=-1 voice=1

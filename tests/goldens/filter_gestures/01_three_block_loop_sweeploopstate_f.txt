@@ -1,0 +1,1 @@
+sweep loop: table=F looped=1 stopped=0 startVisible=1 endVisible=1 start=617..625 end=836..844 top=304..318

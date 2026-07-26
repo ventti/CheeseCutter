@@ -1,0 +1,9 @@
+rec v0 ctrl:
+rec v0 freq:
+rec v0 pulse:
+rec v0 amp:
+rec v0 env:
+rec v0 cutoff:
+rec v0 mode:
+rec v0 resonance:
+rec v0 route:

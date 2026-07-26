@@ -1,0 +1,3 @@
+filter step: row=3 mode=16 frames=1..41 x=41..77 cutoff=256..1504 y=24..22 handles=1
+filter step: row=5 mode=32 frames=42..62 x=78..95 cutoff=1504..1200 y=22..22 handles=1
+filter step: row=7 mode=64 frames=63..73 x=96..105 cutoff=1200..1272 y=22..22 handles=1

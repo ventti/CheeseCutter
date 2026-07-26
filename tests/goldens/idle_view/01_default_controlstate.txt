@@ -1,0 +1,1 @@
+controls: se_zoom_out@39..42,35:on se_zoom_in@43..46,35:on se_fit@47..52,35:on se_selection@53..64,35:off se_linked@65..79,35:on se_lp@31..35,22:off se_bp@31..35,23:off se_hp@31..35,24:off se_route@31..39,25:off
