@@ -476,12 +476,24 @@ class SoundEditor : Window, Undoable {
 	// §20 P4b-3 filter RESONANCE drag: a vertical grab on the resonance overlay line in
 	// the Filter band (band 4) rewrites the b1 HIGH nibble (res 0..15, low nibble =
 	// routing preserved) of the CONFIG row governing the grabbed frame. Distinct from the
-	// P4b-1 cutoff-level drag (hit-tested BEFORE it). sweepResRow = the config row whose
-	// b1 we edit; sweepResMoved gates the ONE undo snapshot per gesture (first drag tick).
-	private bool sweepResDragging = false;
-	private int  sweepResRow = -1;
-	private int  sweepResTargetRow = -1;
-	private bool sweepResMoved = false;
+	// P4b-1 cutoff-level drag (hit-tested BEFORE it). row = the config row whose b1 we
+	// edit; moved gates the ONE undo snapshot per gesture (first drag tick).
+	private final class SweepResDrag : DragGesture {
+		int row, targetRow;
+		this(int r, int t) { row = r; targetRow = t; }
+		override bool onFirstMotion() {
+			int ins = clampedIns();
+			if(!beginSweepDragMutation(1, ins)) return false;
+			// A later block may materialize a CONFIG row, which shifts global table refs.
+			row = ensureResConfigForTarget(ins, targetRow, row);
+			return true;
+		}
+		override void update(ref Geo g, int x, int y) { sweepResDragUpdate(g, y, row); }
+		override void remapRows() {
+			row = remapForkedSweepRow(row);
+			targetRow = remapForkedSweepRow(targetRow);
+		}
+	}
 
 	// §21 P4c step-BOX handles (ADSR-style, for the Pulse/Filter bands). A step is drawn
 	// as a box spanning its frame window; its EDGES resize the duration and its VALUE
@@ -3120,8 +3132,6 @@ class SoundEditor : Window, Undoable {
 			if(!forkSweepProgram(table, ins)) return false;
 			// Selection is remapped by forkSweepProgram; remap every in-flight handle.
 			if(activeGesture) activeGesture.remapRows();
-			sweepResRow = remapForkedSweepRow(sweepResRow);
-			sweepResTargetRow = remapForkedSweepRow(sweepResTargetRow);
 			sweepDurRow = remapForkedSweepRow(sweepDurRow);
 			return true;
 		}
@@ -3259,7 +3269,7 @@ class SoundEditor : Window, Undoable {
 	// inverse of the drawer's ry = botPx - res*h/15) and write the CONFIG row's b1 HIGH
 	// nibble, PRESERVING the low nibble (routing). No undo/re-trigger here — the gesture
 	// snapshot is at the first drag tick, the re-trigger at release.
-	private void sweepResDragUpdate(ref Geo g, int celly) {
+	private void sweepResDragUpdate(ref Geo g, int celly, int sweepResRow) {
 		if(sweepResRow < 0 || sweepResRow >= 0x40) return;
 		int topPx, botPx; bandBox(g, 4, topPx, botPx);
 		int hh = botPx - topPx; if(hh < 1) hh = 1;
@@ -5974,10 +5984,7 @@ class SoundEditor : Window, Undoable {
 			int targetRow;
 			int rcfg = filterResHandleAt(g, x, y, targetRow);
 			if(rcfg >= 0) {
-				sweepResDragging = true;
-				sweepResRow = rcfg;
-				sweepResTargetRow = targetRow;
-				sweepResMoved = false;
+				activeGesture = new SweepResDrag(rcfg, targetRow);
 			}
 			return;
 		}
@@ -5998,10 +6005,7 @@ class SoundEditor : Window, Undoable {
 				selectedWaveRow = -1;
 				selectedSweepTable = 1;
 				selectedSweepRow = selectedSweepRowEnd = targetRow >= 1 ? targetRow : rcfg;
-				sweepResDragging = true;
-				sweepResRow = rcfg;
-				sweepResTargetRow = targetRow;
-				sweepResMoved = false;   // shared check + snapshot on the first drag tick
+				activeGesture = new SweepResDrag(rcfg, targetRow);   // shared check + snapshot on the first drag tick
 				return;
 			}
 		}
@@ -6072,22 +6076,6 @@ class SoundEditor : Window, Undoable {
 				activeGesture.moved = true;
 			}
 			activeGesture.update(g, x, y);
-			return;
-		}
-		// §20 P4b-3 filter RESONANCE drag: first motion resolves ownership and takes one
-		// all-table undo snapshot, then rewrites the config row's b1 high nibble.
-		if(sweepResDragging) {
-			Geo g = layout();
-			if(!sweepResMoved) {
-				if(!beginSweepDragMutation(1, ins)) {
-					sweepResDragging = false; sweepResRow = sweepResTargetRow = -1;
-					return;
-				}
-				// A later block may materialize a CONFIG row, which shifts global table refs.
-				sweepResRow = ensureResConfigForTarget(ins, sweepResTargetRow, sweepResRow);
-				sweepResMoved = true;
-			}
-			sweepResDragUpdate(g, y);
 			return;
 		}
 		// §21 P4c DURATION drag: first motion resolves ownership atomically, then rewrites
@@ -6182,16 +6170,6 @@ class SoundEditor : Window, Undoable {
 			clickWasButton = false;
 			if(activeGesture.moved && activeGesture.retriggersOnMove()) retriggerIfSounding();
 			activeGesture = null;
-			return;
-		}
-		// §20 P4b-3 end a filter RESONANCE drag: make the new resonance audible once if a
-		// note is held. A plain click (no motion) wrote nothing.
-		if(sweepResDragging) {
-			sweepResDragging = false;
-			sweepResRow = sweepResTargetRow = -1;
-			clickWasButton = false;
-			if(sweepResMoved) retriggerIfSounding();
-			sweepResMoved = false;
 			return;
 		}
 		// §21 P4c end a duration (box-edge) drag: make the new window audible once.
