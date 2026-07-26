@@ -10,7 +10,7 @@ time-varying graph on ONE shared horizontal axis = frames since note-on
 (~19.95 ms PAL ticks). The X span AUTO-FITS the note's full duration (§12):
 visFrames is computed once per draw as the max of the ADSR-derived length (SID ms
 tables) and the actual recorded extent, so short sounds zoom in and long releases
-zoom out to fit; every band maps frame->pixel through the single xForFrame(): a pixel-perfect
+zoom out to fit; every band maps frame->pixel through the single viewport.xForFrame(): a pixel-perfect
 output waveform (per-horizontal-pixel min/max of the live mix while playing, or
 the per-note capture for a held keyjam note), the ADSR envelope (SID ms tables
 converted to frames, sampled per frame with a nominal gate so A/D/S/R all show),
@@ -118,7 +118,7 @@ private enum float AMP_EPS = 0.02f;
 // §9.2: pre-roll region reserved at the LEFT of the shared axis for the hard/soft
 // restart phase that runs in the frames BEFORE the note triggers (frames
 // -RESTART_FRAMES .. 0). Frame 0 = the note-trigger divider. Every band maps
-// frame->pixel through xForFrame(), which folds this offset in, so a single
+// frame->pixel through viewport.xForFrame(), which folds this offset in, so a single
 // vertical probe hits the same frame index in every band.
 private enum int RESTART_FRAMES = 10;
 // §17.1 minimum viewport span (ticks). Zooming in can't narrow the view below this
@@ -545,7 +545,7 @@ class SoundEditor : Window, Undoable {
 	SoundEditorDebugState debugState() {
 		return SoundEditorDebugState(
 			cast(int)lround(tickMs * 1000.0), trackStepTicks(), visFrames,
-			prerollTicks, viewStartTick, viewEndTick, userZoomed,
+			prerollTicks, viewport.startTick, viewport.endTick, viewport.userZoomed,
 			hasSelection, useRec, selStartTick, selEndTick, editCursor,
 			inputKeyjam.previewInstrument(), inputKeyjam.previewNote(),
 			durationRows, durationValue, configuredGateTicks(), keyjamChannel + 1);
@@ -747,7 +747,7 @@ class SoundEditor : Window, Undoable {
 			int ys = filterCutoffY(g, s.val[a]);
 			int ye = filterCutoffY(g, s.val[b - 1]);
 			result ~= FilterStepDebug(row, mode, a, b,
-				xForFrame(g, a) / FONT_X, xForFrame(g, b) / FONT_X,
+				viewport.xForFrame(g, a) / FONT_X, viewport.xForFrame(g, b) / FONT_X,
 				s.val[a], s.val[b - 1], ys / FONT_Y, ye / FONT_Y, 1);
 		}
 		return result;
@@ -780,22 +780,138 @@ class SoundEditor : Window, Undoable {
 	private float tickMs = SCREEN_FRAME_MS;
 	private int nominalGateFrames = 50;
 
-	// §17.1 zoomable/pannable VIEWPORT over the shared tick axis. The axis maps
-	// [viewStartTick, viewEndTick] (a sub-window of the whole note) across plotWpx
-	// instead of always the whole note, so zoom = narrow the window, pan = slide it,
-	// and every band/playhead/marker/loop-line/probe follows for free (they all go
-	// through xForFrame / tickForPixel). Default = FIT = the whole note incl. the
-	// restart pre-roll ([-RESTART_FRAMES, visFrames]); userZoomed keeps a user's zoom
-	// across instrument/recording changes until they hit Fit. Ticks are floats so
+	// §17.1 "where are we looking on the timeline": the zoomable/pannable VIEWPORT
+	// over the shared tick axis. [startTick, endTick] (a sub-window of the whole
+	// note) maps across plotWpx instead of always the whole note, so zoom = narrow
+	// the window, pan = slide it, and every band/playhead/marker/loop-line/probe
+	// follows for free (they all go through viewport.xForFrame / tickForPixel).
+	// Default = FIT = the whole note incl. the restart pre-roll
+	// ([-prerollTicks, visFrames]); viewport.userZoomed keeps a user's zoom across
+	// instrument/recording changes until they hit Fit. Ticks are floats so
 	// repeated ×2/×0.5 zoom steps + panning stay smooth; the axis clamps to
-	// [-RESTART_FRAMES, visFrames] with a MIN_VIEW_SPAN floor.
-	private double viewStartTick = -RESTART_FRAMES;
-	private double viewEndTick = MIN_VIS;
-	private bool userZoomed = false;
-	// Integer visible-frame bounds derived from the viewport each draw, so band loops
-	// only emit the frames actually on screen (no off-view pile-up at the clamped
-	// plot edges). viewFrameLo = floor(viewStart), viewFrameHi = ceil(viewEnd)+1.
-	private int viewFrameLo = 0, viewFrameHi = MIN_VIS;
+	// [-prerollTicks, contentMaxFrames] with a MIN_VIEW_SPAN floor.
+	//
+	// This is a self-contained value: every method that needs the axis bounds
+	// (prerollTicks/visFrames/contentMaxFrames) or the pixel geometry (Geo) takes
+	// them as parameters rather than reaching back into SoundEditor, so the whole
+	// timeline-window concept lives in one place. It is deliberately a mutable
+	// struct kept as ONE field below (`viewport`) -- every mutation must go through
+	// that field directly (e.g. `viewport.zoomBy(...)`); never copy it into a
+	// local and mutate the copy, or the change is silently lost.
+	private struct Viewport {
+		double startTick = -RESTART_FRAMES;
+		double endTick = MIN_VIS;
+		bool userZoomed = false;
+		// Integer visible-frame bounds derived from the ticks each draw (see
+		// refresh()), so band loops only emit the frames actually on screen (no
+		// off-view pile-up at the clamped plot edges). frameLo = floor(startTick),
+		// frameHi = ceil(endTick)+1.
+		int frameLo = 0, frameHi = MIN_VIS;
+
+		// §9.1/§12.2/§17.1 THE one true tick->pixel map every band shares. Frame/
+		// tick f may be negative (pre-roll/restart); f=0 is the note-trigger
+		// divider. The returned pixel is CLAMPED to the plot box so a partially-
+		// off-view edge frame lands exactly at the plot edge; band loops
+		// additionally skip fully-off-view frames (see visRange) so nothing piles up.
+		int xForFrame(ref Geo g, double f) {
+			double span = endTick - startTick;
+			if(span < 1e-6) span = 1e-6;
+			double p = (f - startTick) / span;   // 0..1 across the plot width
+			if(p < 0) p = 0;
+			if(p > 1) p = 1;
+			return g.plotX0px + cast(int)lround(p * g.plotWpx);
+		}
+
+		// §17.1 inverse of xForFrame: the (fractional) tick at absolute pixel
+		// column px.
+		double tickForPixel(ref Geo g, int px) {
+			double span = endTick - startTick;
+			return startTick + cast(double)(px - g.plotX0px) * span / g.plotWpx;
+		}
+
+		// §17.1 True when tick/frame f falls within the current viewport (so a
+		// single vertical marker at f should be drawn; off-view markers are
+		// skipped rather than clamped to a plot edge, which would misplace them).
+		bool frameInView(double f) {
+			return f >= startTick - 1e-6 && f <= endTick + 1e-6;
+		}
+
+		// §17.1 Visible integer-frame range for a band loop of length n: only the
+		// frames whose cell intersects the viewport (plus a one-frame margin each
+		// side so a partially-visible edge cell still draws). Clamped to [0, n).
+		void visRange(int n, out int lo, out int hi) {
+			lo = frameLo; hi = frameHi;
+			if(lo < 0) lo = 0;
+			if(hi > n) hi = n;
+			if(hi < lo) hi = lo;
+		}
+
+		// §17.1 Reset the viewport to FIT (the whole note incl. the restart
+		// pre-roll) -- the v12 default, and what [Fit]/Home restore. Called
+		// whenever !userZoomed so the axis keeps auto-fitting as the
+		// instrument/recording changes.
+		void fit(int prerollTicks, int visFrames) {
+			startTick = -prerollTicks;
+			endTick = visFrames;
+		}
+
+		// §17.1/§17.3 Clamp the (user) viewport within [-prerollTicks,
+		// contentMaxFrames] and enforce the MIN_VIEW_SPAN floor, keeping the view
+		// centre where possible.
+		void clamp(int prerollTicks, int contentMaxFrames) {
+			double lo = -prerollTicks;
+			double hi = contentMaxFrames;   // §17.3 allow zoom/scroll past the note to the release tail
+			double full = hi - lo;
+			if(full <= MIN_VIEW_SPAN) { startTick = lo; endTick = hi; return; }
+			double span = endTick - startTick;
+			if(span < MIN_VIEW_SPAN) span = MIN_VIEW_SPAN;
+			if(span > full) span = full;
+			double centre = (startTick + endTick) / 2.0;
+			startTick = centre - span / 2.0;
+			endTick = centre + span / 2.0;
+			if(startTick < lo) { endTick += lo - startTick; startTick = lo; }
+			if(endTick > hi)   { startTick -= endTick - hi; endTick = hi; }
+			if(startTick < lo) startTick = lo;
+		}
+
+		// §17.3 Zoom the viewport about its centre by `factor` (>1 = zoom out,
+		// <1 = in), clamped. Marks the view as user-zoomed so it survives
+		// instrument changes until Fit.
+		void zoomBy(double factor, int prerollTicks, int contentMaxFrames) {
+			double centre = (startTick + endTick) / 2.0;
+			double span = (endTick - startTick) * factor;
+			if(span < MIN_VIEW_SPAN) span = MIN_VIEW_SPAN;
+			startTick = centre - span / 2.0;
+			endTick = centre + span / 2.0;
+			userZoomed = true;
+			clamp(prerollTicks, contentMaxFrames);
+		}
+
+		// §17.3 Pan the viewport by `dticks` (keeping its span), clamped.
+		void panBy(double dticks, int prerollTicks, int contentMaxFrames) {
+			startTick += dticks;
+			endTick += dticks;
+			userZoomed = true;
+			clamp(prerollTicks, contentMaxFrames);
+		}
+
+		// §17.3 Zoom the viewport to [selStart, selEnd] (the current selection).
+		// Caller is responsible for checking there IS a selection first.
+		void zoomToSelection(int selStart, int selEnd, int prerollTicks, int contentMaxFrames) {
+			startTick = selStart;
+			endTick = selEnd;
+			userZoomed = true;
+			clamp(prerollTicks, contentMaxFrames);
+		}
+
+		// Recompute the integer visible-frame bounds (frameLo/frameHi) from the
+		// current ticks. Called once per draw after the ticks settle for the frame.
+		void refreshFrameBounds() {
+			frameLo = cast(int)floor(startTick);
+			frameHi = cast(int)ceil(endTick) + 1;
+		}
+	}
+	private Viewport viewport;
 
 	// §17.2 tick-snapped SELECTION [selStartTick, selEndTick] (ordered, snapped to the
 	// integer tick grid = the native per-tick rate). hasSelection when a drag produced
@@ -855,7 +971,7 @@ class SoundEditor : Window, Undoable {
 	// §17.4 horizontal-scrollbar drag state. A left-press ON the scrollbar row grabs
 	// the thumb; while dragging, the viewport start follows the pointer so the thumb
 	// stays under the grab point (span kept constant, clamped). scrollGrabOffset = the
-	// tick (on the FULL/Fit axis) under the initial press minus viewStartTick, so the
+	// tick (on the FULL/Fit axis) under the initial press minus viewport.startTick, so the
 	// grab point on the thumb is preserved across the drag.
 	private bool scrollDragging = false;
 	private double scrollGrabOffset = 0;
@@ -1149,70 +1265,6 @@ class SoundEditor : Window, Undoable {
 		return cm;
 	}
 
-	// §9.1/§12.2/§17.1 THE one true tick->pixel map every band shares, now over the
-	// zoomable/pannable VIEWPORT [viewStartTick, viewEndTick] (a sub-window of the whole
-	// note; dynamic ticks-per-pixel = zoom). Frame/tick f may be negative (pre-roll /
-	// restart); f=0 is the note-trigger divider. The returned pixel is CLAMPED to the
-	// plot box so a partially-off-view edge frame lands exactly at the plot edge; band
-	// loops additionally skip fully-off-view frames (see visRange) so nothing piles up.
-	private int xForFrame(ref Geo g, double f) {
-		double span = viewEndTick - viewStartTick;
-		if(span < 1e-6) span = 1e-6;
-		double p = (f - viewStartTick) / span;   // 0..1 across the plot width
-		if(p < 0) p = 0;
-		if(p > 1) p = 1;
-		return g.plotX0px + cast(int)lround(p * g.plotWpx);
-	}
-
-	// §17.1 inverse of xForFrame: the (fractional) tick at absolute pixel column px.
-	private double tickForPixel(ref Geo g, int px) {
-		double span = viewEndTick - viewStartTick;
-		return viewStartTick + cast(double)(px - g.plotX0px) * span / g.plotWpx;
-	}
-
-	// §17.1 True when tick/frame f falls within the current viewport (so a single
-	// vertical marker at f should be drawn; off-view markers are skipped rather than
-	// clamped to a plot edge, which would misplace them).
-	private bool frameInView(double f) {
-		return f >= viewStartTick - 1e-6 && f <= viewEndTick + 1e-6;
-	}
-
-	// §17.1 Visible integer-frame range for a band loop of length n: only the frames
-	// whose cell intersects the viewport (plus a one-frame margin each side so a
-	// partially-visible edge cell still draws). Clamped to [0, n).
-	private void visRange(int n, out int lo, out int hi) {
-		lo = viewFrameLo; hi = viewFrameHi;
-		if(lo < 0) lo = 0;
-		if(hi > n) hi = n;
-		if(hi < lo) hi = lo;
-	}
-
-	// §17.1 Reset the viewport to FIT (the whole note incl. the restart pre-roll) — the
-	// v12 default, and what [Fit]/Home restore. Recomputed whenever !userZoomed so the
-	// axis keeps auto-fitting as the instrument/recording changes.
-	private void fitViewport() {
-		viewStartTick = -prerollTicks;
-		viewEndTick = visFrames;
-	}
-
-	// §17.1/§17.3 Clamp the (user) viewport within [-RESTART_FRAMES, contentMaxFrames] and enforce
-	// the MIN_VIEW_SPAN floor, keeping the view centre where possible.
-	private void clampViewport() {
-		double lo = -prerollTicks;
-		double hi = contentMaxFrames;   // §17.3 allow zoom/scroll past the note to the release tail
-		double full = hi - lo;
-		if(full <= MIN_VIEW_SPAN) { viewStartTick = lo; viewEndTick = hi; return; }
-		double span = viewEndTick - viewStartTick;
-		if(span < MIN_VIEW_SPAN) span = MIN_VIEW_SPAN;
-		if(span > full) span = full;
-		double centre = (viewStartTick + viewEndTick) / 2.0;
-		viewStartTick = centre - span / 2.0;
-		viewEndTick = centre + span / 2.0;
-		if(viewStartTick < lo) { viewEndTick += lo - viewStartTick; viewStartTick = lo; }
-		if(viewEndTick > hi)   { viewStartTick -= viewEndTick - hi; viewEndTick = hi; }
-		if(viewStartTick < lo) viewStartTick = lo;
-	}
-
 	// §13.4 The actual restart-phase length in frames for this instrument's col2
 	// restart type: $80 hard ~= 2, $40 soft ~= 2, else ($00) the 3-frame restart ~= 3.
 	// Used to place the restart marker at frame -restartFramesFor(ins) (inside the
@@ -1340,12 +1392,11 @@ class SoundEditor : Window, Undoable {
 		// user's zoom until they hit Fit, else auto-fit to the whole note. Then derive
 		// the integer visible-frame bounds every band loop clips to.
 		if(sweepDurDragging && sweepDurViewLocked) {
-			viewStartTick = sweepDurViewStart;
-			viewEndTick = sweepDurViewEnd;
-		} else if(userZoomed) clampViewport();
-		else fitViewport();
-		viewFrameLo = cast(int)floor(viewStartTick);
-		viewFrameHi = cast(int)ceil(viewEndTick) + 1;
+			viewport.startTick = sweepDurViewStart;
+			viewport.endTick = sweepDurViewEnd;
+		} else if(viewport.userZoomed) viewport.clamp(prerollTicks, contentMaxFrames);
+		else viewport.fit(prerollTicks, visFrames);
+		viewport.refreshFrameBounds();
 
 		// Rebuild the overlay draw-list from scratch (all bands + the playhead).
 		video.olClear();
@@ -1387,14 +1438,14 @@ class SoundEditor : Window, Undoable {
 		// is visible. Drawn before the trigger so the (brighter) trigger wins on any
 		// pixel overlap at extreme zoom.
 		int restF = restartFramesFor(ins);
-		if(frameInView(-restF))
-			video.olVLine(xForFrame(g, -restF), g.stackTopPx, g.stackBotPx, COL_RESTART);
+		if(viewport.frameInView(-restF))
+			video.olVLine(viewport.xForFrame(g, -restF), g.stackTopPx, g.stackBotPx, COL_RESTART);
 
 		// §9.2 note-trigger divider at frame 0 across ALL bands: everything left of it
 		// is the restart pre-roll, everything right of it is the same frame index in
 		// every band. (Skipped when frame 0 is panned out of the viewport.)
-		if(frameInView(0))
-			video.olVLine(xForFrame(g, 0), g.stackTopPx, g.stackBotPx, COL_TRIGGER);
+		if(viewport.frameInView(0))
+			video.olVLine(viewport.xForFrame(g, 0), g.stackTopPx, g.stackBotPx, COL_TRIGGER);
 
 		// §17.2 selection edges on top of the bands (bright, distinct from the wash).
 		drawSelectionEdges(g);
@@ -1406,8 +1457,8 @@ class SoundEditor : Window, Undoable {
 		if(useRec) {
 			int rh = audio.visualizer.getRecordingLength(viewVoice);
 			if(rh > visFrames) rh = visFrames;
-			if(frameInView(rh))
-				video.olVLine(xForFrame(g, rh), g.stackTopPx, g.stackBotPx, COL_HEAD);
+			if(viewport.frameInView(rh))
+				video.olVLine(viewport.xForFrame(g, rh), g.stackTopPx, g.stackBotPx, COL_HEAD);
 		}
 
 		// §19 P4a draggable A/D/S/R handles on the ADSR curve (drawn on top of the band
@@ -1476,8 +1527,8 @@ class SoundEditor : Window, Undoable {
 		if(loopFrame < 0 || period < 2) return;
 		int lastX = -1_000_000;
 		for(int f = loopFrame; f < n && f < visFrames; f += period) {
-			if(!frameInView(f)) continue;                          // §17.1 skip off-view
-			int x = xForFrame(g, f);
+			if(!viewport.frameInView(f)) continue;                          // §17.1 skip off-view
+			int x = viewport.xForFrame(g, f);
 			if(lastX > -1_000_000 && x - lastX < MIN_LOOP_PX) continue; // stay subtle, no comb
 			video.olVLine(x, topPx, botPx, COL_LOOPLINE);
 			lastX = x;
@@ -1499,15 +1550,15 @@ class SoundEditor : Window, Undoable {
 			// xForFrame deliberately clamps to the viewport rails.  Gate the authored
 			// frame first so an off-screen triangle can never appear or become hittable
 			// at a rail merely because of that clamp.
-			if(frameInView(startFrame)) {
-				int startEdge = xForFrame(g, startFrame);
+			if(viewport.frameInView(startFrame)) {
+				int startEdge = viewport.xForFrame(g, startFrame);
 				result.startLeft = startEdge;
 				result.startRight = startEdge + FONT_X;
 				result.startVisible = result.startRight > g.plotX0px
 					&& result.startLeft < g.plotX0px + g.plotWpx;
 			}
-			if(frameInView(endFrame)) {
-				int endEdge = xForFrame(g, endFrame);
+			if(viewport.frameInView(endFrame)) {
+				int endEdge = viewport.xForFrame(g, endFrame);
 				result.endLeft = endEdge - FONT_X;
 				result.endRight = endEdge;
 				result.endVisible = result.endRight > g.plotX0px
@@ -1515,8 +1566,8 @@ class SoundEditor : Window, Undoable {
 			}
 		} else if(result.stopped) {
 			int endFrame = min(cast(int)s.val.length, visFrames);
-			if(frameInView(endFrame)) {
-				int endEdge = xForFrame(g, endFrame);
+			if(viewport.frameInView(endFrame)) {
+				int endEdge = viewport.xForFrame(g, endFrame);
 				result.endLeft = endEdge - FONT_X;
 				result.endRight = endEdge;
 				result.endVisible = result.endRight > g.plotX0px
@@ -1557,15 +1608,15 @@ class SoundEditor : Window, Undoable {
 		if(!result.looped && !result.stopped) return result;
 		result.endFrame = waveProgramExtent(start, waveTimeForInstrument(ins));
 		if(result.looped) result.startFrame = s.loopFrame;
-		if(result.looped && frameInView(result.startFrame)) {
-			int edge = xForFrame(g, result.startFrame);
+		if(result.looped && viewport.frameInView(result.startFrame)) {
+			int edge = viewport.xForFrame(g, result.startFrame);
 			result.startLeft = (edge / FONT_X) * FONT_X;
 			result.startRight = result.startLeft + FONT_X;
 			result.startVisible = result.startRight > g.plotX0px
 				&& result.startLeft < g.plotX0px + g.plotWpx;
 		}
-		if(frameInView(result.endFrame)) {
-			int edge = xForFrame(g, result.endFrame);
+		if(viewport.frameInView(result.endFrame)) {
+			int edge = viewport.xForFrame(g, result.endFrame);
 			result.endLeft = (max(0, edge - 1) / FONT_X) * FONT_X;
 			result.endRight = result.endLeft + FONT_X;
 			result.endVisible = result.endRight > g.plotX0px
@@ -1622,13 +1673,13 @@ class SoundEditor : Window, Undoable {
 		int hh = botPx - topPx;
 		if(hh <= 0 || maxVal <= 0) return;
 		int n = min(cast(int)vals.length, visFrames);
-		int lo, hi; visRange(n, lo, hi);       // §17.1 only emit on-screen frames
+		int lo, hi; viewport.visRange(n, lo, hi);       // §17.1 only emit on-screen frames
 		foreach(f; lo .. hi) {
 			int v = vals[f];
 			if(v < 0) v = 0; if(v > maxVal) v = maxVal;
 			int y = botPx - v * hh / maxVal;
-			int xa = xForFrame(g, f);
-			int xb = xForFrame(g, f + 1);
+			int xa = viewport.xForFrame(g, f);
+			int xb = viewport.xForFrame(g, f + 1);
 			if(xb <= xa) xb = xa + 1;
 			for(int x = xa; x < xb; x++) {
 				video.olVLine(x, botPx, y, fillCol);
@@ -2434,7 +2485,7 @@ class SoundEditor : Window, Undoable {
 		int topPx, botPx; bandBox(g, 2, topPx, botPx);
 		if(px < g.plotX0px || px >= g.plotX0px + g.plotWpx
 				|| py < topPx || py >= botPx) return false;
-		int frame = cast(int)lround(tickForPixel(g, px));
+		int frame = cast(int)lround(viewport.tickForPixel(g, px));
 		if(frame < 0) return false;
 		int ins = clampedIns();
 		WaveFrameSim s = simWaveFrames(song.instrumentTable[ins + 7 * 48],
@@ -2525,7 +2576,7 @@ class SoundEditor : Window, Undoable {
 		int close = waveCloseRow(start);
 		if(close <= start) return -1;
 		WaveFrameSim s = simWaveFrames(start, waveTimeForInstrument(ins), MAX_VIS);
-		int pointerFrame = cast(int)lround(tickForPixel(g, cellX * FONT_X + FONT_X / 2));
+		int pointerFrame = cast(int)lround(viewport.tickForPixel(g, cellX * FONT_X + FONT_X / 2));
 		// In range, the simulated row at the pointer owns the tick. Choosing a row by
 		// nearest start instead makes the latter half of a long delay jump early.
 		int authoredEnd = waveProgramExtent(start, waveTimeForInstrument(ins));
@@ -2599,7 +2650,7 @@ class SoundEditor : Window, Undoable {
 		int minCell = g.plotX0px / FONT_X;
 		int maxCell = (g.plotX0px + g.plotWpx - 1) / FONT_X;
 		int preferred = loopShape.endVisible ? loopShape.endLeft / FONT_X - 1
-			: xForFrame(g, a.frame) / FONT_X;
+			: viewport.xForFrame(g, a.frame) / FONT_X;
 		bool freeCell(int cell) {
 			if(cell < minCell || cell > maxCell) return false;
 			int left = cell * FONT_X, right = left + FONT_X;
@@ -2619,7 +2670,7 @@ class SoundEditor : Window, Undoable {
 		// Creation is top-strip chrome like END/LOOP, leaving the frequency gesture
 		// row below fully available for pitch and delay selection/dragging.
 		a.y = (topPx + FONT_Y - 1) / FONT_Y;
-		a.visible = frameInView(a.frame) && a.x >= minCell;
+		a.visible = viewport.frameInView(a.frame) && a.x >= minCell;
 		a.enabled = song.tWave.seekTableEnd() < 255 && close < 255;
 		a.reason = !a.enabled ? "full" : close == start ? "end-only" : "normal";
 		return a;
@@ -2671,7 +2722,7 @@ class SoundEditor : Window, Undoable {
 		}
 		if(first < 0) return;
 		int topPx, botPx; bandBox(g, 2, topPx, botPx);
-		int xa = xForFrame(g, first), xb = xForFrame(g, last);
+		int xa = viewport.xForFrame(g, first), xb = viewport.xForFrame(g, last);
 		if(xb <= xa) xb = xa + 1;
 		video.olRect(xa, topPx, xb - xa, botPx - topPx, COL_STEPSEL);
 	}
@@ -2687,7 +2738,7 @@ class SoundEditor : Window, Undoable {
 		int topRow = (topPx + FONT_Y - 1) / FONT_Y;
 		int lane = y - topRow;
 		if(lane < 0 || lane >= 8 || py > botPx) return false;
-		frame = cast(int)lround(tickForPixel(g, px));
+		frame = cast(int)lround(viewport.tickForPixel(g, px));
 		if(frame < 0) return false;
 		bit = 7 - lane;
 		return true;
@@ -2717,9 +2768,9 @@ class SoundEditor : Window, Undoable {
 		float[4] hf   = [aF, aF + dF, sustMid, gateEnd + rF];
 		float[4] hlvl = [1.0f, sLvl, sLvl, 0.0f];
 		foreach(i; 0 .. 4) {
-			hx[i] = xForFrame(g, hf[i]);
+			hx[i] = viewport.xForFrame(g, hf[i]);
 			hy[i] = botPx - cast(int)lround(clamp01(hlvl[i]) * h);
-			inView[i] = frameInView(hf[i]);
+			inView[i] = viewport.frameInView(hf[i]);
 		}
 	}
 
@@ -2771,7 +2822,7 @@ class SoundEditor : Window, Undoable {
 		// tall, so a cell centre reached only ~6 of the 16 sustain levels, ~3 apart.
 		// adsrHandlePositions draws the handle at the matching pixel.
 		int py = dragPixelY(celly);
-		double t = tickForPixel(g, px);
+		double t = viewport.tickForPixel(g, px);
 		ubyte ad = song.instrumentTable[ins + 0 * 48];
 		int attack = (ad >> 4) & 0x0f, decay = ad & 0x0f;
 		float aF = ATTACK_TIME_MS[attack]       / tickMs;
@@ -2892,7 +2943,7 @@ class SoundEditor : Window, Undoable {
 	// rowOf), or -1 if the program is empty. This is the row whose init b2 the drag edits.
 	private int sweepRowAtPress(int table, ref Geo g, int x) {
 		int px = x * FONT_X + FONT_X / 2;
-		int f = cast(int)lround(tickForPixel(g, px));
+		int f = cast(int)lround(viewport.tickForPixel(g, px));
 		if(f < 0) f = 0;
 		int ins = clampedIns();
 		auto k = sweepKind(table);
@@ -2905,7 +2956,7 @@ class SoundEditor : Window, Undoable {
 		// the first sweep row after it.
 		if(f >= cast(int)s.rowOf.length) {
 			int pressX = x * FONT_X + FONT_X / 2;
-			int endX = xForFrame(g, cast(int)s.rowOf.length);
+			int endX = viewport.xForFrame(g, cast(int)s.rowOf.length);
 			if(s.rowOf.length > 0 && abs(pressX - endX) <= FONT_X * 2)
 				return s.rowOf[$ - 1];
 			return -1;
@@ -3102,7 +3153,7 @@ class SoundEditor : Window, Undoable {
 			if(row < 1 || row >= 0x40 || seen[row]
 					|| !(song.filterTable[row * 4] & 0x80)) continue;
 			seen[row] = true;
-			int d = abs(px - xForFrame(g, cast(int)f));
+			int d = abs(px - viewport.xForFrame(g, cast(int)f));
 			if(d <= DUR_HIT_PX && d < bestDist) { best = row; bestDist = d; }
 		}
 		return best;
@@ -3127,7 +3178,7 @@ class SoundEditor : Window, Undoable {
 		SweepSim s = simFilter(ptr);
 		if(s.resOf.length == 0) return -1;
 		int fx = px + FONT_X / 2;
-		int f = cast(int)lround(tickForPixel(g, fx));
+		int f = cast(int)lround(viewport.tickForPixel(g, fx));
 		if(f < 0 || f >= cast(int)s.resOf.length) return -1;   // press x is off the drawn program
 		int cfg = (f < cast(int)s.cfgRowOf.length) ? s.cfgRowOf[f] : -1;
 		if(cfg < 0 || cfg > 0x3f) return -1;    // no config row here -> no res edit
@@ -3428,7 +3479,7 @@ class SoundEditor : Window, Undoable {
 		int table = sweepLoopTable;
 		if(sweepLoopCloseRow < 0 || sweepLoopCloseRow >= 0x40) return;
 		int px = cellx * FONT_X + FONT_X / 2;
-		int f = cast(int)lround(tickForPixel(g, px));
+		int f = cast(int)lround(viewport.tickForPixel(g, px));
 		if(f < 0) f = 0;
 		int ins = clampedIns();
 		auto k = sweepKind(table);
@@ -3851,7 +3902,7 @@ class SoundEditor : Window, Undoable {
 		int maxVal = k.maxVal;
 		int topPx, botPx; bandBox(g, band, topPx, botPx);
 		int h = botPx - topPx; if(h < 1) h = 1;
-		xa = xForFrame(g, f0); xb = xForFrame(g, f1);
+		xa = viewport.xForFrame(g, f0); xb = viewport.xForFrame(g, f1);
 		if(xb <= xa) xb = xa + 1;
 		int v0 = s.val[f0], v1 = s.val[f1 - 1];
 		// The pulse player applies b1 on the same tick that it loads b2. The plotted
@@ -3936,7 +3987,7 @@ class SoundEditor : Window, Undoable {
 		if(resizable && abs(px - xb) <= DUR_HIT_PX) {
 			clickWasButton = true; sweepDurDragging = true;
 			sweepDurTable = t; sweepDurRow = r; sweepDurAnchorF = f0; sweepDurMoved = false;
-			sweepDurViewStart = viewStartTick; sweepDurViewEnd = viewEndTick;
+			sweepDurViewStart = viewport.startTick; sweepDurViewEnd = viewport.endTick;
 			sweepDurViewLocked = true;
 			sweepDurUnitClipped = false;
 			int scale = t == 0 ? 1 : 2;
@@ -4031,9 +4082,9 @@ class SoundEditor : Window, Undoable {
 		int first = period <= 0 ? 1 : period;
 		if(first > 0x80) first = 0x80;
 		int best = first;
-		int bestDistance = abs(xForFrame(g, anchorFrame + best) - pointerPx);
+		int bestDistance = abs(viewport.xForFrame(g, anchorFrame + best) - pointerPx);
 		for(int width = first + period; period > 0 && width <= 0x80; width += period) {
-			int distance = abs(xForFrame(g, anchorFrame + width) - pointerPx);
+			int distance = abs(viewport.xForFrame(g, anchorFrame + width) - pointerPx);
 			// Iterating shorter to longer makes an exact distance tie choose shorter.
 			if(distance < bestDistance) { best = width; bestDistance = distance; }
 		}
@@ -4336,11 +4387,11 @@ class SoundEditor : Window, Undoable {
 	private void drawTrackStepGrid(ref Geo g) {
 		int period = trackStepTicks();
 		if(period < 1) return;
-		int first = max(period, cast(int)ceil(max(0.0, viewStartTick) / period) * period);
+		int first = max(period, cast(int)ceil(max(0.0, viewport.startTick) / period) * period);
 		int lastX = -1_000_000;
-		for(int f = first; f <= viewEndTick; f += period) {
-			if(!frameInView(f)) continue;
-			int x = xForFrame(g, f);
+		for(int f = first; f <= viewport.endTick; f += period) {
+			if(!viewport.frameInView(f)) continue;
+			int x = viewport.xForFrame(g, f);
 			if(x == lastX) continue;
 			for(int y = g.stackTopPx; y < g.stackBotPx; y += 7)
 				video.olVLine(x, y, min(y + 3, g.stackBotPx), COL_TRACKSTEP);
@@ -4371,7 +4422,7 @@ class SoundEditor : Window, Undoable {
 		// view) to the plot's right edge. Under zoom/pan the trigger may sit at the left
 		// plot edge (panned right into the note) or partway across (fit / panned left).
 		int plotEndPx = g.plotX0px + g.plotWpx;
-		int noteX0px = xForFrame(g, 0);
+		int noteX0px = viewport.xForFrame(g, 0);
 		if(noteX0px < g.plotX0px) noteX0px = g.plotX0px;
 		int noteWpx = plotEndPx - noteX0px;
 		if(noteWpx < 1) return;
@@ -4431,10 +4482,10 @@ class SoundEditor : Window, Undoable {
 		foreach(i; 0 .. noteWpx) {
 			int x = noteX0px + i;
 			// §17.1 invert the VIEWPORT axis at x and x+1 -> tick range on the shared axis
-			double t0 = tickForPixel(g, x);
-			double t1 = tickForPixel(g, x + 1);
+			double t0 = viewport.tickForPixel(g, x);
+			double t1 = viewport.tickForPixel(g, x + 1);
 			if(t0 < 0) t0 = 0;
-			if(t1 <= t0) t1 = t0 + (viewEndTick - viewStartTick) / g.plotWpx;
+			if(t1 <= t0) t1 = t0 + (viewport.endTick - viewport.startTick) / g.plotWpx;
 			// §16 map axis time -> captureBuf, shifted past the pre-gate restart phase so
 			// tick 0 == the audible onset (== rec* frame 0).
 			int s0 = onset + cast(int)(t0 * spTick);
@@ -4486,10 +4537,10 @@ class SoundEditor : Window, Undoable {
 		}
 		int n = min(cast(int)envelope.length, visFrames);
 		int prevX = -1, prevY = -1;
-		int lo, hi; visRange(n, lo, hi);
+		int lo, hi; viewport.visRange(n, lo, hi);
 		foreach(f; lo .. hi) {
 			int y = botPx - cast(int)lround(envelope[f] / 255.0 * h);
-			int x = xForFrame(g, f);
+			int x = viewport.xForFrame(g, f);
 			if(prevX >= 0) video.olLine(prevX, prevY, x, y, traceCol);
 			else video.olPoint(x, y, traceCol);
 			prevX = x; prevY = y;
@@ -4503,8 +4554,8 @@ class SoundEditor : Window, Undoable {
 		// when the user has panned/zoomed past the trigger).
 		ubyte rst = song.instrumentTable[ins + 2 * 48];
 		int plotEndPx = g.plotX0px + g.plotWpx;
-		int preX0 = xForFrame(g, -prerollTicks);
-		int preX1 = xForFrame(g, 0);
+		int preX0 = viewport.xForFrame(g, -prerollTicks);
+		int preX1 = viewport.xForFrame(g, 0);
 		if(preX1 > preX0 && preX0 < plotEndPx && preX1 > g.plotX0px) {
 			video.olFillRect(preX0, topPx, preX1 - preX0, h, 16); // dim gradient wash
 			bool hard = (rst & 0xc0) == 0x80;
@@ -4569,7 +4620,7 @@ class SoundEditor : Window, Undoable {
 			dim = true;
 		}
 		int n = min(cast(int)cutoff.length, visFrames);
-		int lo, hi; visRange(n, lo, hi);       // §17.1 only emit on-screen frames
+		int lo, hi; viewport.visRange(n, lo, hi);       // §17.1 only emit on-screen frames
 
 		// R58 response silhouette on one absolute cutoff axis. LP fills below cutoff,
 		// BP is a fixed one-third-height centred ribbon, HP fills above cutoff, and
@@ -4581,8 +4632,8 @@ class SoundEditor : Window, Undoable {
 			FilterRegions regions = filterRegions(g, mode, cutoff[f]);
 			int fillCol = dim ? COL_DIMFILL : mc;
 			int traceCol = dim ? COL_DIM : COL_FILT_LINE;
-			int xa = xForFrame(g, f);
-			int xb = xForFrame(g, f + 1);
+			int xa = viewport.xForFrame(g, f);
+			int xb = viewport.xForFrame(g, f + 1);
 			if(xb <= xa) xb = xa + 1;
 			for(int x = xa; x < xb; x++) {
 				if(regions.lp) video.olVLine(x, regions.lpTop, regions.lpBottom, fillCol);
@@ -4600,8 +4651,8 @@ class SoundEditor : Window, Undoable {
 			int res = f < resA.length ? resA[f] : 0;
 			if(res < 0) res = 0; if(res > 15) res = 15;
 			int ry = botPx - res * h / 15;
-			int xa = xForFrame(g, f);
-			int xb = xForFrame(g, f + 1);
+			int xa = viewport.xForFrame(g, f);
+			int xb = viewport.xForFrame(g, f + 1);
 			if(xb <= xa) xb = xa + 1;
 			video.olHLine(xa, xb - 1, ry, rescol);              // level segment
 			if(prevY >= 0 && prevY != ry)
@@ -4639,12 +4690,12 @@ class SoundEditor : Window, Undoable {
 			}
 			if(hi <= lo) hi = lo + 1.0f;       // flat / silent: avoid divide-by-zero
 			int prevY = -1;
-			int flo, fhi; visRange(n, flo, fhi);   // §17.1 only emit on-screen frames
+			int flo, fhi; viewport.visRange(n, flo, fhi);   // §17.1 only emit on-screen frames
 			foreach(f; flo .. fhi) {
 				float l = fr[f] > 0 ? log2(cast(float)fr[f]) : lo;
 				int y = botPx - cast(int)lround((l - lo) / (hi - lo) * h);
-				int xa = xForFrame(g, f);
-				int xb = xForFrame(g, f + 1);
+				int xa = viewport.xForFrame(g, f);
+				int xb = viewport.xForFrame(g, f + 1);
 				if(xb <= xa) xb = xa + 1;
 				video.olHLine(xa, xb - 1, y, COL_FREQ_ABS);
 				if(prevY >= 0 && prevY != y)
@@ -4680,11 +4731,11 @@ class SoundEditor : Window, Undoable {
 			int topPx, int botPx, int n, int colour) {
 		int scale = freqBandScaleFrom(ins, s);
 		int prevY = -1;
-		int flo, fhi; visRange(n, flo, fhi);   // §17.1 only emit on-screen frames
+		int flo, fhi; viewport.visRange(n, flo, fhi);   // §17.1 only emit on-screen frames
 		foreach(f; flo .. fhi) {
 			int y = yForPitch(topPx, botPx, scale, s.transOf[f]);
-			int xa = xForFrame(g, f);
-			int xb = xForFrame(g, f + 1);
+			int xa = viewport.xForFrame(g, f);
+			int xb = viewport.xForFrame(g, f + 1);
 			if(xb <= xa) xb = xa + 1;
 			video.olHLine(xa, xb - 1, y, colour);                  // level segment
 			if(prevY >= 0 && prevY != y)
@@ -4729,11 +4780,11 @@ class SoundEditor : Window, Undoable {
 			video.olHLine(g.plotX0px, g.plotX0px + g.plotWpx - 1, ly, COL_AXIS);
 		}
 
-		int flo, fhi; visRange(n, flo, fhi);   // §17.1 only emit on-screen frames
+		int flo, fhi; viewport.visRange(n, flo, fhi);   // §17.1 only emit on-screen frames
 		foreach(f; flo .. fhi) {
 			int ctrl = ctrlA[f];
-			int xa = xForFrame(g, f);
-			int xb = xForFrame(g, f + 1);
+			int xa = viewport.xForFrame(g, f);
+			int xb = viewport.xForFrame(g, f + 1);
 			if(xb <= xa) xb = xa + 1;
 			foreach(li; 0 .. 8) {
 				int bit = 7 - li;
@@ -5036,13 +5087,13 @@ class SoundEditor : Window, Undoable {
 		if(hy < g.stackTopPx || hy >= g.stackBotPx) return;
 
 		// §17.1 Pixel -> nearest frame on the VIEWPORT axis, snapped + clamped to the note.
-		int f = cast(int)lround(tickForPixel(g, hx));
+		int f = cast(int)lround(viewport.tickForPixel(g, hx));
 		if(f < 0) f = 0;
 		if(f >= visFrames) f = visFrames - 1;
 		if(f < 0) f = 0;
 
 		// Dashed white probe line at that frame across the whole band stack.
-		int px = xForFrame(g, f);
+		int px = viewport.xForFrame(g, f);
 		for(int yy = g.stackTopPx; yy < g.stackBotPx; yy += 6) {
 			int ye = min(yy + 3, g.stackBotPx);
 			video.olVLine(px, yy, ye, COL_PROBE);
@@ -5387,8 +5438,8 @@ class SoundEditor : Window, Undoable {
 	// the selection is entirely off-view / absent.
 	private bool selectionPixels(ref Geo g, out int xa, out int xb) {
 		if(!hasSelection) return false;
-		xa = xForFrame(g, selStartTick);
-		xb = xForFrame(g, selEndTick);
+		xa = viewport.xForFrame(g, selStartTick);
+		xb = viewport.xForFrame(g, selEndTick);
 		if(xb < xa) { int t = xa; xa = xb; xb = t; }
 		if(xb <= xa) xb = xa + 1;
 		int pe = g.plotX0px + g.plotWpx;
@@ -5419,10 +5470,10 @@ class SoundEditor : Window, Undoable {
 	// boundaries are clearly visible over the graphs.
 	private void drawSelectionEdges(ref Geo g) {
 		if(!hasSelection) return;
-		if(frameInView(selStartTick))
-			video.olVLine(xForFrame(g, selStartTick), g.stackTopPx, g.stackBotPx, COL_SEL_EDGE);
-		if(frameInView(selEndTick))
-			video.olVLine(xForFrame(g, selEndTick), g.stackTopPx, g.stackBotPx, COL_SEL_EDGE);
+		if(viewport.frameInView(selStartTick))
+			video.olVLine(viewport.xForFrame(g, selStartTick), g.stackTopPx, g.stackBotPx, COL_SEL_EDGE);
+		if(viewport.frameInView(selEndTick))
+			video.olVLine(viewport.xForFrame(g, selEndTick), g.stackTopPx, g.stackBotPx, COL_SEL_EDGE);
 	}
 
 	// View controls plus a selected-program Stop action, left-to-right.
@@ -5493,10 +5544,10 @@ class SoundEditor : Window, Undoable {
 			if(config) { place(BTN_RESDEC); place(BTN_RESINC); }
 			else place(BTN_CARRY);
 		}
-		b[BTN_FIT].active = !userZoomed;
+		b[BTN_FIT].active = !viewport.userZoomed;
 		b[BTN_SEL].active = hasSelection
-			&& cast(int)lround(viewStartTick) == selStartTick
-			&& cast(int)lround(viewEndTick) == selEndTick;
+			&& cast(int)lround(viewport.startTick) == selStartTick
+			&& cast(int)lround(viewport.endTick) == selEndTick;
 		b[BTN_LINKED].active = debugOwnershipMode() == "linked";
 		if(b[BTN_STOP].enabled) {
 			auto k = sweepKind(selectedSweepTable);
@@ -5547,9 +5598,9 @@ class SoundEditor : Window, Undoable {
 	// §17.3 Perform a zoom button's action (fired on release over the pressed button).
 	private void activateZoomButton(int i) {
 		switch(i) {
-			case BTN_ZOOMOUT: zoomBy(2.0); break;             // [-] zoom out
-			case BTN_ZOOMIN:  zoomBy(0.5); break;             // [+] zoom in
-			case BTN_FIT:     userZoomed = false; fitViewport(); break;  // [Fit]
+			case BTN_ZOOMOUT: viewport.zoomBy(2.0, prerollTicks, contentMaxFrames); break;  // [-] zoom out
+			case BTN_ZOOMIN:  viewport.zoomBy(0.5, prerollTicks, contentMaxFrames); break;  // [+] zoom in
+			case BTN_FIT:     viewport.userZoomed = false; viewport.fit(prerollTicks, visFrames); break;  // [Fit]
 			case BTN_SEL:     zoomToSelection(); break;       // [Selection]
 			case BTN_ADD:
 				if(selectedSweepTable >= 0) sweepRowOp(selectedSweepTable, true);
@@ -5594,39 +5645,17 @@ class SoundEditor : Window, Undoable {
 			txt = format("sel %d-%d t  (~%.0f-%.0f ms, %d t)", a, e, ma, me, e - a);
 		} else {
 			txt = format("view %d-%d t   (drag to select)",
-				cast(int)lround(viewStartTick), cast(int)lround(viewEndTick));
+				cast(int)lround(viewport.startTick), cast(int)lround(viewport.endTick));
 		}
 		if(cast(int)txt.length > rw) txt = txt[0 .. rw];
 		screen.cprint(rx, g.controlRow, COL_CTRL, 0, txt);
 	}
 
-	// §17.3 Zoom the viewport about its centre by `factor` (>1 = zoom out, <1 = in),
-	// clamped. Marks the view as user-zoomed so it survives instrument changes until Fit.
-	private void zoomBy(double factor) {
-		double centre = (viewStartTick + viewEndTick) / 2.0;
-		double span = (viewEndTick - viewStartTick) * factor;
-		if(span < MIN_VIEW_SPAN) span = MIN_VIEW_SPAN;
-		viewStartTick = centre - span / 2.0;
-		viewEndTick = centre + span / 2.0;
-		userZoomed = true;
-		clampViewport();
-	}
-
-	// §17.3 Pan the viewport by `dticks` (keeping its span), clamped.
-	private void panBy(double dticks) {
-		viewStartTick += dticks;
-		viewEndTick += dticks;
-		userZoomed = true;
-		clampViewport();
-	}
-
-	// §17.3 Zoom the viewport to the current selection (no-op if none).
+	// §17.3 Zoom the viewport to the current selection (no-op if none). Thin
+	// wrapper so call sites don't need the `if(!hasSelection) return;` guard.
 	private void zoomToSelection() {
 		if(!hasSelection) return;
-		viewStartTick = selStartTick;
-		viewEndTick = selEndTick;
-		userZoomed = true;
-		clampViewport();
+		viewport.zoomToSelection(selStartTick, selEndTick, prerollTicks, contentMaxFrames);
 	}
 
 	// ---- §17.4 horizontal scrollbar ----
@@ -5648,8 +5677,8 @@ class SoundEditor : Window, Undoable {
 		scrollTrackCells(g, trackX0, trackW);
 		double full = cast(double)contentMaxFrames - (-prerollTicks);
 		if(full < 1e-6) full = 1;
-		double f0 = (viewStartTick - (-prerollTicks)) / full;
-		double f1 = (viewEndTick   - (-prerollTicks)) / full;
+		double f0 = (viewport.startTick - (-prerollTicks)) / full;
+		double f1 = (viewport.endTick   - (-prerollTicks)) / full;
 		if(f0 < 0) f0 = 0;
 		if(f1 > 1) f1 = 1;
 		x0 = trackX0 + cast(int)lround(f0 * trackW);
@@ -5695,7 +5724,7 @@ class SoundEditor : Window, Undoable {
 	// zoomed/scrolled-out release-tail region past the fitted note (§17.3).
 	private int snapPixelToTick(ref Geo g, int cellX) {
 		int px = cellX * FONT_X + FONT_X / 2;
-		int t = cast(int)lround(tickForPixel(g, px));
+		int t = cast(int)lround(viewport.tickForPixel(g, px));
 		if(t < -prerollTicks) t = -prerollTicks;
 		if(t > contentMaxFrames) t = contentMaxFrames;
 		return t;
@@ -5736,10 +5765,10 @@ class SoundEditor : Window, Undoable {
 			scrollThumbCells(g, tx0, tx1);
 			if(x >= tx0 && x < tx1) {                 // on the thumb -> drag to pan
 				scrollDragging = true;
-				scrollGrabOffset = scrollTickForCell(g, x) - viewStartTick;
+				scrollGrabOffset = scrollTickForCell(g, x) - viewport.startTick;
 			} else {                                  // on the track -> page one view width
-				double span = viewEndTick - viewStartTick;
-				panBy(x < tx0 ? -span : span);
+				double span = viewport.endTick - viewport.startTick;
+				viewport.panBy(x < tx0 ? -span : span, prerollTicks, contentMaxFrames);
 			}
 			return;
 		}
@@ -6096,12 +6125,12 @@ class SoundEditor : Window, Undoable {
 		// scrollbar drag only starts on the scroll row).
 		if(scrollDragging) {
 			Geo g = layout();
-			double span = viewEndTick - viewStartTick;
+			double span = viewport.endTick - viewport.startTick;
 			double ns = scrollTickForCell(g, x) - scrollGrabOffset;
-			viewStartTick = ns;
-			viewEndTick = ns + span;
-			userZoomed = true;
-			clampViewport();
+			viewport.startTick = ns;
+			viewport.endTick = ns + span;
+			viewport.userZoomed = true;
+			viewport.clamp(prerollTicks, contentMaxFrames);
 			return;
 		}
 		if(!selecting) return;
@@ -6356,14 +6385,18 @@ class SoundEditor : Window, Undoable {
 		// instead (view control moved off bare Left/Right). Letters/digits stay keyjam.
 		case SDLK_LEFT:
 			if(exact(false, false, false) && isEditableRow(paramCursor)) editSelected(ins, -1);
-			else if(exact(false, false, true)) panBy(-(viewEndTick - viewStartTick) / 4.0);
+			else if(exact(false, false, true))
+				viewport.panBy(-(viewport.endTick - viewport.startTick) / 4.0,
+					prerollTicks, contentMaxFrames);
 			return OK;
 		case SDLK_RIGHT:
 			if(exact(false, false, false) && isEditableRow(paramCursor)) editSelected(ins, +1);
-			else if(exact(false, false, true)) panBy((viewEndTick - viewStartTick) / 4.0);
+			else if(exact(false, false, true))
+				viewport.panBy((viewport.endTick - viewport.startTick) / 4.0,
+					prerollTicks, contentMaxFrames);
 			return OK;
 		case SDLK_HOME:
-			if(exact(false, false, false)) { userZoomed = false; fitViewport(); }
+			if(exact(false, false, false)) { viewport.userZoomed = false; viewport.fit(prerollTicks, visFrames); }
 			return OK;
 		case SDLK_END:
 			if(exact(false, false, false)) zoomToSelection();
