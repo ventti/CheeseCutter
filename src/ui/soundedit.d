@@ -464,11 +464,14 @@ class SoundEditor : Window, Undoable {
 	// program, its end marker) drags the program's loop-BACK point. sweepLoopCloseRow =
 	// the row whose b3 jump we rewrite (the loop-closing / terminal row); dragging sets it
 	// to the SweepTable row active at the dragged frame (converting a $7f stop into a loop
-	// if needed). sweepLoopMoved gates the ONE undo snapshot per gesture (first drag tick).
-	private bool sweepLoopDragging = false;
-	private int  sweepLoopTable = -1;
-	private int  sweepLoopCloseRow = -1;
-	private bool sweepLoopMoved = false;
+	// if needed). moved gates the ONE undo snapshot per gesture (first drag tick).
+	private final class SweepLoopDrag : DragGesture {
+		int table, closeRow;
+		this(int t, int cr) { table = t; closeRow = cr; }
+		override bool onFirstMotion() { return beginSweepDragMutation(table, clampedIns()); }
+		override void update(ref Geo g, int x, int y) { sweepLoopDragUpdate(g, x, table, closeRow); }
+		override void remapRows() { closeRow = remapForkedSweepRow(closeRow); }
+	}
 
 	// §20 P4b-3 filter RESONANCE drag: a vertical grab on the resonance overlay line in
 	// the Filter band (band 4) rewrites the b1 HIGH nibble (res 0..15, low nibble =
@@ -3106,7 +3109,6 @@ class SoundEditor : Window, Undoable {
 			if(!forkSweepProgram(table, ins)) return false;
 			// Selection is remapped by forkSweepProgram; remap every in-flight handle.
 			if(activeGesture) activeGesture.remapRows();
-			sweepLoopCloseRow = remapForkedSweepRow(sweepLoopCloseRow);
 			sweepResRow = remapForkedSweepRow(sweepResRow);
 			sweepResTargetRow = remapForkedSweepRow(sweepResTargetRow);
 			sweepEndRow = remapForkedSweepRow(sweepEndRow);
@@ -3526,8 +3528,7 @@ class SoundEditor : Window, Undoable {
 	// and set the loop-closing row's b3 jump to that row (the new loop-start). Converts a
 	// $7f stop into a loop. The band + loop line follow live from the byte (WYSIWYG). No
 	// undo/re-trigger here — snapshot is at the first drag tick, re-trigger at release.
-	private void sweepLoopDragUpdate(ref Geo g, int cellx) {
-		int table = sweepLoopTable;
+	private void sweepLoopDragUpdate(ref Geo g, int cellx, int table, int sweepLoopCloseRow) {
 		if(sweepLoopCloseRow < 0 || sweepLoopCloseRow >= 0x40) return;
 		int px = cellx * FONT_X + FONT_X / 2;
 		int f = cast(int)lround(viewport.tickForPixel(g, px));
@@ -5940,10 +5941,7 @@ class SoundEditor : Window, Undoable {
 			int lc = sweepLoopHandleAt(loopTable, g, x, y);
 			if(lc >= 0) {
 				clickWasButton = true;
-				sweepLoopDragging = true;
-				sweepLoopTable = loopTable;
-				sweepLoopCloseRow = lc;
-				sweepLoopMoved = false;
+				activeGesture = new SweepLoopDrag(loopTable, lc);
 				return;
 			}
 		}
@@ -6009,10 +6007,7 @@ class SoundEditor : Window, Undoable {
 			int lc = sweepLoopHandleAt(sb, g, x, y);
 			if(lc >= 0) {
 				clickWasButton = true;   // this press never starts/clears a selection
-				sweepLoopDragging = true;
-				sweepLoopTable = sb;
-				sweepLoopCloseRow = lc;
-				sweepLoopMoved = false;
+				activeGesture = new SweepLoopDrag(sb, lc);
 				return;
 			}
 			int row = sweepRowAtPress(sb, g, x);
@@ -6069,20 +6064,6 @@ class SoundEditor : Window, Undoable {
 				activeGesture.moved = true;
 			}
 			activeGesture.update(g, x, y);
-			return;
-		}
-		// §20 P4b-2 loop-marker drag: first motion resolves ownership atomically, then
-		// rewrites the loop-closing row's b3 every tick.
-		if(sweepLoopDragging) {
-			Geo g = layout();
-			if(!sweepLoopMoved) {
-				if(!beginSweepDragMutation(sweepLoopTable, ins)) {
-					sweepLoopDragging = false; sweepLoopTable = -1; sweepLoopCloseRow = -1;
-					return;
-				}
-				sweepLoopMoved = true;
-			}
-			sweepLoopDragUpdate(g, x);
 			return;
 		}
 		// §20 P4b-3 filter RESONANCE drag: first motion resolves ownership and takes one
@@ -6222,16 +6203,6 @@ class SoundEditor : Window, Undoable {
 			clickWasButton = false;
 			if(activeGesture.moved && activeGesture.retriggersOnMove()) retriggerIfSounding();
 			activeGesture = null;
-			return;
-		}
-		// §20 P4b-2 end a loop-marker drag: make the new loop audible once if a note is held.
-		if(sweepLoopDragging) {
-			sweepLoopDragging = false;
-			sweepLoopTable = -1;
-			sweepLoopCloseRow = -1;
-			clickWasButton = false;
-			if(sweepLoopMoved) retriggerIfSounding();
-			sweepLoopMoved = false;
 			return;
 		}
 		// §20 P4b-3 end a filter RESONANCE drag: make the new resonance audible once if a
