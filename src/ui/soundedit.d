@@ -694,8 +694,9 @@ class SoundEditor : Window, Undoable {
 		if(table < 0 || table > 1) return result;
 		Geo g = layout();
 		int ins = clampedIns();
-		int start = song.instrumentTable[ins + (table == 0 ? 5 : 4) * 48];
-		SweepSim sim = table == 0 ? simPulse(start) : simFilter(start);
+		auto k = sweepKind(table);
+		int start = song.instrumentTable[ins + k.insCol * 48];
+		SweepSim sim = sweepSim(k, start);
 		auto shape = sweepLoopGeometry(table, g, sim);
 		result.looped = shape.looped; result.stopped = shape.stopped;
 		result.startVisible = shape.startVisible; result.endVisible = shape.endVisible;
@@ -934,6 +935,41 @@ class SoundEditor : Window, Undoable {
 		bool startVisible, endVisible;
 		int startLeft, startRight, endLeft, endRight;
 		int top, bottom;
+	}
+
+	// A sweep "table" is an int: 0 = pulse, 1 = filter. The pulse/filter code paths
+	// share almost all of their shape and differ only in these per-kind constants;
+	// this resolves them ONCE instead of scattering `table == 0 ? ... : ...`
+	// ternaries through every method.
+	private struct SweepKind {
+		bool isFilter;
+		int insCol;    // instrumentTable column: pulse 5, filter 4
+		int band;      // stack band index: pulse 3, filter 4
+		int maxVal;    // pulse 4095, filter 2047
+		int modulus;   // pulse 4096, filter 2048
+		int scale;     // pulse 1, filter 2
+		int mask;      // pulse 0xfff, filter 0x7ff
+		int maxSlope;  // pulse 255, filter 127
+		int minSlope;  // pulse -255, filter -128
+		string name;   // "Pulse" / "Filter"
+		// The live SweepTable data, mutable (same underlying array song.pulseTable/
+		// filterTable already alias) so callers can read AND write through it exactly
+		// as the old `table == 0 ? song.pulseTable : song.filterTable` ternary did.
+		ubyte[] table() { return isFilter ? song.filterTable : song.pulseTable; }
+		int seekTableEnd() {
+			return isFilter ? song.tFilter.seekTableEnd() : song.tPulse.seekTableEnd();
+		}
+	}
+	// `table` must be provably 0 or 1 here — sentinels like -1 are not valid input.
+	private static SweepKind sweepKind(int table) {
+		return table == 0
+			? SweepKind(false, 5, 3, 4095, 4096, 1, 0xfff, 255, -255, "Pulse")
+			: SweepKind(true,  4, 4, 2047, 2048, 2, 0x7ff, 127, -128, "Filter");
+	}
+	// simPulse/simFilter are instance methods (they read other instance state), so
+	// this small dispatcher lives on the class rather than as a SweepKind method.
+	private SweepSim sweepSim(SweepKind k, int startRow) {
+		return k.isFilter ? simFilter(startRow) : simPulse(startRow);
 	}
 
 	// Memoized layout() result. layout() is a pure function of `area` (x/y/width/
@@ -1450,7 +1486,7 @@ class SoundEditor : Window, Undoable {
 
 	private SweepLoopGeometry sweepLoopGeometry(int table, ref Geo g, ref SweepSim s) {
 		SweepLoopGeometry result;
-		int band = table == 0 ? 3 : 4;
+		int band = sweepKind(table).band;
 		int topPx, botPx; bandBox(g, band, topPx, botPx);
 		result.top = topPx;
 		result.bottom = min(botPx, topPx + FONT_Y);
@@ -1689,13 +1725,14 @@ class SoundEditor : Window, Undoable {
 		string hint = "L/R edit  Shift+L/R pan";
 		int hintCol = COL_LABEL;
 		if(selectedSweepTable >= 0 && selectedSweepRow >= 1) {
-			string kind = selectedSweepTable == 0 ? "Pulse" : "Filter";
+			auto selK = sweepKind(selectedSweepTable);
+			string kind = selK.name;
 			if(sweepMultiSelected())
 				hint = format("%s $%02X-$%02X: drag joins", kind,
 					selectedSweepRow, selectedSweepRowEnd);
 			else {
-				ubyte[] t = selectedSweepTable == 0 ? song.pulseTable : song.filterTable;
-				if(selectedSweepTable == 1 && (t[selectedSweepRow * 4] & 0x80)) {
+				ubyte[] t = selK.table;
+				if(selK.isFilter && (t[selectedSweepRow * 4] & 0x80)) {
 					int cfgMode = t[selectedSweepRow * 4] & 0x70;
 					int cfgRes = t[selectedSweepRow * 4 + 1] >> 4;
 					int cfgMask = t[selectedSweepRow * 4 + 1] & 0x0f;
@@ -1731,7 +1768,7 @@ class SoundEditor : Window, Undoable {
 			} else {
 			int ht, hr;
 			if(hoverSweepStep(g, ht, hr)) {
-				hint = format("%s $%02X: drag edge / inside", ht == 0 ? "Pulse" : "Filter", hr);
+				hint = format("%s $%02X: drag edge / inside", sweepKind(ht).name, hr);
 				hintCol = COL_VALUE;
 			} else {
 				int py = hoverCellY * FONT_Y + FONT_Y / 2;
@@ -2817,12 +2854,12 @@ class SoundEditor : Window, Undoable {
 	}
 
 	private bool createSweepProgram(int table, int ins, int clickedValue) {
-		int base = table == 0 ? song.tPulse.seekTableEnd() : song.tFilter.seekTableEnd();
+		auto k = sweepKind(table);
+		int base = k.seekTableEnd();
 		if(base < 1) base = 1; // row 0 is the player's inert/stop sentinel
 		// Match the backend's instrument-import guard: keep row 63 as spare/sentinel.
 		if(base > 0x3e) {
-			UI.statusline.display(format("%s table full - cannot create program.",
-				table == 0 ? "Pulse" : "Filter"));
+			UI.statusline.display(format("%s table full - cannot create program.", k.name));
 			return false;
 		}
 		snapshotAllTables(true);
@@ -2858,9 +2895,8 @@ class SoundEditor : Window, Undoable {
 		int f = cast(int)lround(tickForPixel(g, px));
 		if(f < 0) f = 0;
 		int ins = clampedIns();
-		SweepSim s = (table == 0)
-			? simPulse(song.instrumentTable[ins + 5 * 48])
-			: simFilter(song.instrumentTable[ins + 4 * 48]);
+		auto k = sweepKind(table);
+		SweepSim s = sweepSim(k, song.instrumentTable[ins + k.insCol * 48]);
 		if(s.rowOf.length == 0) return -1;
 		// A stopped program has genuine empty space after its final frame. Do not clamp
 		// arbitrary clicks in that space onto the last row. But a one-frame filter CONFIG
@@ -2883,7 +2919,7 @@ class SoundEditor : Window, Undoable {
 	private bool[0x40] sweepProgramRows(int table, int startRow) {
 		bool[0x40] rows;
 		if(startRow <= 0 || startRow >= 0x40) return rows;
-		const(ubyte)[] t = (table == 0) ? song.pulseTable : song.filterTable;
+		const(ubyte)[] t = sweepKind(table).table;
 		int row = startRow;
 		while(row >= 0 && row < 0x40 && !rows[row]) {
 			rows[row] = true;
@@ -2898,7 +2934,7 @@ class SoundEditor : Window, Undoable {
 	// True if this instrument's program shares ANY row with another instrument's program
 	// in the same table (walk all 48 pointer bytes + their chains). §20.2 sharing check.
 	private bool sweepProgramShared(int table, int ins) {
-		int col = (table == 0) ? 5 : 4;
+		int col = sweepKind(table).insCol;
 		bool[0x40] mine = sweepProgramRows(table, song.instrumentTable[ins + col * 48]);
 		bool any = false;
 		foreach(r; mine) if(r) { any = true; break; }
@@ -2916,19 +2952,19 @@ class SoundEditor : Window, Undoable {
 	// ONLY this instrument. Snapshots ALL tables + insLabels for undo (pointer shifts).
 	// Returns false (no mutation) if the sweep table can't fit the copy — never corrupts.
 	private bool forkSweepProgram(int table, int ins) {
-		int col = (table == 0) ? 5 : 4;
-		ubyte[] t = (table == 0) ? song.pulseTable : song.filterTable;
+		auto k = sweepKind(table);
+		int col = k.insCol;
+		ubyte[] t = k.table;
 		int startRow = song.instrumentTable[ins + col * 48];
 		bool[0x40] mine = sweepProgramRows(table, startRow);
 		int[] rows;
 		foreach(r; 0 .. 0x40) if(mine[r]) rows ~= r;
 		int count = cast(int)rows.length;
 		if(count == 0) return false;
-		int base = (table == 0) ? song.tPulse.seekTableEnd() : song.tFilter.seekTableEnd();
+		int base = k.seekTableEnd();
 		// Capacity: mirror insertInstrument's guard (data length 256 bytes - 4 => row 63).
 		if(base + count > 0x3f) {
-			UI.statusline.display(format("%s table full - cannot fork program.",
-				table == 0 ? "Pulse" : "Filter"));
+			UI.statusline.display(format("%s table full - cannot fork program.", k.name));
 			return false;
 		}
 		snapshotAllTables(true);
@@ -2992,8 +3028,9 @@ class SoundEditor : Window, Undoable {
 	// 0..2047 >> 3). The band redraws live from the byte (WYSIWYG). No undo/re-trigger
 	// here — the gesture snapshot is at the first drag tick, the re-trigger at release.
 	private void sweepLevelDragUpdate(ref Geo g, int celly) {
-		int band = (sweepTable == 0) ? 3 : 4;
-		int maxVal = (sweepTable == 0) ? 4095 : 2047;
+		auto k = sweepKind(sweepTable);
+		int band = k.band;
+		int maxVal = k.maxVal;
 		int topPx, botPx; bandBox(g, band, topPx, botPx);
 		int h = botPx - topPx; if(h < 1) h = 1;
 		// Exact mouse pixel, not the cell centre: these bands are ~5 character rows tall,
@@ -3332,7 +3369,7 @@ class SoundEditor : Window, Undoable {
 	// the program is empty (fixed/off pointer).
 	private int sweepCloseRow(int table, int startRow) {
 		if(startRow <= 0 || startRow >= 0x40) return -1;
-		const(ubyte)[] t = (table == 0) ? song.pulseTable : song.filterTable;
+		const(ubyte)[] t = sweepKind(table).table;
 		bool[0x40] visited;
 		int row = startRow, guard = 0;
 		while(row >= 0 && row < 0x40 && guard++ < 0x80) {
@@ -3353,7 +3390,7 @@ class SoundEditor : Window, Undoable {
 	// shifts every row down one and drops the last) would lose it. Guards Ins so a full
 	// table shows a status message instead of silently corrupting the program.
 	private bool sweepTableFull(int table) {
-		const(ubyte)[] t = (table == 0) ? song.pulseTable : song.filterTable;
+		const(ubyte)[] t = sweepKind(table).table;
 		int b = 0x3f * 4;
 		return t[b] != 0 || t[b + 1] != 0 || t[b + 2] != 0 || t[b + 3] != 0;
 	}
@@ -3368,11 +3405,11 @@ class SoundEditor : Window, Undoable {
 		int cellTop = y * FONT_Y, cellBottom = cellTop + FONT_Y;
 		if(cellRight <= g.plotX0px || cellLeft >= g.plotX0px + g.plotWpx) return -1;
 		int ins = clampedIns();
-		int col = (table == 0) ? 5 : 4;
-		int startRow = song.instrumentTable[ins + col * 48];
+		auto k = sweepKind(table);
+		int startRow = song.instrumentTable[ins + k.insCol * 48];
 		int closeRow = sweepCloseRow(table, startRow);
 		if(closeRow < 0) return -1;
-		SweepSim s = (table == 0) ? simPulse(startRow) : simFilter(startRow);
+		SweepSim s = sweepSim(k, startRow);
 		auto shape = sweepLoopGeometry(table, g, s);
 		if(cellBottom <= shape.top || cellTop >= shape.bottom) return -1;
 		bool hitsStart = shape.startVisible && cellRight > shape.startLeft
@@ -3394,14 +3431,14 @@ class SoundEditor : Window, Undoable {
 		int f = cast(int)lround(tickForPixel(g, px));
 		if(f < 0) f = 0;
 		int ins = clampedIns();
-		int col = (table == 0) ? 5 : 4;
-		int startRow = song.instrumentTable[ins + col * 48];
-		SweepSim s = (table == 0) ? simPulse(startRow) : simFilter(startRow);
+		auto k = sweepKind(table);
+		int startRow = song.instrumentTable[ins + k.insCol * 48];
+		SweepSim s = sweepSim(k, startRow);
 		if(s.rowOf.length == 0) return;
 		if(f >= cast(int)s.rowOf.length) f = cast(int)s.rowOf.length - 1;
 		int target = s.rowOf[f];
 		if(target < 0 || target > 0x3f) return;
-		ubyte[] t = (table == 0) ? song.pulseTable : song.filterTable;
+		ubyte[] t = k.table;
 		t[sweepLoopCloseRow * 4 + 3] = cast(ubyte)target;
 	}
 
@@ -3414,7 +3451,7 @@ class SoundEditor : Window, Undoable {
 		if(selectedSweepRow < 0 || selectedSweepRow >= 0x40) return;
 		if(insert && sweepTableFull(table)) {
 			UI.statusline.display(format("%s table full - cannot insert step.",
-				table == 0 ? "Pulse" : "Filter"));
+				sweepKind(table).name));
 			return;
 		}
 		if(!beginSweepDiscreteMutation(table, ins, true)) return;
@@ -3447,7 +3484,8 @@ class SoundEditor : Window, Undoable {
 	private void doSweepRowOp(int table, bool insert) {
 		int sel = selectedSweepRow;
 		if(sel < 0 || sel >= 0x40) return;
-		ubyte[] t = (table == 0) ? song.pulseTable : song.filterTable;
+		auto k = sweepKind(table);
+		ubyte[] t = k.table;
 		if(insert) {
 			int logicalCfg, logicalSweep;
 			if(table == 1 && filterLogicalBlockAt(clampedIns(), sel,
@@ -3557,7 +3595,7 @@ class SoundEditor : Window, Undoable {
 			// addresses. Removing a target contracts to its successor; removing the sole
 			// self-loop converts the preceding block to END, never to an expanded loop.
 			int insBefore = clampedIns();
-			int colBefore = table == 0 ? 5 : 4;
+			int colBefore = k.insCol;
 			int closeBefore = sweepCloseRow(table,
 				song.instrumentTable[insBefore + colBefore * 48]);
 			int targetBefore = closeBefore >= 0 ? t[closeBefore * 4 + 3] : -1;
@@ -3590,8 +3628,7 @@ class SoundEditor : Window, Undoable {
 			}
 			// Move the selection to an adjacent row still inside the (shifted) program.
 			int ins = clampedIns();
-			int col = (table == 0) ? 5 : 4;
-			int startRow = song.instrumentTable[ins + col * 48];
+			int startRow = song.instrumentTable[ins + k.insCol * 48];
 			bool[0x40] rows = sweepProgramRows(table, startRow);
 			int pick = -1;
 			if(sel - 1 >= 0 && rows[sel - 1]) pick = sel - 1;
@@ -3615,10 +3652,10 @@ class SoundEditor : Window, Undoable {
 		doStopSweepProgram(table, ins);
 	}
 	private void doStopSweepProgram(int table, int ins) {
-		int col = table == 0 ? 5 : 4;
-		int close = sweepCloseRow(table, song.instrumentTable[ins + col * 48]);
+		auto k = sweepKind(table);
+		int close = sweepCloseRow(table, song.instrumentTable[ins + k.insCol * 48]);
 		if(close < 0) return;
-		ubyte[] t = table == 0 ? song.pulseTable : song.filterTable;
+		ubyte[] t = k.table;
 		if(t[close * 4 + 3] == 0x7f) return;
 		t[close * 4 + 3] = 0x7f;
 		retriggerIfSounding();
@@ -3668,7 +3705,7 @@ class SoundEditor : Window, Undoable {
 	private void doToggleSelectedSweepCarry() {
 		int table = selectedSweepTable, row = selectedSweepRow;
 		if(table < 0 || row < 1) return;
-		ubyte[] t = table == 0 ? song.pulseTable : song.filterTable;
+		ubyte[] t = sweepKind(table).table;
 		if(t[row * 4 + 2] == 0xff)
 			t[row * 4 + 2] = encodeInitB2(table, sweepStepEnterVal(table, row));
 		else
@@ -3686,9 +3723,9 @@ class SoundEditor : Window, Undoable {
 	// §21 P4c(v3) the program's distinct step rows in playback (chain) order — the basis for
 	// "consecutive blocks": a multi-selection is a contiguous slice of this list.
 	private int[] sweepProgramSteps(int table, int ins) {
-		int col = (table == 0) ? 5 : 4;
-		int startRow = song.instrumentTable[ins + col * 48];
-		SweepSim s = (table == 0) ? simPulse(startRow) : simFilter(startRow);
+		auto k = sweepKind(table);
+		int startRow = song.instrumentTable[ins + k.insCol * 48];
+		SweepSim s = sweepSim(k, startRow);
 		int[] steps; bool[0x40] seen;
 		foreach(r; s.rowOf)
 			if(r >= 1 && r < 0x40 && !seen[r]) { seen[r] = true; steps ~= r; }
@@ -3725,7 +3762,7 @@ class SoundEditor : Window, Undoable {
 		xa = a;
 		if(!sweepStepGeom(selectedSweepTable, ins, range[$ - 1], g, f0, f1, a, b, s0, s1)) return false;
 		xb = b;
-		band = (selectedSweepTable == 0) ? 3 : 4;
+		band = sweepKind(selectedSweepTable).band;
 		return true;
 	}
 
@@ -3768,7 +3805,7 @@ class SoundEditor : Window, Undoable {
 	// deliberately checks every visible block so a shared boundary consistently owns
 	// the block on its left. The whole band height is active.
 	private int sweepDurationRowAtPress(int table, int ins, ref Geo g, int x, int y) {
-		int band = table == 0 ? 3 : 4;
+		int band = sweepKind(table).band;
 		int px = x * FONT_X + FONT_X / 2, py = y * FONT_Y + FONT_Y / 2;
 		bool inBand = py >= g.bandTopPx[band] && py < g.bandTopPx[band + 1];
 		if(table == 1 && y == g.bandTopPx[4] / FONT_Y) {
@@ -3800,9 +3837,9 @@ class SoundEditor : Window, Undoable {
 			out int f0, out int f1, out int xa, out int xb, out int syStart, out int syEnd) {
 		f0 = f1 = xa = xb = syStart = syEnd = 0;
 		if(row < 1 || row >= 0x40) return false;
-		int col = (table == 0) ? 5 : 4;
-		int startRow = song.instrumentTable[ins + col * 48];
-		SweepSim s = (table == 0) ? simPulse(startRow) : simFilter(startRow);
+		auto k = sweepKind(table);
+		int startRow = song.instrumentTable[ins + k.insCol * 48];
+		SweepSim s = sweepSim(k, startRow);
 		int a = -1, b = -1;
 		foreach(f, r; s.rowOf) {
 			if(r == row) { if(a < 0) a = cast(int)f; b = cast(int)f + 1; }
@@ -3810,8 +3847,8 @@ class SoundEditor : Window, Undoable {
 		}
 		if(a < 0 || b > cast(int)s.val.length) return false;
 		f0 = a; f1 = b;
-		int band = (table == 0) ? 3 : 4;
-		int maxVal = (table == 0) ? 4095 : 2047;
+		int band = k.band;
+		int maxVal = k.maxVal;
 		int topPx, botPx; bandBox(g, band, topPx, botPx);
 		int h = botPx - topPx; if(h < 1) h = 1;
 		xa = xForFrame(g, f0); xb = xForFrame(g, f1);
@@ -3936,7 +3973,7 @@ class SoundEditor : Window, Undoable {
 			if(hoverSweepStep(g, ht, hr) && !(ht == selectedSweepTable && hr == selectedSweepRow)) {
 				int a, b, xa, xb, s0, s1;
 				if(sweepStepGeom(ht, ins, hr, g, a, b, xa, xb, s0, s1)) {
-					int bd = (ht == 0) ? 3 : 4;
+					int bd = sweepKind(ht).band;
 					int tp, bp; bandBox(g, bd, tp, bp);
 					video.olRect(xa, tp, xb - xa, bp - tp, COL_BOX_IDLE);
 				}
@@ -3964,7 +4001,7 @@ class SoundEditor : Window, Undoable {
 		if((t != 0 && t != 1) || r < 1 || r >= 0x40) return;
 		int f0, f1, xa, xb, syS, syE;
 		if(!sweepStepGeom(t, ins, r, g, f0, f1, xa, xb, syS, syE)) return;
-		int band = (t == 0) ? 3 : 4;
+		int band = sweepKind(t).band;
 		int topPx, botPx; bandBox(g, band, topPx, botPx);
 		video.olRect(xa, topPx, xb - xa, botPx - topPx, COL_STEPSEL);   // selected outline
 		bool inY = hy >= topPx && hy < botPx;
@@ -4009,7 +4046,7 @@ class SoundEditor : Window, Undoable {
 		int width = nearestDurationWidth(g, sweepDurAnchorF, pointerPx);
 		sweepDurUnitClipped = durationRows && trackStepTicks() > 0x80;
 		int field = clampInt(width - 1, 0, 0x7f);
-		ubyte[] t = (sweepDurTable == 0) ? song.pulseTable : song.filterTable;
+		ubyte[] t = sweepKind(sweepDurTable).table;
 		ubyte b0 = t[sweepDurRow * 4];
 		t[sweepDurRow * 4] = cast(ubyte)((b0 & 0x80) | field);
 		// Duration edits preserve the endpoint the user saw when grabbing the edge.
@@ -4018,7 +4055,7 @@ class SoundEditor : Window, Undoable {
 		if(sweepDurTable == 0 || sweepDurTable == 1) {
 			int enter = sweepStepEnterVal(sweepDurTable, sweepDurRow);
 			int applications = sweepRampApplications(sweepDurTable, sweepDurRow);
-			int scale = sweepDurTable == 0 ? 1 : 2;
+			int scale = sweepKind(sweepDurTable).scale;
 			int divisor = max(1, applications * scale);
 			int requestedSlope = cast(int)lround(
 				cast(double)(sweepDurTargetExit - enter) / divisor);
@@ -4033,13 +4070,13 @@ class SoundEditor : Window, Undoable {
 	// else the value carried over from the previous frame (read from the sim). Used to
 	// pivot the END-endpoint tilt around a fixed start.
 	private int sweepStepEnterVal(int table, int row) {
-		const(ubyte)[] t = (table == 0) ? song.pulseTable : song.filterTable;
+		auto k = sweepKind(table);
+		const(ubyte)[] t = k.table;
 		ubyte b2 = t[row * 4 + 2];
 		if(b2 != 0xff) return (table == 0) ? (((b2 & 0x0f) << 8) | (b2 & 0xf0)) : (b2 << 3);
 		int ins = clampedIns();
-		int col = (table == 0) ? 5 : 4;
-		int startRow = song.instrumentTable[ins + col * 48];
-		SweepSim s = (table == 0) ? simPulse(startRow) : simFilter(startRow);
+		int startRow = song.instrumentTable[ins + k.insCol * 48];
+		SweepSim s = sweepSim(k, startRow);
 		int f0 = -1;
 		foreach(f, r; s.rowOf) if(r == row) { f0 = cast(int)f; break; }
 		if(f0 <= 0) return (table == 0) ? 0x800 : 0;
@@ -4053,7 +4090,7 @@ class SoundEditor : Window, Undoable {
 		return abs(px - hx) <= BOX_HIT_PX && abs(py - hy) <= FONT_Y - 2;
 	}
 	private static bool nearSweepHandle(int table, int px, int py, int hx, int hy) {
-		int yr = table == 1 ? FONT_Y / 2 + 1 : FONT_Y - 2;
+		int yr = sweepKind(table).isFilter ? FONT_Y / 2 + 1 : FONT_Y - 2;
 		return abs(px - hx) <= BOX_HIT_PX && abs(py - hy) <= yr;
 	}
 
@@ -4068,25 +4105,26 @@ class SoundEditor : Window, Undoable {
 	}
 
 	private int sweepSignedSlope(int table, int row) {
-		const(ubyte)[] t = table == 0 ? song.pulseTable : song.filterTable;
+		const(ubyte)[] t = sweepKind(table).table;
 		if(table == 0) return (t[row * 4] & 0x80) ? -t[row * 4 + 1] : t[row * 4 + 1];
 		int raw = t[row * 4 + 1];
 		return raw < 0x80 ? raw : raw - 0x100;
 	}
 	private int sweepRampApplications(int table, int row) {
-		int n = ((table == 0 ? song.pulseTable : song.filterTable)[row * 4] & 0x7f);
+		int n = (sweepKind(table).table[row * 4] & 0x7f);
 		return table == 0 ? n + 1 : n;
 	}
 	private int sweepStepWinding(int table, int row) {
-		int modulus = table == 0 ? 4096 : 2048;
-		int scale = table == 0 ? 1 : 2;
+		auto k = sweepKind(table);
+		int modulus = k.modulus;
+		int scale = k.scale;
 		int exit = sweepStepEnterVal(table, row)
 			+ sweepSignedSlope(table, row) * scale * sweepRampApplications(table, row);
 		int visible = exit % modulus; if(visible < 0) visible += modulus;
 		return exit - visible;
 	}
 	private void setSweepSignedSlope(int table, int row, int slope) {
-		ubyte[] t = table == 0 ? song.pulseTable : song.filterTable;
+		ubyte[] t = sweepKind(table).table;
 		if(table == 0) {
 			slope = clampInt(slope, -255, 255);
 			t[row * 4] = cast(ubyte)((t[row * 4] & 0x7f) | (slope < 0 ? 0x80 : 0));
@@ -4099,7 +4137,7 @@ class SoundEditor : Window, Undoable {
 
 	// §21 P4c set a step's START value = its init byte b2 (avoids the 0xff inherit sentinel).
 	private void setStepStartValue(int table, int row, int v) {
-		ubyte[] t = (table == 0) ? song.pulseTable : song.filterTable;
+		ubyte[] t = sweepKind(table).table;
 		if(row < 1 || row >= 0x40) return;
 		t[row * 4 + 2] = encodeInitB2(table, v);
 	}
@@ -4108,7 +4146,7 @@ class SoundEditor : Window, Undoable {
 	// entering + ramp == v, keeping the entering value fixed (a tilt). Sweep rows only.
 	private void setStepEndValue(int table, int row, int v) {
 		if(!sweepRowResizable(table, row)) return;
-		ubyte[] t = (table == 0) ? song.pulseTable : song.filterTable;
+		ubyte[] t = sweepKind(table).table;
 		int entering = sweepStepEnterVal(table, row);
 		ubyte b0 = t[row * 4];
 		// `v` is deliberately UNWRAPPED for endpoint drags. Keeping its winding avoids
@@ -4129,8 +4167,9 @@ class SoundEditor : Window, Undoable {
 	// Map a cell row to a band value (0..maxVal), inverting the band's Y axis.
 	private int sweepValueForCell(int table, ref Geo g, int celly, int row = -1) {
 		if(table == 1 && row >= 1) return filterCutoffValue(g, celly);
-		int band = (table == 0) ? 3 : 4;
-		int maxVal = (table == 0) ? 4095 : 2047;
+		auto k = sweepKind(table);
+		int band = k.band;
+		int maxVal = k.maxVal;
 		int topPx, botPx; bandBox(g, band, topPx, botPx);
 		int h = botPx - topPx; if(h < 1) h = 1;
 		int py = celly * FONT_Y + FONT_Y / 2;
@@ -4138,8 +4177,9 @@ class SoundEditor : Window, Undoable {
 	}
 	private int sweepUnwrappedValueForCell(int table, ref Geo g, int celly, int row = -1) {
 		if(table == 1 && row >= 1) return filterCutoffValue(g, celly, false);
-		int band = table == 0 ? 3 : 4;
-		int maxVal = table == 0 ? 4095 : 2047;
+		auto k = sweepKind(table);
+		int band = k.band;
+		int maxVal = k.maxVal;
 		int topPx, botPx; bandBox(g, band, topPx, botPx);
 		int py = celly * FONT_Y + FONT_Y / 2;
 		if(table == 0) {
@@ -4162,12 +4202,13 @@ class SoundEditor : Window, Undoable {
 			if(SDL_GetModState() & KMOD_SHIFT) {
 				// Fine endpoint position is ambiguous once a ramp winds. Shift maps the
 				// full band directly onto the complete signed speed range.
-				int band = sweepEndTable == 0 ? 3 : 4;
+				auto k = sweepKind(sweepEndTable);
+				int band = k.band;
 				int topPx, botPx; bandBox(g, band, topPx, botPx);
 				int h = botPx - topPx; if(h < 1) h = 1;
 				int py = celly * FONT_Y + FONT_Y / 2;
-				int maxSlope = sweepEndTable == 0 ? 255 : 127;
-				int minSlope = sweepEndTable == 0 ? -255 : -128;
+				int maxSlope = k.maxSlope;
+				int minSlope = k.minSlope;
 				int slope = maxSlope - cast(int)lround(cast(double)(py - topPx)
 					* (maxSlope - minSlope) / h);
 				setSweepSignedSlope(sweepEndTable, sweepEndRow, slope);
@@ -4209,8 +4250,9 @@ class SoundEditor : Window, Undoable {
 			UI.statusline.display("Increase this filter step's duration before editing its end.");
 			return;
 		}
-		ubyte[] t = table == 0 ? song.pulseTable : song.filterTable;
-		int modulus = table == 0 ? 4096 : 2048;
+		auto k = sweepKind(table);
+		ubyte[] t = k.table;
+		int modulus = k.modulus;
 		int unit = table == 0 ? 16 : (field == 1 ? 2 : 8);
 		final switch(field) {
 			case 0:
@@ -5457,15 +5499,14 @@ class SoundEditor : Window, Undoable {
 			&& cast(int)lround(viewEndTick) == selEndTick;
 		b[BTN_LINKED].active = debugOwnershipMode() == "linked";
 		if(b[BTN_STOP].enabled) {
-			int col = selectedSweepTable == 0 ? 5 : 4;
-			int close = sweepCloseRow(selectedSweepTable, song.instrumentTable[ins + col * 48]);
-			const(ubyte)[] t = selectedSweepTable == 0 ? song.pulseTable : song.filterTable;
-			b[BTN_STOP].active = close >= 0 && t[close * 4 + 3] == 0x7f;
+			auto k = sweepKind(selectedSweepTable);
+			int close = sweepCloseRow(selectedSweepTable, song.instrumentTable[ins + k.insCol * 48]);
+			b[BTN_STOP].active = close >= 0 && k.table[close * 4 + 3] == 0x7f;
 		}
 		b[BTN_TYPE].active = b[BTN_TYPE].enabled
 			&& (song.filterTable[selectedSweepRow * 4] & 0x80) != 0;
 		if(b[BTN_CARRY].enabled) {
-			const(ubyte)[] t = selectedSweepTable == 0 ? song.pulseTable : song.filterTable;
+			const(ubyte)[] t = sweepKind(selectedSweepTable).table;
 			b[BTN_CARRY].active = t[selectedSweepRow * 4 + 2] == 0xff;
 		}
 		int wstart = song.instrumentTable[ins + 7 * 48];
@@ -6184,10 +6225,10 @@ class SoundEditor : Window, Undoable {
 			if(sweepDurMoved && unitClipped) {
 				UI.statusline.display("Row duration limited to the table maximum of 128 ticks.");
 			} else if(sweepDurMoved && clipped && (table == 0 || table == 1)) {
-				int mask = table == 0 ? 0xfff : 0x7ff;
+				auto k = sweepKind(table);
 				UI.statusline.display(format(
 					"%s endpoint limited: requested $%03X; legal $%03X.",
-					table == 0 ? "Pulse" : "Filter", requested & mask, legal & mask));
+					k.name, requested & k.mask, legal & k.mask));
 			}
 			sweepDurMoved = false;
 			sweepDurClipped = false;
