@@ -1767,6 +1767,31 @@ class SoundEditor : Window, Undoable {
 		drawSweepLoopIndicators(1, g, filter);
 	}
 
+	// The on-screen pixel span [xa, xb) frame `f` covers on the shared timeline.
+	// xb is nudged to at least xa+1 so a span is never empty when adjacent
+	// frames land on the same column (e.g. zoomed far out).
+	private void frameXSpan(ref Geo g, int f, out int xa, out int xb) {
+		xa = viewport.xForFrame(g, f);
+		xb = viewport.xForFrame(g, f + 1);
+		if(xb <= xa) xb = xa + 1;
+	}
+
+	// Draw a single-colour step graph ("staircase") over frame range [lo, hi):
+	// one horizontal segment per frame at `yOf(f)`, plus a vertical riser to
+	// the previous frame's segment whenever the level changed. Shared by any
+	// per-frame level trace (filter resonance, pitch/transpose, ...).
+	private void drawStaircase(ref Geo g, int lo, int hi, int delegate(int) yOf, int col) {
+		int prevY = -1;
+		foreach(f; lo .. hi) {
+			int y = yOf(f);
+			int xa, xb; frameXSpan(g, f, xa, xb);
+			video.olHLine(xa, xb - 1, y, col);           // level segment
+			if(prevY >= 0 && prevY != y)
+				video.olVLine(xa, min(prevY, y), max(prevY, y), col); // riser
+			prevY = y;
+		}
+	}
+
 	// A per-frame value staircase (pulse width or filter cutoff) as an area fill +
 	// top line on the shared frame axis. Fed from either the recording or the sim.
 	private void drawValueBand(const(int)[] vals, int maxVal, int fillCol, int lineCol,
@@ -1779,9 +1804,7 @@ class SoundEditor : Window, Undoable {
 			int v = vals[f];
 			if(v < 0) v = 0; if(v > maxVal) v = maxVal;
 			int y = botPx - v * hh / maxVal;
-			int xa = viewport.xForFrame(g, f);
-			int xb = viewport.xForFrame(g, f + 1);
-			if(xb <= xa) xb = xa + 1;
+			int xa, xb; frameXSpan(g, f, xa, xb);
 			for(int x = xa; x < xb; x++) {
 				video.olVLine(x, botPx, y, fillCol);
 				video.olPoint(x, y, lineCol);
@@ -4721,9 +4744,7 @@ class SoundEditor : Window, Undoable {
 			FilterRegions regions = filterRegions(g, mode, cutoff[f]);
 			int fillCol = dim ? COL_DIMFILL : mc;
 			int traceCol = dim ? COL_DIM : COL_FILT_LINE;
-			int xa = viewport.xForFrame(g, f);
-			int xb = viewport.xForFrame(g, f + 1);
-			if(xb <= xa) xb = xa + 1;
+			int xa, xb; frameXSpan(g, f, xa, xb);
 			for(int x = xa; x < xb; x++) {
 				if(regions.lp) video.olVLine(x, regions.lpTop, regions.lpBottom, fillCol);
 				if(regions.bp) video.olVLine(x, regions.bpTop, regions.bpBottom, fillCol);
@@ -4735,19 +4756,11 @@ class SoundEditor : Window, Undoable {
 		// §10.2 resonance (0..15) over time: a thin step line, clearly separate from the
 		// cutoff fill. Bright yellow on the recording path, dim grey on the sim preview.
 		int rescol = dim ? COL_DIM : COL_RES;
-		int prevY = -1;
-		foreach(f; lo .. hi) {
+		drawStaircase(g, lo, hi, (int f) {
 			int res = f < resA.length ? resA[f] : 0;
 			if(res < 0) res = 0; if(res > 15) res = 15;
-			int ry = botPx - res * h / 15;
-			int xa = viewport.xForFrame(g, f);
-			int xb = viewport.xForFrame(g, f + 1);
-			if(xb <= xa) xb = xa + 1;
-			video.olHLine(xa, xb - 1, ry, rescol);              // level segment
-			if(prevY >= 0 && prevY != ry)
-				video.olVLine(xa, min(prevY, ry), max(prevY, ry), rescol); // riser
-			prevY = ry;
-		}
+			return botPx - res * h / 15;
+		}, rescol);
 
 		// §20 P4b-3 clickable mode chip (cycles LP/BP/HP combos, recolours the fill live).
 		drawFilterModeChip(ins, g);
@@ -4778,19 +4791,11 @@ class SoundEditor : Window, Undoable {
 				if(l > hi) hi = l;
 			}
 			if(hi <= lo) hi = lo + 1.0f;       // flat / silent: avoid divide-by-zero
-			int prevY = -1;
 			int flo, fhi; viewport.visRange(n, flo, fhi);   // §17.1 only emit on-screen frames
-			foreach(f; flo .. fhi) {
+			drawStaircase(g, flo, fhi, (int f) {
 				float l = fr[f] > 0 ? log2(cast(float)fr[f]) : lo;
-				int y = botPx - cast(int)lround((l - lo) / (hi - lo) * h);
-				int xa = viewport.xForFrame(g, f);
-				int xb = viewport.xForFrame(g, f + 1);
-				if(xb <= xa) xb = xa + 1;
-				video.olHLine(xa, xb - 1, y, COL_FREQ_ABS);
-				if(prevY >= 0 && prevY != y)
-					video.olVLine(xa, min(prevY, y), max(prevY, y), COL_FREQ_ABS);
-				prevY = y;
-			}
+				return botPx - cast(int)lround((l - lo) / (hi - lo) * h);
+			}, COL_FREQ_ABS);
 			// The recorded trace above is on its own auto-fitted log2-Hz axis, which the
 			// pitch drag cannot hit-test against. Overlay the authored program on the
 			// editable semitone mapping so the blocks the user drags are visible here too
@@ -4819,18 +4824,10 @@ class SoundEditor : Window, Undoable {
 	private void drawAuthoredPitchStaircase(int ins, ref Geo g, ref WaveFrameSim s,
 			int topPx, int botPx, int n, int colour) {
 		int scale = freqBandScaleFrom(ins, s);
-		int prevY = -1;
 		int flo, fhi; viewport.visRange(n, flo, fhi);   // §17.1 only emit on-screen frames
-		foreach(f; flo .. fhi) {
-			int y = yForPitch(topPx, botPx, scale, s.transOf[f]);
-			int xa = viewport.xForFrame(g, f);
-			int xb = viewport.xForFrame(g, f + 1);
-			if(xb <= xa) xb = xa + 1;
-			video.olHLine(xa, xb - 1, y, colour);                  // level segment
-			if(prevY >= 0 && prevY != y)
-				video.olVLine(xa, min(prevY, y), max(prevY, y), colour); // step riser
-			prevY = y;
-		}
+		drawStaircase(g, flo, fhi, (int f) {
+			return yForPitch(topPx, botPx, scale, s.transOf[f]);
+		}, colour);
 	}
 
 	// ---- wave band = §9.3 stacked SID control-bit lanes ----
@@ -4872,9 +4869,7 @@ class SoundEditor : Window, Undoable {
 		int flo, fhi; viewport.visRange(n, flo, fhi);   // §17.1 only emit on-screen frames
 		foreach(f; flo .. fhi) {
 			int ctrl = ctrlA[f];
-			int xa = viewport.xForFrame(g, f);
-			int xb = viewport.xForFrame(g, f + 1);
-			if(xb <= xa) xb = xa + 1;
+			int xa, xb; frameXSpan(g, f, xa, xb);
 			foreach(li; 0 .. 8) {
 				int bit = 7 - li;
 				if(!(ctrl & (1 << bit))) continue;
