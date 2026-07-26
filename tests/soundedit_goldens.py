@@ -75,6 +75,7 @@ deliberate Sound Editor UX change outside this refactor) with:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from tests.ccdriver_session import CCDriverSession
@@ -110,9 +111,20 @@ ROOT = Path(__file__).resolve().parents[1]
 GOLDEN_DIR = ROOT / "tests/goldens"
 
 
+# The title bar embeds the binary's compile __DATE__/__TIME__ (com.util), e.g.
+# "CheeseCutter EXTended 0.5.1 (Jul 26 2026 18:14)". That string changes on every
+# rebuild and is NOT editor behaviour, so screendump row 0 would spuriously fail the
+# byte-equality gate after any recompile. Normalise it to a fixed placeholder on both
+# capture and compare (both paths go through _clean) so goldens are rebuild-stable.
+_BUILD_STAMP_RE = re.compile(
+    r"\((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ 0-9]\d \d{4} \d\d:\d\d\)"
+)
+
+
 def _clean(raw: str) -> str:
-    """Drop the persistent-session checkpoint marker; keep the oracle text only."""
-    return raw.split("checkpoint:", 1)[0].rstrip("\n") + "\n"
+    """Drop the persistent-session checkpoint marker and the volatile build stamp."""
+    text = raw.split("checkpoint:", 1)[0].rstrip("\n") + "\n"
+    return _BUILD_STAMP_RE.sub("(BUILD-TIMESTAMP)", text)
 
 
 class _Capture:

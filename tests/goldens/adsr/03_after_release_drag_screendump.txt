@@ -1,4 +1,4 @@
-screen00:  File  Edit  View  Playback  Sound  Help   KEYJAM                                                              CheeseCutter EXTended 0.5.1 (Jul 26 2026 12:02) 
+screen00:  File  Edit  View  Playback  Sound  Help   KEYJAM                                                              CheeseCutter EXTended 0.5.1 (BUILD-TIMESTAMP) 
 screen01:                                                                                                                      V1:00 00 00 00 00 00 00   $D415 16 17 18  
 screen02:     Sound Editor opened.                                                                                             V2:00 00 00 00 00 00 00      00 00 00 00  
 screen03:                                                                                                                      V3:00 00 00 00 00 00 00                   
