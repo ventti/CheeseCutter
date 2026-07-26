@@ -508,13 +508,17 @@ class SoundEditor : Window, Undoable {
 	private int  sweepDurLegalExit = 0;
 	private bool sweepDurClipped = false;
 	//  - ENDPOINT drag (a value handle at the step's start/end): START translates the
-	//    segment (init b2); END tilts it (slope b1 + direction). sweepEndIsEnd picks which.
-	private bool sweepEndDragging = false;
-	private int  sweepEndTable = -1;
-	private int  sweepEndRow   = -1;
-	private bool sweepEndIsEnd = false;
-	private bool sweepEndMoved = false;
-	private int  sweepEndWinding = 0; // authored unwrapped exit minus visible wrapped exit
+	//    segment (init b2); END tilts it (slope b1 + direction). isEnd picks which.
+	//    winding = authored unwrapped exit minus visible wrapped exit.
+	private final class SweepEndDrag : DragGesture {
+		int table, row;
+		bool isEnd;
+		int winding;
+		this(int t, int r, bool e, int w) { table = t; row = r; isEnd = e; winding = w; }
+		override bool onFirstMotion() { return beginSweepDragMutation(table, clampedIns()); }
+		override void update(ref Geo g, int x, int y) { sweepEndDragUpdate(g, y, table, row, isEnd, winding); }
+		override void remapRows() { row = remapForkedSweepRow(row); }
+	}
 	//  - JOIN drag (only when both adjacent blocks are selected): edits the one clicked
 	//    shared boundary (left END + right START), never unrelated joins in the range.
 	private bool sweepJoinDragging = false;
@@ -3111,7 +3115,6 @@ class SoundEditor : Window, Undoable {
 			if(activeGesture) activeGesture.remapRows();
 			sweepResRow = remapForkedSweepRow(sweepResRow);
 			sweepResTargetRow = remapForkedSweepRow(sweepResTargetRow);
-			sweepEndRow = remapForkedSweepRow(sweepEndRow);
 			sweepJoinLeftRow = remapForkedSweepRow(sweepJoinLeftRow);
 			sweepJoinRightRow = remapForkedSweepRow(sweepJoinRightRow);
 			sweepDurRow = remapForkedSweepRow(sweepDurRow);
@@ -4030,9 +4033,8 @@ class SoundEditor : Window, Undoable {
 		// circular hit area; the remainder of the vertical line remains duration.
 		if(sweepRowHasSlope(t, r)
 				&& nearSweepHandle(t, px, py, xb, syE)) {
-			clickWasButton = true; sweepEndDragging = true;
-			sweepEndTable = t; sweepEndRow = r; sweepEndIsEnd = true; sweepEndMoved = false;
-			sweepEndWinding = sweepStepWinding(t, r);
+			clickWasButton = true;
+			activeGesture = new SweepEndDrag(t, r, true, sweepStepWinding(t, r));
 			return true;
 		}
 		// Duration owns every vertical position on the right boundary.
@@ -4050,8 +4052,8 @@ class SoundEditor : Window, Undoable {
 			return true;
 		}
 		if(resizable && nearSweepHandle(t, px, py, xa, syS)) { // START dot -> init level b2
-			clickWasButton = true; sweepEndDragging = true;
-			sweepEndTable = t; sweepEndRow = r; sweepEndIsEnd = false; sweepEndMoved = false;
+			clickWasButton = true;
+			activeGesture = new SweepEndDrag(t, r, false, 0);
 			return true;
 		}
 		if(px > xa && px < xb) {                             // BODY -> level b2 (coarse translate)
@@ -4115,11 +4117,12 @@ class SoundEditor : Window, Undoable {
 			video.olVLine(xb, topPx, botPx, rHot ? COL_BOX_HOT : COL_STEPSEL);
 		// START (init b2) + END (slope b1) value dots.
 		if(resizable) {
-			bool sHot = (sweepEndDragging && !sweepEndIsEnd)
+			auto endDrag = cast(SweepEndDrag)activeGesture;
+			bool sHot = (endDrag && !endDrag.isEnd)
 				|| (inY && nearSweepHandle(t, hx, hy, xa, syS));
 			video.olFillRect(xa - 2, syS - 2, 5, 5, sHot ? COL_BOX_HOT : COL_HEAD);
 			if(sweepRowHasSlope(t, r)) {
-				bool eHot = (sweepEndDragging && sweepEndIsEnd)
+				bool eHot = (endDrag && endDrag.isEnd)
 					|| (inY && nearSweepHandle(t, hx, hy, xb, syE));
 				video.olFillRect(xb - 2, syE - 2, 5, 5, eHot ? COL_BOX_HOT : COL_HEAD);
 			}
@@ -4300,7 +4303,8 @@ class SoundEditor : Window, Undoable {
 
 	// §21 P4c apply a value-endpoint drag. START: set init b2 (translate). END: set slope
 	// b1 + direction so the ramp ENDS at the pointer value (tilt).
-	private void sweepEndDragUpdate(ref Geo g, int celly) {
+	private void sweepEndDragUpdate(ref Geo g, int celly, int sweepEndTable, int sweepEndRow,
+			bool sweepEndIsEnd, int sweepEndWinding) {
 		if(sweepEndIsEnd) {
 			if(SDL_GetModState() & KMOD_SHIFT) {
 				// Fine endpoint position is ambiguous once a ramp winds. Shift maps the
@@ -6082,20 +6086,6 @@ class SoundEditor : Window, Undoable {
 			sweepResDragUpdate(g, y);
 			return;
 		}
-		// §21 P4c value-ENDPOINT drag: first tick runs the §20.2 shared check, else snapshot
-		// all tables, then rewrite the row's b2 (START) or b1 (END slope).
-		if(sweepEndDragging) {
-			Geo g = layout();
-			if(!sweepEndMoved) {
-				if(!beginSweepDragMutation(sweepEndTable, ins)) {
-					sweepEndDragging = false; sweepEndTable = -1; sweepEndRow = -1;
-					return;
-				}
-				sweepEndMoved = true;
-			}
-			sweepEndDragUpdate(g, y);
-			return;
-		}
 		// §21 P4c(v3) JOIN drag over a multi-block selection: first tick runs the shared
 		// check, else snapshot, then set every shared join in the range to the pointer value.
 		if(sweepJoinDragging) {
@@ -6213,17 +6203,6 @@ class SoundEditor : Window, Undoable {
 			clickWasButton = false;
 			if(sweepResMoved) retriggerIfSounding();
 			sweepResMoved = false;
-			return;
-		}
-		// §21 P4c end a value-endpoint drag: make the new ramp audible once.
-		if(sweepEndDragging) {
-			sweepEndDragging = false;
-			sweepEndTable = -1;
-			sweepEndRow = -1;
-			sweepEndWinding = 0;
-			clickWasButton = false;
-			if(sweepEndMoved) retriggerIfSounding();
-			sweepEndMoved = false;
 			return;
 		}
 		// §21 P4c(v3) end a JOIN drag: make the new join(s) audible once.
