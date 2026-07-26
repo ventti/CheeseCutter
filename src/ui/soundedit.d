@@ -500,25 +500,49 @@ class SoundEditor : Window, Undoable {
 	// ENDPOINTS shape the ramp. Edges/handles light YELLOW on hover / while active.
 	//  - DURATION drag (a box left/right edge): rewrites a row's b0 duration (low 7 bits).
 	//    The RIGHT edge resizes THIS step; the LEFT edge resizes the PREVIOUS step (their
-	//    shared boundary). sweepDurRow = the row whose b0 we edit; sweepDurAnchorF = the
-	//    FIXED frame the resized step starts at, so width = draggedFrame - anchor.
-	private bool sweepDurDragging = false;
-	private int  sweepDurTable = -1;
-	private int  sweepDurRow   = -1;
-	private int  sweepDurAnchorF = 0;
-	// Auto-Fit normally follows changing programme length. During one resize gesture
-	// that would move the axis between mouse-motion events and amplify/slow the next
-	// delta. Keep the press-time axis fixed until release so the edge follows the mouse.
-	private double sweepDurViewStart = 0, sweepDurViewEnd = 1;
-	private bool sweepDurViewLocked = false;
-	private bool sweepDurMoved = false;
-	private bool sweepDurUnitClipped = false;
-	// Preserve the authored (unwrapped) endpoint while a pulse duration changes. If the
-	// shorter duration would require an illegal slope, remember both values so mouse-up
-	// can explain the deterministic clamp instead of silently changing the graph shape.
-	private int  sweepDurTargetExit = 0;
-	private int  sweepDurLegalExit = 0;
-	private bool sweepDurClipped = false;
+	//    shared boundary). row = the row whose b0 we edit; anchorF = the FIXED frame the
+	//    resized step starts at, so width = draggedFrame - anchor.
+	//    viewStart/viewEnd/viewLocked: Auto-Fit normally follows changing programme
+	//    length. During one resize gesture that would move the axis between mouse-motion
+	//    events and amplify/slow the next delta. Keep the press-time axis fixed until
+	//    release so the edge follows the mouse.
+	//    targetExit/legalExit/clipped: preserve the authored (unwrapped) endpoint while a
+	//    pulse duration changes. If the shorter duration would require an illegal slope,
+	//    remember both values so mouse-up can explain the deterministic clamp instead of
+	//    silently changing the graph shape.
+	private final class SweepDurDrag : DragGesture {
+		int table, row, anchorF;
+		double viewStart, viewEnd;
+		bool viewLocked;
+		bool unitClipped;
+		int targetExit, legalExit;
+		bool clipped;
+		this(int t, int r, int f0) {
+			table = t; row = r; anchorF = f0;
+			viewStart = viewport.startTick; viewEnd = viewport.endTick;
+			viewLocked = true;
+			unitClipped = false;
+			int scale = t == 0 ? 1 : 2;
+			targetExit = sweepStepEnterVal(t, r)
+				+ sweepSignedSlope(t, r) * scale * sweepRampApplications(t, r);
+			legalExit = targetExit;
+			clipped = false;
+		}
+		override bool onFirstMotion() { return beginSweepDragMutation(table, clampedIns()); }
+		override void update(ref Geo g, int x, int y) { sweepDurDragUpdate(g, x, this); }
+		override void remapRows() { row = remapForkedSweepRow(row); }
+		override void end() {
+			viewLocked = false;
+			if(moved && unitClipped) {
+				UI.statusline.display("Row duration limited to the table maximum of 128 ticks.");
+			} else if(moved && clipped && (table == 0 || table == 1)) {
+				auto k = sweepKind(table);
+				UI.statusline.display(format(
+					"%s endpoint limited: requested $%03X; legal $%03X.",
+					k.name, targetExit & k.mask, legalExit & k.mask));
+			}
+		}
+	}
 	//  - ENDPOINT drag (a value handle at the step's start/end): START translates the
 	//    segment (init b2); END tilts it (slope b1 + direction). isEnd picks which.
 	//    winding = authored unwrapped exit minus visible wrapped exit.
@@ -1470,9 +1494,10 @@ class SoundEditor : Window, Undoable {
 		// §17.1 refresh the viewport over the (possibly changed) note extent: keep the
 		// user's zoom until they hit Fit, else auto-fit to the whole note. Then derive
 		// the integer visible-frame bounds every band loop clips to.
-		if(sweepDurDragging && sweepDurViewLocked) {
-			viewport.startTick = sweepDurViewStart;
-			viewport.endTick = sweepDurViewEnd;
+		auto durDrag = cast(SweepDurDrag)activeGesture;
+		if(durDrag && durDrag.viewLocked) {
+			viewport.startTick = durDrag.viewStart;
+			viewport.endTick = durDrag.viewEnd;
 		} else if(viewport.userZoomed) viewport.clamp(prerollTicks, contentMaxFrames);
 		else viewport.fit(prerollTicks, visFrames);
 		viewport.refreshFrameBounds();
@@ -3130,9 +3155,8 @@ class SoundEditor : Window, Undoable {
 		bool isShared = sweepProgramShared(table, ins);
 		if(isShared && !linkedEditActive(table, ins)) {
 			if(!forkSweepProgram(table, ins)) return false;
-			// Selection is remapped by forkSweepProgram; remap every in-flight handle.
+			// Selection is remapped by forkSweepProgram; remap the in-flight gesture's rows.
 			if(activeGesture) activeGesture.remapRows();
-			sweepDurRow = remapForkedSweepRow(sweepDurRow);
 			return true;
 		}
 		snapshotAllTables(false);
@@ -4054,16 +4078,8 @@ class SoundEditor : Window, Undoable {
 		}
 		// Duration owns every vertical position on the right boundary.
 		if(resizable && abs(px - xb) <= DUR_HIT_PX) {
-			clickWasButton = true; sweepDurDragging = true;
-			sweepDurTable = t; sweepDurRow = r; sweepDurAnchorF = f0; sweepDurMoved = false;
-			sweepDurViewStart = viewport.startTick; sweepDurViewEnd = viewport.endTick;
-			sweepDurViewLocked = true;
-			sweepDurUnitClipped = false;
-			int scale = t == 0 ? 1 : 2;
-			sweepDurTargetExit = sweepStepEnterVal(t, r)
-				+ sweepSignedSlope(t, r) * scale * sweepRampApplications(t, r);
-			sweepDurLegalExit = sweepDurTargetExit;
-			sweepDurClipped = false;
+			clickWasButton = true;
+			activeGesture = new SweepDurDrag(t, r, f0);
 			return true;
 		}
 		if(resizable && nearSweepHandle(t, px, py, xa, syS)) { // START dot -> init level b2
@@ -4128,7 +4144,7 @@ class SoundEditor : Window, Undoable {
 		bool inY = hy >= topPx && hy < botPx;
 		bool resizable = sweepRowResizable(t, r);
 		// RIGHT edge (duration): hot while resizing, or when hovered near.
-		bool rHot = sweepDurDragging || (inY && abs(hx - xb) <= DUR_HIT_PX);
+		bool rHot = (cast(SweepDurDrag)activeGesture !is null) || (inY && abs(hx - xb) <= DUR_HIT_PX);
 		if(resizable)
 			video.olVLine(xb, topPx, botPx, rHot ? COL_BOX_HOT : COL_STEPSEL);
 		// START (init b2) + END (slope b1) value dots.
@@ -4162,11 +4178,12 @@ class SoundEditor : Window, Undoable {
 		return best;
 	}
 
-	private void sweepDurDragUpdate(ref Geo g, int cellx) {
+	private void sweepDurDragUpdate(ref Geo g, int cellx, SweepDurDrag d) {
+		int sweepDurRow = d.row, sweepDurTable = d.table;
 		if(sweepDurRow < 1 || sweepDurRow >= 0x40) return;
 		int pointerPx = cellx * FONT_X + FONT_X / 2;
-		int width = nearestDurationWidth(g, sweepDurAnchorF, pointerPx);
-		sweepDurUnitClipped = durationRows && trackStepTicks() > 0x80;
+		int width = nearestDurationWidth(g, d.anchorF, pointerPx);
+		d.unitClipped = durationRows && trackStepTicks() > 0x80;
 		int field = clampInt(width - 1, 0, 0x7f);
 		ubyte[] t = sweepKind(sweepDurTable).table;
 		ubyte b0 = t[sweepDurRow * 4];
@@ -4180,11 +4197,11 @@ class SoundEditor : Window, Undoable {
 			int scale = sweepKind(sweepDurTable).scale;
 			int divisor = max(1, applications * scale);
 			int requestedSlope = cast(int)lround(
-				cast(double)(sweepDurTargetExit - enter) / divisor);
+				cast(double)(d.targetExit - enter) / divisor);
 			setSweepSignedSlope(sweepDurTable, sweepDurRow, requestedSlope);
-			sweepDurLegalExit = enter
+			d.legalExit = enter
 				+ sweepSignedSlope(sweepDurTable, sweepDurRow) * scale * applications;
-			sweepDurClipped = sweepDurLegalExit != sweepDurTargetExit;
+			d.clipped = d.legalExit != d.targetExit;
 		}
 	}
 
@@ -6078,21 +6095,6 @@ class SoundEditor : Window, Undoable {
 			activeGesture.update(g, x, y);
 			return;
 		}
-		// §21 P4c DURATION drag: first motion resolves ownership atomically, then rewrites
-		// the row's b0.
-		if(sweepDurDragging) {
-			Geo g = layout();
-			if(!sweepDurMoved) {
-				if(!beginSweepDragMutation(sweepDurTable, ins)) {
-					sweepDurDragging = false; sweepDurTable = -1; sweepDurRow = -1;
-					sweepDurViewLocked = false;
-					return;
-				}
-				sweepDurMoved = true;
-			}
-			sweepDurDragUpdate(g, x);
-			return;
-		}
 		// §17.3 while a zoom button is held, keep its pressed style only while the pointer
 		// stays on it — drag off and it un-presses (and the release will not fire it).
 		if(pressedBtn >= 0) {
@@ -6170,32 +6172,6 @@ class SoundEditor : Window, Undoable {
 			clickWasButton = false;
 			if(activeGesture.moved && activeGesture.retriggersOnMove()) retriggerIfSounding();
 			activeGesture = null;
-			return;
-		}
-		// §21 P4c end a duration (box-edge) drag: make the new window audible once.
-		if(sweepDurDragging) {
-			int table = sweepDurTable;
-			int requested = sweepDurTargetExit;
-			int legal = sweepDurLegalExit;
-			bool clipped = sweepDurClipped;
-			bool unitClipped = sweepDurUnitClipped;
-			sweepDurDragging = false;
-			sweepDurViewLocked = false;
-			sweepDurTable = -1;
-			sweepDurRow = -1;
-			clickWasButton = false;
-			if(sweepDurMoved) retriggerIfSounding();
-			if(sweepDurMoved && unitClipped) {
-				UI.statusline.display("Row duration limited to the table maximum of 128 ticks.");
-			} else if(sweepDurMoved && clipped && (table == 0 || table == 1)) {
-				auto k = sweepKind(table);
-				UI.statusline.display(format(
-					"%s endpoint limited: requested $%03X; legal $%03X.",
-					k.name, requested & k.mask, legal & k.mask));
-			}
-			sweepDurMoved = false;
-			sweepDurClipped = false;
-			sweepDurUnitClipped = false;
 			return;
 		}
 		// §17.4 end any scrollbar-thumb drag.
