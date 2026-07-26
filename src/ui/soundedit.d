@@ -404,6 +404,9 @@ class SoundEditor : Window, Undoable {
 		abstract void update(ref Geo g, int x, int y);
 		void end() {}                            // extra teardown (default none)
 		bool retriggersOnMove() { return true; } // re-trigger the held note on release if moved
+		// Copy-on-write fork remaps SweepTable row indices; each sweep gesture overrides
+		// this to remap its OWN folded row field(s) via remapForkedSweepRow. No-op default.
+		void remapRows() {}
 	}
 	private DragGesture activeGesture;           // null = no drag in progress
 
@@ -426,13 +429,16 @@ class SoundEditor : Window, Undoable {
 	// §20 P4b-1 pulse/filter program LEVEL drag: a vertical grab inside the Pulse
 	// (band 3) or Filter (band 4) plot region rewrites the SweepTable row active at
 	// the grabbed frame — its init byte b2 (pulse width 0..4095 nibble-swapped, or
-	// filter cutoff 0..2047 >> 3) — so the sweep starts at the dragged level. sweepTable
-	// 0 = pulse, 1 = filter; sweepRow = the SweepTable row being edited (from the sim's
-	// rowOf[frame]); sweepMoved gates the ONE undo snapshot per gesture (first drag tick).
-	private bool sweepDragging = false;
-	private int  sweepTable = -1;
-	private int  sweepRow = -1;
-	private bool sweepMoved = false;
+	// filter cutoff 0..2047 >> 3) — so the sweep starts at the dragged level. table
+	// 0 = pulse, 1 = filter; row = the SweepTable row being edited (from the sim's
+	// rowOf[frame]); moved gates the ONE undo snapshot per gesture (first drag tick).
+	private final class SweepLevelDrag : DragGesture {
+		int table, row;
+		this(int t, int r) { table = t; row = r; }
+		override bool onFirstMotion() { return beginSweepDragMutation(table, clampedIns()); }
+		override void update(ref Geo g, int x, int y) { sweepLevelDragUpdate(g, y, table, row); }
+		override void remapRows() { row = remapForkedSweepRow(row); }
+	}
 	// Shared ownership is resolved non-modally on the first mutation: copy-on-write by
 	// default, or in-place only while the visible Linked edits mode is active.
 	// Copy-on-write is the safe default. Linked editing is explicit and scoped to the
@@ -3099,10 +3105,10 @@ class SoundEditor : Window, Undoable {
 		if(isShared && !linkedEditActive(table, ins)) {
 			if(!forkSweepProgram(table, ins)) return false;
 			// Selection is remapped by forkSweepProgram; remap every in-flight handle.
+			if(activeGesture) activeGesture.remapRows();
 			sweepLoopCloseRow = remapForkedSweepRow(sweepLoopCloseRow);
 			sweepResRow = remapForkedSweepRow(sweepResRow);
 			sweepResTargetRow = remapForkedSweepRow(sweepResTargetRow);
-			sweepRow = remapForkedSweepRow(sweepRow);
 			sweepEndRow = remapForkedSweepRow(sweepEndRow);
 			sweepJoinLeftRow = remapForkedSweepRow(sweepJoinLeftRow);
 			sweepJoinRightRow = remapForkedSweepRow(sweepJoinRightRow);
@@ -3123,7 +3129,7 @@ class SoundEditor : Window, Undoable {
 	// row's init byte b2 (pulse width nibble-swapped 0..4095 step 16, or filter cutoff
 	// 0..2047 >> 3). The band redraws live from the byte (WYSIWYG). No undo/re-trigger
 	// here — the gesture snapshot is at the first drag tick, the re-trigger at release.
-	private void sweepLevelDragUpdate(ref Geo g, int celly) {
+	private void sweepLevelDragUpdate(ref Geo g, int celly, int sweepTable, int sweepRow) {
 		auto k = sweepKind(sweepTable);
 		int band = k.band;
 		int maxVal = k.maxVal;
@@ -4048,8 +4054,8 @@ class SoundEditor : Window, Undoable {
 			return true;
 		}
 		if(px > xa && px < xb) {                             // BODY -> level b2 (coarse translate)
-			clickWasButton = true; sweepDragging = true;
-			sweepTable = t; sweepRow = r; sweepMoved = false;
+			clickWasButton = true;
+			activeGesture = new SweepLevelDrag(t, r);
 			return true;
 		}
 		return false;
@@ -5868,10 +5874,9 @@ class SoundEditor : Window, Undoable {
 			if(eb >= 0) {
 				clickWasButton = true;
 				if(createSweepProgram(eb, ins, sweepValueForCell(eb, g, y))) {
-					sweepDragging = true;
-					sweepTable = eb;
-					sweepRow = selectedSweepRow;
-					sweepMoved = true; // creation already took the gesture's one snapshot
+					auto d = new SweepLevelDrag(eb, selectedSweepRow);
+					d.moved = true; // creation already took the gesture's one snapshot
+					activeGesture = d;
 				}
 				return;
 			}
@@ -6096,20 +6101,6 @@ class SoundEditor : Window, Undoable {
 			sweepResDragUpdate(g, y);
 			return;
 		}
-		// §20 P4b-1 pulse/filter LEVEL drag: first motion resolves ownership and takes one
-		// all-table undo snapshot, then rewrites the edited row's b2 every tick.
-		if(sweepDragging) {
-			Geo g = layout();
-			if(!sweepMoved) {
-				if(!beginSweepDragMutation(sweepTable, ins)) {
-					sweepDragging = false; sweepTable = -1; sweepRow = -1;
-					return;
-				}
-				sweepMoved = true;
-			}
-			sweepLevelDragUpdate(g, y);
-			return;
-		}
 		// §21 P4c value-ENDPOINT drag: first tick runs the §20.2 shared check, else snapshot
 		// all tables, then rewrite the row's b2 (START) or b1 (END slope).
 		if(sweepEndDragging) {
@@ -6251,18 +6242,6 @@ class SoundEditor : Window, Undoable {
 			clickWasButton = false;
 			if(sweepResMoved) retriggerIfSounding();
 			sweepResMoved = false;
-			return;
-		}
-		// §20 P4b-1 end a pulse/filter LEVEL drag: make the edited program audible once
-		// (if a note is held) — never per drag tick. A plain click (no motion) wrote
-		// nothing; it only left the §20 P4b-2 step selection set at press.
-		if(sweepDragging) {
-			sweepDragging = false;
-			sweepTable = -1;
-			sweepRow = -1;
-			clickWasButton = false;
-			if(sweepMoved) retriggerIfSounding();
-			sweepMoved = false;
 			return;
 		}
 		// §21 P4c end a value-endpoint drag: make the new ramp audible once.
