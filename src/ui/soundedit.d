@@ -936,7 +936,20 @@ class SoundEditor : Window, Undoable {
 		int top, bottom;
 	}
 
+	// Memoized layout() result. layout() is a pure function of `area` (x/y/width/
+	// height) plus compile-time constants FONT_X/FONT_Y — it touches no other
+	// state. `area` is only ever assigned once, in the Window base-class
+	// constructor, and never mutated afterwards, so comparing the four `area`
+	// fields against the values used to build the cache is a safe, sufficient
+	// invalidation check (equivalent to invalidating whenever `area` changes).
+	private Geo cachedGeo;
+	private Rectangle cachedGeoArea;
+	private bool geoValid;
+
 	private Geo layout() {
+		if(geoValid && cachedGeoArea.x == area.x && cachedGeoArea.y == area.y
+				&& cachedGeoArea.width == area.width && cachedGeoArea.height == area.height)
+			return cachedGeo;
 		Geo g;
 		g.paramX = area.x + 2;
 		g.paramW = 26;
@@ -980,6 +993,9 @@ class SoundEditor : Window, Undoable {
 		}
 		g.bandTopPx[5] = waveTopPx;      // wave band: fixed WAVE_ROWS tall
 		g.bandTopPx[6] = g.stackBotPx;
+		cachedGeo = g;
+		cachedGeoArea = area;
+		geoValid = true;
 		return g;
 	}
 
@@ -5390,39 +5406,50 @@ class SoundEditor : Window, Undoable {
 	//   * [Fit] is `active` while the view is auto-fitted (not user-zoomed);
 	//   * [Selection] needs a selection — it is `disabled` without one, and `active`
 	//     while the viewport currently equals that selection.
+	// Padded button labels, computed once at compile time instead of re-concatenating
+	// " " ~ text ~ " " on every zoomButtons() call. Indexed by the BTN_* constants
+	// above; entries for the currently-unused BTN_NEW/BTN_W1/BTN_W2 slots are blank
+	// because those buttons are never place()d.
+	private static immutable string[18] ZOOM_BTN_LABELS = [
+		" - ", " + ", " Fit ", " Selection ", " Add ", " Delete ", " Stop ", " Type ",
+		" Carry ", "", " Previous ", " Next ", "", "", " Loop ", " Res- ", " Res+ ",
+		" Linked edits "
+	];
+
 	private Button[18] zoomButtons(ref Geo g) {
 		Button[18] b;
 		foreach(i, ref button; b) {
 			button.x0 = -1000; button.x1 = -1000; button.row = g.controlRow;
+			// commandEnabled() is computed once here per button; place() below reuses
+			// this value instead of recomputing it.
 			button.enabled = commandEnabled(controlActionId(cast(int)i));
 		}
 		int cx = g.plotX0px / FONT_X;
-		void place(int i, string text) {
-			string label = " " ~ text ~ " ";
+		void place(int i) {
+			string label = ZOOM_BTN_LABELS[i];
 			b[i].x0 = cx; b[i].x1 = cx + cast(int)label.length;
 			b[i].label = label;
 			b[i].hovered = (hoveredBtn == i);
 			b[i].pressed = (pressedBtn == i && pressedOver);
-			b[i].enabled = commandEnabled(controlActionId(i));
 			cx = b[i].x1 + 1;
 		}
-		place(BTN_ZOOMOUT, "-"); place(BTN_ZOOMIN, "+");
-		place(BTN_FIT, "Fit"); place(BTN_SEL, "Selection");
-		place(BTN_LINKED, "Linked edits");
+		place(BTN_ZOOMOUT); place(BTN_ZOOMIN);
+		place(BTN_FIT); place(BTN_SEL);
+		place(BTN_LINKED);
 		cx += 1; // two-cell separation between View and contextual graph actions
 		int ins = clampedIns();
 		if(selectedWaveNormal(ins)) {
-			place(BTN_ADD, "Add"); place(BTN_DEL, "Delete");
-			place(BTN_WPREV, "Previous"); place(BTN_WNEXT, "Next"); place(BTN_WLOOP, "Loop");
+			place(BTN_ADD); place(BTN_DEL);
+			place(BTN_WPREV); place(BTN_WNEXT); place(BTN_WLOOP);
 		} else if(selectedSweepTable == 0 && selectedSweepRow >= 1) {
-			place(BTN_ADD, "Add"); place(BTN_DEL, "Delete");
-			place(BTN_STOP, "Stop"); place(BTN_CARRY, "Carry");
+			place(BTN_ADD); place(BTN_DEL);
+			place(BTN_STOP); place(BTN_CARRY);
 		} else if(selectedSweepTable == 1 && selectedSweepRow >= 1) {
 			bool config = (song.filterTable[selectedSweepRow * 4] & 0x80) != 0;
-			place(BTN_ADD, "Add"); place(BTN_DEL, "Delete");
-			place(BTN_STOP, "Stop"); place(BTN_TYPE, "Type");
-			if(config) { place(BTN_RESDEC, "Res-"); place(BTN_RESINC, "Res+"); }
-			else place(BTN_CARRY, "Carry");
+			place(BTN_ADD); place(BTN_DEL);
+			place(BTN_STOP); place(BTN_TYPE);
+			if(config) { place(BTN_RESDEC); place(BTN_RESINC); }
+			else place(BTN_CARRY);
 		}
 		b[BTN_FIT].active = !userZoomed;
 		b[BTN_SEL].active = hasSelection
@@ -5644,6 +5671,9 @@ class SoundEditor : Window, Undoable {
 	override void clickedAt(int x, int y, int button, int clicks = 1) {
 		if(button != 1) return;
 		Geo g = layout();
+		// clampedIns() only reads state.activeInstrument, which nothing in this
+		// handler mutates, so it is safe to read once and reuse for the whole press.
+		int ins = clampedIns();
 		clickWasButton = false;
 		scrollDragging = false;
 		// A fresh press cannot belong to a previously completed button gesture.
@@ -5684,15 +5714,14 @@ class SoundEditor : Window, Undoable {
 		}
 		// Exact top-cell Wave END/LOOP triangles own their cell before the trailing
 		// creation target and the pitch/delay graph beneath them.
-		if(waveLoopHandleAt(clampedIns(), g, x, y) >= 0) {
-			beginWaveLoopDrag(clampedIns());
+		if(waveLoopHandleAt(ins, g, x, y) >= 0) {
+			beginWaveLoopDrag(ins);
 			return;
 		}
 		// The trailing '+' owns only its exact in-band cell, before the frequency graph
 		// beneath it. A disabled full-table target still consumes the click predictably.
 		{
 			bool enabled;
-			int ins = clampedIns();
 			if(waveAddTargetAt(ins, g, x, y, enabled)) {
 				clickWasButton = true;
 				if(enabled) appendWaveRowAtEnd(ins);
@@ -5702,7 +5731,7 @@ class SoundEditor : Window, Undoable {
 		}
 		// Filter gutter controls use the same release-over-target activation as the
 		// graph-row buttons, including their whitespace padding.
-		string filterAction = filterActionAt(clampedIns(), g, x, y);
+		string filterAction = filterActionAt(ins, g, x, y);
 		if(filterAction.length) {
 			clickWasButton = true;
 			pressedFilterAction = filterAction;
@@ -5723,7 +5752,7 @@ class SoundEditor : Window, Undoable {
 			int eb = emptySweepBandAt(g, x, y);
 			if(eb >= 0) {
 				clickWasButton = true;
-				if(createSweepProgram(eb, clampedIns(), sweepValueForCell(eb, g, y))) {
+				if(createSweepProgram(eb, ins, sweepValueForCell(eb, g, y))) {
 					sweepDragging = true;
 					sweepTable = eb;
 					sweepRow = selectedSweepRow;
@@ -5739,7 +5768,6 @@ class SoundEditor : Window, Undoable {
 			int wf, wb;
 			if(waveLaneAt(g, x, y, wf, wb)) {
 				clickWasButton = true;
-				int ins = clampedIns();
 				// Reject an unrepresentable initial toggle before authorization/snapshot:
 				// a true no-op must consume neither undo nor a release-time rerender.
 				if(canBeginWaveBitPaint(ins, wf, wb))
@@ -5774,7 +5802,7 @@ class SoundEditor : Window, Undoable {
 		// individual endpoint/boundary behavior.
 		if(sweepMultiSelected()) {
 			int jl, jr;
-			if(sweepJoinAt(clampedIns(), g, x, y, jl, jr)) {
+			if(sweepJoinAt(ins, g, x, y, jl, jr)) {
 				clickWasButton = true;
 				sweepJoinDragging = true;
 				sweepJoinMoved = false;
@@ -5786,7 +5814,7 @@ class SoundEditor : Window, Undoable {
 		// Thus selecting the right block first edits only its START; selecting the left
 		// block first edits only its END slope.
 		if(!sweepMultiSelected() && graphDotCursorAt(g, x, y) == CURSOR_VERTICAL
-				&& beginSelectedStepDrag(clampedIns(), g, x, y)) return;
+				&& beginSelectedStepDrag(ins, g, x, y)) return;
 		// END/LOOP grips are explicit top-strip controls and may intersect a character
 		// cell whose centre is just outside sweepBandAt's band ownership. Hit-test both
 		// drawn grips directly, after the higher-priority slope dot.
@@ -5802,7 +5830,7 @@ class SoundEditor : Window, Undoable {
 			}
 		}
 		int edgeRow = sb >= 0
-			? sweepDurationRowAtPress(sb, clampedIns(), g, x, y) : -1;
+			? sweepDurationRowAtPress(sb, ins, g, x, y) : -1;
 		int cfg = sb == 1 ? filterConfigRowAtPress(g, x) : -1;
 		// At a shared Filter CONFIG/boundary X, the already-selected sweep owns its
 		// complete edge; otherwise the instantaneous CONFIG marker remains selectable.
@@ -5812,7 +5840,7 @@ class SoundEditor : Window, Undoable {
 			selectedWaveRow = -1;
 			selectedSweepTable = sb;
 			selectedSweepRow = selectedSweepRowEnd = edgeRow;
-			if(beginSelectedStepDrag(clampedIns(), g, x, y)) return;
+			if(beginSelectedStepDrag(ins, g, x, y)) return;
 		}
 		if(cfg >= 1) {
 			clickWasButton = true;
@@ -5833,7 +5861,7 @@ class SoundEditor : Window, Undoable {
 			selectedWaveRow = -1;
 			selectedSweepTable = sb;
 				selectedSweepRow = selectedSweepRowEnd = edgeRow;
-				if(beginSelectedStepDrag(clampedIns(), g, x, y)) return;
+				if(beginSelectedStepDrag(ins, g, x, y)) return;
 		}
 		// §20 P4b-3 RESONANCE drag: grabbing the resonance overlay line in the Filter band
 		// starts a res drag of the governing config row's b1 hi nibble. Block boundary and
@@ -5856,7 +5884,7 @@ class SoundEditor : Window, Undoable {
 		// §21 P4c(v2) SINGLE-step edits are anchored to the selected step's box handles: if
 		// the press lands on one, edit it (stable focus, no swapping). Checked before
 		// sweepBandAt (whose cell-top gate misses a handle in the band's top/bottom cell).
-		if(!sweepMultiSelected() && beginSelectedStepDrag(clampedIns(), g, x, y)) return;
+		if(!sweepMultiSelected() && beginSelectedStepDrag(ins, g, x, y)) return;
 		// Otherwise, in a sweep band: grab the loop line, else directly edit the block
 		// under the pointer. Its interior controls level/cutoff; selection is also updated.
 		if(sb >= 0) {
@@ -5876,7 +5904,7 @@ class SoundEditor : Window, Undoable {
 				selectedSweepTable = sb; // fresh single selection (anchor == extent)
 				selectedSweepRow = row;
 				selectedSweepRowEnd = row;
-				beginSelectedStepDrag(clampedIns(), g, x, y);
+				beginSelectedStepDrag(ins, g, x, y);
 				return;
 			}
 		}
@@ -5894,6 +5922,9 @@ class SoundEditor : Window, Undoable {
 	}
 
 	override void draggedTo(int x, int y) {
+		// clampedIns() only reads state.activeInstrument, which nothing in this
+		// handler mutates, so it is safe to read once and reuse for the whole call.
+		int ins = clampedIns();
 		if(waveLoopDragging) {
 			Geo g = layout();
 			updateWaveLoopDrag(g, x);
@@ -5923,7 +5954,6 @@ class SoundEditor : Window, Undoable {
 		if(sweepLoopDragging) {
 			Geo g = layout();
 			if(!sweepLoopMoved) {
-				int ins = clampedIns();
 				if(!beginSweepDragMutation(sweepLoopTable, ins)) {
 					sweepLoopDragging = false; sweepLoopTable = -1; sweepLoopCloseRow = -1;
 					return;
@@ -5938,7 +5968,6 @@ class SoundEditor : Window, Undoable {
 		if(sweepResDragging) {
 			Geo g = layout();
 			if(!sweepResMoved) {
-				int ins = clampedIns();
 				if(!beginSweepDragMutation(1, ins)) {
 					sweepResDragging = false; sweepResRow = sweepResTargetRow = -1;
 					return;
@@ -5955,7 +5984,6 @@ class SoundEditor : Window, Undoable {
 		if(sweepDragging) {
 			Geo g = layout();
 			if(!sweepMoved) {
-				int ins = clampedIns();
 				if(!beginSweepDragMutation(sweepTable, ins)) {
 					sweepDragging = false; sweepTable = -1; sweepRow = -1;
 					return;
@@ -5970,7 +5998,6 @@ class SoundEditor : Window, Undoable {
 		if(sweepEndDragging) {
 			Geo g = layout();
 			if(!sweepEndMoved) {
-				int ins = clampedIns();
 				if(!beginSweepDragMutation(sweepEndTable, ins)) {
 					sweepEndDragging = false; sweepEndTable = -1; sweepEndRow = -1;
 					return;
@@ -5985,7 +6012,6 @@ class SoundEditor : Window, Undoable {
 		if(sweepJoinDragging) {
 			Geo g = layout();
 			if(!sweepJoinMoved) {
-				int ins = clampedIns();
 				if(!beginSweepDragMutation(selectedSweepTable, ins)) {
 					sweepJoinDragging = false;
 					sweepJoinLeftRow = sweepJoinRightRow = -1;
@@ -6001,7 +6027,6 @@ class SoundEditor : Window, Undoable {
 		if(sweepDurDragging) {
 			Geo g = layout();
 			if(!sweepDurMoved) {
-				int ins = clampedIns();
 				if(!beginSweepDragMutation(sweepDurTable, ins)) {
 					sweepDurDragging = false; sweepDurTable = -1; sweepDurRow = -1;
 					sweepDurViewLocked = false;
@@ -6021,7 +6046,7 @@ class SoundEditor : Window, Undoable {
 		}
 		if(pressedFilterAction.length) {
 			Geo g = layout();
-			pressedFilterOver = filterActionAt(clampedIns(), g, x, y)
+			pressedFilterOver = filterActionAt(ins, g, x, y)
 				== pressedFilterAction;
 			return;
 		}
@@ -6049,6 +6074,9 @@ class SoundEditor : Window, Undoable {
 	}
 
 	override void releasedAt(int x, int y) {
+		// clampedIns() only reads state.activeInstrument, which nothing in this
+		// handler mutates, so it is safe to read once and reuse for the whole call.
+		int ins = clampedIns();
 		if(waveLoopDragging) {
 			waveLoopDragging = false;
 			waveLoopAuthorizing = false;
@@ -6182,8 +6210,8 @@ class SoundEditor : Window, Undoable {
 		if(pressedFilterAction.length) {
 			Geo g = layout();
 			string action = pressedFilterAction;
-			bool fire = filterActionAt(clampedIns(), g, x, y) == action;
-			if(fire) activateFilterAction(clampedIns(), action);
+			bool fire = filterActionAt(ins, g, x, y) == action;
+			if(fire) activateFilterAction(ins, action);
 			pressedFilterAction = "";
 			pressedFilterOver = false;
 			clickWasButton = false;
