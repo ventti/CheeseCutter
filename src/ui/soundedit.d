@@ -5318,6 +5318,36 @@ class SoundEditor : Window, Undoable {
 
 	// ---- timeline simulators (read-only; mirror src/c64/player_v4.acme) ----
 
+	// What simPulse/simFilter should do after emitting a row's frame(s): keep
+	// going from a fresh row, jump back into an already-visited (looping)
+	// section, or stop the program outright ($7F / out-of-range jump).
+	private enum SweepStep { advance, loopBack, stop }
+
+	// Shared tail of simPulse/simFilter: decode the row's jump byte `b3` into
+	// the next row, and if that row has already been visited, record the loop
+	// window (§11.3) exactly once. Mutates `row` (and `s.loopFrame`/`loopPeriod`
+	// on first loop detection) in place; the caller acts on the returned step.
+	private SweepStep advanceSweepRow(ref int row, ubyte b3, ref bool[0x40] visited,
+			ref int[0x40] firstFrame, ref SweepSim s) {
+		int nextRow;
+		if(b3 == 0) nextRow = (row + 1) & 0x3f;
+		else if(b3 == 0x7f) return SweepStep.stop;
+		else if(b3 <= 0x3f) nextRow = b3;
+		else return SweepStep.stop;
+		if(visited[nextRow]) {
+			if(s.loopFrame < 0) {
+				s.loopFrame = firstFrame[nextRow];
+				s.loopPeriod = cast(int)s.val.length - firstFrame[nextRow];
+				if(s.loopPeriod < 1) s.loopPeriod = 1;
+			}
+			row = nextRow;
+			return SweepStep.loopBack;
+		}
+		visited[nextRow] = true;
+		row = nextRow;
+		return SweepStep.advance;
+	}
+
 	// Simulate the pulse-width program starting at table row `startRow`.
 	private SweepSim simPulse(int startRow) {
 		SweepSim s;
@@ -5328,7 +5358,7 @@ class SoundEditor : Window, Undoable {
 		bool[0x40] visited;
 		int[0x40] firstFrame; firstFrame[] = -1;
 		visited[row] = true;
-		while(s.val.length < MAXF) {
+		simPulseLoop: while(s.val.length < MAXF) {
 			int base = row * 4;
 			ubyte b0 = song.pulseTable[base + 0];
 			ubyte b1 = song.pulseTable[base + 1];
@@ -5344,25 +5374,14 @@ class SoundEditor : Window, Undoable {
 				s.rowOf ~= row;
 				if(s.val.length >= MAXF) break;
 			}
-			int nextRow;
-			if(b3 == 0) nextRow = (row + 1) & 0x3f;
-			else if(b3 == 0x7f) { s.stops = true; break; }
-			else if(b3 <= 0x3f) nextRow = b3;
-			else { s.stops = true; break; }
 			// §11.3 loop: on the FIRST return to an already-emitted row, record where
 			// the looped section starts and its period, then KEEP replicating it across
 			// the visible window (the real player repeats it too) instead of breaking.
-			if(visited[nextRow]) {
-				if(s.loopFrame < 0) {
-					s.loopFrame = firstFrame[nextRow];
-					s.loopPeriod = cast(int)s.val.length - firstFrame[nextRow];
-					if(s.loopPeriod < 1) s.loopPeriod = 1;
-				}
-				row = nextRow;
-				continue;
+			final switch(advanceSweepRow(row, b3, visited, firstFrame, s)) {
+				case SweepStep.stop: s.stops = true; break simPulseLoop;
+				case SweepStep.loopBack: continue simPulseLoop;
+				case SweepStep.advance: break;
 			}
-			visited[nextRow] = true;
-			row = nextRow;
 		}
 		return s;
 	}
@@ -5389,7 +5408,7 @@ class SoundEditor : Window, Undoable {
 			s.modeOf ~= mode; s.resOf ~= res; s.routeOf ~= routing;
 			s.cfgRowOf ~= curCfgRow;
 		}
-		while(s.val.length < MAXF) {
+		simFilterLoop: while(s.val.length < MAXF) {
 			int base = row * 4;
 			ubyte b0 = song.filterTable[base + 0];
 			ubyte b1 = song.filterTable[base + 1];
@@ -5417,23 +5436,12 @@ class SoundEditor : Window, Undoable {
 					if(s.val.length >= MAXF) break;
 				}
 			}
-			int nextRow;
-			if(b3 == 0) nextRow = (row + 1) & 0x3f;
-			else if(b3 == 0x7f) { s.stops = true; break; }
-			else if(b3 <= 0x3f) nextRow = b3;
-			else { s.stops = true; break; }
 			// §11.3 loop replication (see simPulse).
-			if(visited[nextRow]) {
-				if(s.loopFrame < 0) {
-					s.loopFrame = firstFrame[nextRow];
-					s.loopPeriod = cast(int)s.val.length - firstFrame[nextRow];
-					if(s.loopPeriod < 1) s.loopPeriod = 1;
-				}
-				row = nextRow;
-				continue;
+			final switch(advanceSweepRow(row, b3, visited, firstFrame, s)) {
+				case SweepStep.stop: s.stops = true; break simFilterLoop;
+				case SweepStep.loopBack: continue simFilterLoop;
+				case SweepStep.advance: break;
 			}
-			visited[nextRow] = true;
-			row = nextRow;
 		}
 		return s;
 	}
