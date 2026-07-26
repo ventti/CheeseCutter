@@ -391,9 +391,28 @@ class SoundEditor : Window, Undoable {
 	// from the bytes automatically), and the held note is re-triggered once at release.
 	private enum int ADSR_ATTACK = 0, ADSR_DECAY = 1, ADSR_SUSTAIN = 2, ADSR_RELEASE = 3;
 	private enum int ADSR_HIT_PX = 9;      // handle grab radius (device pixels; ~one cell)
-	private bool adsrDragging = false;
-	private int  adsrHandle = -1;
-	private bool adsrMoved = false;    // a byte was actually written this gesture
+
+	// A drag "gesture" state machine. The ten mouse drags are mutually exclusive, so at
+	// most one is in progress at a time; activeGesture holds it (null = none). The base
+	// folds the shared boilerplate: the ONE undo snapshot on first motion (gated by
+	// `moved`), the per-tick update, and the re-trigger-if-moved teardown at release.
+	// Nested + non-static so update()/onFirstMotion() reach outer SoundEditor members
+	// (snapshotInstruments, adsrDragUpdate, retriggerIfSounding) directly.
+	private abstract class DragGesture {
+		bool moved;                              // replaces each Xmoved: a byte was written this gesture
+		abstract bool onFirstMotion();           // snapshot/ownership; false = abort the drag
+		abstract void update(ref Geo g, int x, int y);
+		void end() {}                            // extra teardown (default none)
+		bool retriggersOnMove() { return true; } // re-trigger the held note on release if moved
+	}
+	private DragGesture activeGesture;           // null = no drag in progress
+
+	private final class AdsrDrag : DragGesture {
+		int handle;
+		this(int h) { handle = h; }
+		override bool onFirstMotion() { snapshotInstruments(); return true; }
+		override void update(ref Geo g, int x, int y) { adsrDragUpdate(g, x, y, handle); }
+	}
 
 	// Silent pre-keyjam ADSR truth. The selected reSID backend renders this isolated
 	// trace; the cache changes only when its authored inputs change after a completed
@@ -2088,7 +2107,7 @@ class SoundEditor : Window, Undoable {
 
 		// A mouse move changes instrument bytes, but the audible/visible result commits
 		// on release. Preserve the prior trace throughout the gesture.
-		if(adsrDragging && silentEnvPreview.length) return;
+		if(cast(AdsrDrag)activeGesture && silentEnvPreview.length) return;
 		if(!changed && silentEnvPreview.length >= requestedTicks) return;
 
 		int renderTicks = max(requestedTicks, cast(int)silentEnvPreview.length);
@@ -2806,7 +2825,8 @@ class SoundEditor : Window, Undoable {
 		adsrHandlePositions(ins, g, hx, hy, inView);
 		foreach(i; 0 .. 4) {
 			if(!inView[i]) continue;
-			int c = (adsrDragging && adsrHandle == i) ? COL_TRIGGER : COL_HEAD;
+			auto ad = cast(AdsrDrag)activeGesture;
+			int c = (ad && ad.handle == i) ? COL_TRIGGER : COL_HEAD;
 			video.olFillRect(hx[i] - 2, hy[i] - 2, 5, 5, c);
 		}
 	}
@@ -2840,7 +2860,7 @@ class SoundEditor : Window, Undoable {
 	// Map the current ADSR-handle drag to the nearest SID nibble and write the byte
 	// (curve + column redraw from the byte automatically). No undo/re-trigger here — the
 	// gesture's snapshot was taken at press, the re-trigger fires once on release.
-	private void adsrDragUpdate(ref Geo g, int cellx, int celly) {
+	private void adsrDragUpdate(ref Geo g, int cellx, int celly, int handle) {
 		int ins = clampedIns();
 		int px = cellx * FONT_X + FONT_X / 2;
 		// Sustain is read off the exact mouse pixel: the ADSR band is ~5 character rows
@@ -2852,7 +2872,7 @@ class SoundEditor : Window, Undoable {
 		int attack = (ad >> 4) & 0x0f, decay = ad & 0x0f;
 		float aF = ATTACK_TIME_MS[attack]       / tickMs;
 		float dF = DECAY_RELEASE_TIME_MS[decay] / tickMs;
-		switch(adsrHandle) {
+		switch(handle) {
 			case ADSR_ATTACK: {
 				double ms = t * tickMs; if(ms < 0) ms = 0;
 				setNibbleAbs(ins, 0, true, nearestMs(ATTACK_TIME_MS, ms));
@@ -5876,9 +5896,7 @@ class SoundEditor : Window, Undoable {
 		// One undo snapshot per drag gesture is taken here at press.
 		int ah = adsrHandleAt(g, x, y);
 		if(ah >= 0) {
-			adsrDragging = true;
-			adsrHandle = ah;
-			adsrMoved = false;       // snapshot + first write happen on the first drag tick
+			activeGesture = new AdsrDrag(ah);   // snapshot + first write happen on the first drag tick
 			clickWasButton = true;   // consume the paired release (no selection change)
 			return;
 		}
@@ -6035,13 +6053,17 @@ class SoundEditor : Window, Undoable {
 			updateWaveGraphDrag(g, x, y);
 			return;
 		}
-		// §19 P4a ADSR-handle drag: on the first drag tick take the one gesture undo
-		// snapshot, then rewrite the mapped byte every tick (curve + column redraw from
-		// the byte). No re-trigger here — that fires once on release.
-		if(adsrDragging) {
+		// Unified drag dispatch: on the first motion tick take the one gesture undo
+		// snapshot / resolve ownership (abort ⇒ clear), then run the per-tick update.
+		// Safe first: the drags are mutually exclusive, so this never shadows the
+		// remaining bool-flag arms below. (§19 P4a ADSR handle drag flows through here.)
+		if(activeGesture) {
 			Geo g = layout();
-			if(!adsrMoved) { snapshotInstruments(); adsrMoved = true; }
-			adsrDragUpdate(g, x, y);
+			if(!activeGesture.moved) {
+				if(!activeGesture.onFirstMotion()) { activeGesture = null; return; }
+				activeGesture.moved = true;
+			}
+			activeGesture.update(g, x, y);
 			return;
 		}
 		// §20 P4b-2 loop-marker drag: first motion resolves ownership atomically, then
@@ -6201,14 +6223,14 @@ class SoundEditor : Window, Undoable {
 			waveGraphMoved = false;
 			return;
 		}
-		// §19 P4a end an ADSR-handle drag: make the new envelope audible once (if a note
-		// is held) — never per drag tick. A plain click with no drag wrote nothing.
-		if(adsrDragging) {
-			adsrDragging = false;
-			adsrHandle = -1;
+		// Unified drag teardown: shared reset + re-trigger-if-moved. Safe first (drags are
+		// mutually exclusive). A plain click with no motion never set `moved`, so it wrote
+		// nothing and re-triggers nothing. (§19 P4a ADSR handle drag flows through here.)
+		if(activeGesture) {
+			activeGesture.end();
 			clickWasButton = false;
-			if(adsrMoved) retriggerIfSounding();
-			adsrMoved = false;
+			if(activeGesture.moved && activeGesture.retriggersOnMove()) retriggerIfSounding();
+			activeGesture = null;
 			return;
 		}
 		// §20 P4b-2 end a loop-marker drag: make the new loop audible once if a note is held.
