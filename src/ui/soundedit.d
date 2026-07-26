@@ -983,6 +983,17 @@ class SoundEditor : Window, Undoable {
 
 	this(Rectangle a) {
 		super(a);
+		// §10.3 one-glance band table: output, adsr, freq, pulse, filter (weighted
+		// 1,1,0.9,0.9,0.9), then the fixed-height wave band. Drives layout() heights
+		// and update()'s per-band draw loop.
+		bands = [
+			BandInfo(1.0f, 0,         (int ins, ref Geo g) { drawOutputBand(g); }),
+			BandInfo(1.0f, 0,         &drawAdsrBand),
+			BandInfo(0.9f, 0,         &drawFreqBand),
+			BandInfo(0.9f, 0,         &drawPulseBand),
+			BandInfo(0.9f, 0,         &drawFilterBand),
+			BandInfo(0.0f, WAVE_ROWS, &drawWaveBand),   // fixed height; weight unused
+		];
 		inputKeyjam = new InputKeyjam();
 		inputKeyjam.setKeyjamVoice(keyjamChannel);
 		inputKeyjam.ensurePreviewBaseline(clampedIns());
@@ -1045,6 +1056,23 @@ class SoundEditor : Window, Undoable {
 		int controlRow;         // §17.3 zoom-control button row (cells)
 		int scrollRow;          // reserved for the future horizontal scrollbar (blank)
 	}
+
+	// The wave band stacks 8 SID control-bit lanes ONE per character row, so it gets
+	// a FIXED height (a weight that merely rounds to ~8 rows is fragile) of WAVE_ROWS
+	// character rows at the bottom of the stack; bands 0..4 share the rest by weight.
+	private enum int WAVE_ROWS = 9;   // 8 lanes + 1 row of slack for the bandBox inset
+
+	// §10.3 The six stacked bands, top -> bottom, in ONE ordered list: what exists, in
+	// what order, and how tall. `weight` sizes the weighted bands (0..4); `fixedRows > 0`
+	// marks a fixed-height band (only the wave band); `draw` points at the band's
+	// existing draw*Band body. layout() and update() read this instead of open-coded
+	// weight arrays / magic band indices. Built once in the constructor.
+	private struct BandInfo {
+		float weight;                             // relative height weight (weighted bands)
+		int fixedRows;                            // >0 => fixed-height (wave); 0 => weighted
+		void delegate(int ins, ref Geo g) draw;   // the existing draw*Band method
+	}
+	private BandInfo[6] bands;
 
 	private struct SweepLoopGeometry {
 		bool looped, stopped;
@@ -1127,14 +1155,14 @@ class SoundEditor : Window, Undoable {
 		g.stackTopPx = stackTopRow * FONT_Y;
 		g.stackBotPx = stackBotRow * FONT_Y;
 
-		// Six bands (§10.3): output, adsr, frequency, pulse, filter, wave. The wave
-		// band stacks 8 SID control-bit lanes, ONE per character row, so its gutter
-		// labels line up with the lane blocks — give it a FIXED height of WAVE_ROWS
-		// character rows at the bottom of the stack (a weight that merely rounds to
-		// ~8 rows is fragile), and share the remaining span among bands 0..4 by weight.
-		enum int WAVE_ROWS = 9;   // 8 lanes + 1 row of slack for the bandBox inset
-		int waveTopPx = g.stackBotPx - WAVE_ROWS * FONT_Y;
-		immutable float[5] wgt = [1.0f, 1.0f, 0.9f, 0.9f, 0.9f];
+		// Six bands (§10.3): output, adsr, frequency, pulse, filter, wave — sourced
+		// from the `bands` metadata list (see its comment). The wave band's gutter
+		// labels line up with its lane blocks, so it takes a FIXED height of
+		// bands[5].fixedRows (WAVE_ROWS) character rows at the bottom of the stack,
+		// and bands 0..4 share the remaining span by their weights.
+		int waveTopPx = g.stackBotPx - bands[5].fixedRows * FONT_Y;
+		float[5] wgt;
+		foreach(i; 0 .. 5) wgt[i] = bands[i].weight;
 		float tot = 0; foreach(w; wgt) tot += w;
 		float acc = 0;
 		int span = waveTopPx - g.stackTopPx;
@@ -1411,21 +1439,18 @@ class SoundEditor : Window, Undoable {
 
 		// Stacked, frame-aligned graph bands (top -> bottom); text labels are already
 		// drawn by drawTextChrome, so here we draw only the pixel axis + band content.
-		drawBandAxis(g, 0);
-		drawOutputBand(g);
-		drawBandAxis(g, 1);
-		drawAdsrBand(ins, g);
-		drawBandAxis(g, 2);
-		drawFreqBand(ins, g);
-		drawSelectedWaveRow(ins, g);
-		drawWaveAddTarget(ins, g);
-		drawWaveLoopIndicators(ins, g);
-		drawBandAxis(g, 3);
-		drawPulseBand(ins, g);
-		drawBandAxis(g, 4);
-		drawFilterBand(ins, g);
-		drawBandAxis(g, 5);
-		drawWaveBand(ins, g);
+		foreach(bi, ref band; bands) {
+			drawBandAxis(g, cast(int)bi);
+			band.draw(ins, g);
+			// Wave overlays paint across the FREQUENCY band (row references into the
+			// wave table shown over the freq graph), so they draw right after band 2
+			// (frequency) and before band 3 (pulse) — order preserved exactly.
+			if(bi == 2) {
+				drawSelectedWaveRow(ins, g);
+				drawWaveAddTarget(ins, g);
+				drawWaveLoopIndicators(ins, g);
+			}
+		}
 
 		// Tracker-row grid sits above band fills but below the semantic markers
 		// (restart, note trigger, selection and playhead), so those remain dominant.
