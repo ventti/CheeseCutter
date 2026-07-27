@@ -549,6 +549,41 @@ private bool processCommand(string arg) {
 			stderr.writeln();
 			break;
 		}
+		case "presspx": case "movepx": case "releasepx": {
+			// presspx/movepx/releasepx:CX,PY — the three phases of a pixel-precise drag
+			// as SEPARATE commands, so an oracle (e.g. pitchprobe) can be read MID-gesture.
+			// `dragpx` runs all three at once and therefore only ever shows the released
+			// state. Y is a grid pixel; com.fb.mousePixelY is published as main.mainloop does.
+			auto p = val.split(",");
+			int cx = to!int(p[0]), py = to!int(p[1]);
+			com.fb.mousePixelX = cx * FONT_X + FONT_X / 2;
+			com.fb.mousePixelY = py;
+			int cy = py / FONT_Y;
+			if(cmd == "presspx") mainui.clickedAt(cx, cy, 1, 1);
+			else if(cmd == "movepx") mainui.draggedTo(cx, cy);
+			else mainui.releasedAt(cx, cy);
+			mainui.update();
+			stderr.writefln("%s %d,%dpx", cmd, cx, py);
+			break;
+		}
+		case "pitchprobe": {
+			if(!mainui.toplevel.soundEditorActive) {
+				stderr.writeln("pitch: inactive");
+				break;
+			}
+			auto p = mainui.toplevel.soundEditor.pitchProbe();
+			// delta = how far the drawn block sits from the cursor. Should stay within
+			// one value step (stepPx) if the drag maps 1:1 to the UI.
+			int delta = (p.drawnY >= 0 && p.mouseY >= 0) ? p.drawnY - p.mouseY : 0;
+			stderr.writefln("pitch: plot=%d..%d band=%d..%d h=%d scale=%d latched=%d row=%d value=$%02x "
+				~ "pitch=%d drawnY=%d mouseY=%d valueAtMouseY=%d delta=%d stepPx=%.2f "
+				~ "dragging=%s clamped=%s",
+				p.plotLeft, p.plotRight,
+				p.bandTop, p.bandBottom, p.bandHeight, p.scale, p.latchedScale,
+				p.row, p.value, p.pitch, p.drawnY, p.mouseY, p.valueAtMouseY,
+				delta, p.stepPixels1000 / 1000.0, p.dragging, p.clampedByScale);
+			break;
+		}
 		case "soundstate": {
 			if(!mainui.toplevel.soundEditorActive) {
 				stderr.writeln("sound: inactive");
@@ -989,9 +1024,21 @@ int main(string[] args) {
 		stderr.writeln("SDL video init failed: ", to!string(SDL_GetError()));
 		return 1;
 	}
-	screen = new Screen(160, 50);
-	video = new VideoStandard(160 * FONT_X, 50 * FONT_Y, screen, 0);
-	seq.sequencer.initialHeight = 40;
+	// Grid size. Default is the 160x50 MINIMUM; the real app autoscales to ~90% of the
+	// desktop, so band heights (and anything derived from them) are much larger there.
+	// `screen:COLSxROWS` reproduces a real window's geometry — pass it when a bug might
+	// depend on band height rather than on the layout's minimum.
+	int cols = 160, rows = 50;
+	foreach(arg; args[1 .. $]) {
+		if(!arg.startsWith("screen:")) continue;
+		auto dims = arg["screen:".length .. $].split("x");
+		if(dims.length == 2) { cols = to!int(dims[0]); rows = to!int(dims[1]); }
+	}
+	if(cols < 160) cols = 160;
+	if(rows < 50) rows = 50;
+	screen = new Screen(cols, rows);
+	video = new VideoStandard(cols * FONT_X, rows * FONT_Y, screen, 0);
+	seq.sequencer.initialHeight = rows - 10 > 64 ? 64 : rows - 10;
 	// `wide` (anywhere in argv) selects the wide UI layout (com.fb.mode>0, the
 	// app's autoscale default) — must be set before the UI/layout is built.
 	foreach(arg; args[1 .. $])
@@ -1007,6 +1054,7 @@ int main(string[] args) {
 	foreach(arg; args[1 .. $]) {
 		if(arg == "serve" || arg == "-") { serve = true; continue; }
 		if(arg == "wide") continue;   // handled before UI construction
+		if(arg.startsWith("screen:")) continue;   // ditto
 
 		if(!processCommand(arg)) return 2;   // batch: unknown command fails the run
 	}

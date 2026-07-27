@@ -236,6 +236,20 @@ struct SoundEditorSweepLoopDebug {
 	int startLeft, startRight, endLeft, endRight, top, bottom;
 }
 
+// Frequency-band pitch mapping probe: everything needed to check that a dragged block
+// tracks the cursor 1:1. `drawnY` is where drawAuthoredPitchStaircase puts the row's
+// current value; `mouseY` is the pixel the drag read. If they differ by more than one
+// value step, the block is not following the mouse.
+struct SoundEditorPitchProbe {
+	int bandTop, bandBottom, bandHeight;
+	int plotLeft, plotRight;   // band's X pixel range; a press outside starts no drag
+	int scale, latchedScale;
+	int row, value, pitch;
+	int drawnY, mouseY, valueAtMouseY;
+	int stepPixels1000;   // pixels per one semitone, x1000 (integer transport)
+	bool dragging, clampedByScale;
+}
+
 class SoundEditor : Window, Undoable {
 	// All colours go through the semantic palette (com.palette): UI chrome via Role.*
 	// (idx), graph colours via named BaseColor.* — no magic indices anywhere.
@@ -535,6 +549,31 @@ class SoundEditor : Window, Undoable {
 			hasSelection, useRec, selStartTick, selEndTick, editCursor,
 			inputKeyjam.previewInstrument(), inputKeyjam.previewNote(),
 			durationRows, durationValue, configuredGateTicks(), keyjamChannel + 1);
+	}
+
+	// Read-only probe of the pitch mapping for the selected wave row (see the struct).
+	SoundEditorPitchProbe pitchProbe() {
+		Geo g = layout();
+		SoundEditorPitchProbe p;
+		bandBox(g, 2, p.bandTop, p.bandBottom);
+		p.bandHeight = p.bandBottom - p.bandTop;
+		p.plotLeft = g.plotX0px;
+		p.plotRight = g.plotX0px + g.plotWpx;
+		int ins = clampedIns();
+		p.latchedScale = waveGraphScale;
+		p.scale = freqBandScale(ins);
+		p.dragging = waveGraphDragging;
+		p.row = waveGraphDragging ? waveGraphRow : selectedWaveRow;
+		if(p.row >= 0 && p.row < 256) {
+			p.value = song.waveTable[p.row];
+			p.pitch = (p.value >= 0x80 && p.value <= 0xdf) ? p.value & 0x7f : p.value;
+		} else p.value = p.pitch = -1;
+		p.drawnY = p.pitch >= 0 ? yForPitch(p.bandTop, p.bandBottom, p.scale, p.pitch) : -1;
+		p.mouseY = mousePixelY;
+		p.valueAtMouseY = pitchForY(p.bandTop, p.bandBottom, p.scale, p.mouseY);
+		p.stepPixels1000 = p.scale > 0 ? p.bandHeight * 1000 / p.scale : 0;
+		p.clampedByScale = p.pitch > p.scale;
+		return p;
 	}
 
 	final bool commandEnabled(string actionId) {
@@ -841,6 +880,9 @@ class SoundEditor : Window, Undoable {
 		selectedWaveRow = -1;
 		linkedEditKind = linkedEditStart = -1;
 		hoveredControlAction = "";
+		// Re-fit the frequency axis for a fresh session (it is otherwise grow-only, so a
+		// previous session's zoomed-out axis would persist). See freqScaleSticky.
+		freqScaleSticky = freqScaleStickyIns = -1;
 		syncKeyjamConfiguration();
 	}
 
@@ -2276,12 +2318,25 @@ class SoundEditor : Window, Undoable {
 	// band, bottom = 0. The scale auto-fits the program's largest value with a one-octave
 	// floor so small arps stay legible; while a drag is live it is latched (waveGraphScale)
 	// so the axis cannot move under the cursor mid-gesture.
-	private int freqBandScaleFrom(ref WaveFrameSim s) {
-		if(waveGraphScale > 0) return waveGraphScale;
+	// The axis auto-fits to the program's peak, which would make it depend on the very
+	// value being edited: lowering the peak re-fitted the axis the moment the drag ended,
+	// so the block jumped away from the cursor (measured -16px at the minimum window,
+	// -10px at ~90-row autoscale). Hold the fitted scale while the editor stays on one
+	// instrument and only ever let it GROW, so no edit can move the axis under the user.
+	// Re-fits when the instrument changes or a new session starts.
+	private int freqScaleSticky = -1, freqScaleStickyIns = -1;
+
+	private int freqBandScaleFrom(int ins, ref WaveFrameSim s) {
+		if(waveGraphScale > 0) return waveGraphScale;   // latched for a whole drag
 		int n = min(cast(int)s.transOf.length, visFrames);
-		int scale = 12;   // one octave: keep small arps visible
-		foreach(f; 0 .. n) if(s.transOf[f] > scale) scale = s.transOf[f];
-		return scale;
+		int fit = 12;   // one octave: keep small arps visible
+		foreach(f; 0 .. n) if(s.transOf[f] > fit) fit = s.transOf[f];
+		if(freqScaleStickyIns != ins) {
+			freqScaleStickyIns = ins;
+			freqScaleSticky = fit;
+		}
+		else if(fit > freqScaleSticky) freqScaleSticky = fit;   // grow only
+		return freqScaleSticky;
 	}
 
 	// Same fit for callers that have no simulation at hand (the hit-test). The draw path
@@ -2290,7 +2345,7 @@ class SoundEditor : Window, Undoable {
 		if(waveGraphScale > 0) return waveGraphScale;
 		WaveFrameSim s = simWaveFrames(song.instrumentTable[ins + 7 * 48],
 			waveTimeForInstrument(ins));
-		return freqBandScaleFrom(s);
+		return freqBandScaleFrom(ins, s);
 	}
 
 	private int yForPitch(int topPx, int botPx, int scale, int pitch) {
@@ -4532,7 +4587,7 @@ class SoundEditor : Window, Undoable {
 			// editable semitone mapping so the blocks the user drags are visible here too
 			// and land where the cursor is.
 			int an = min(cast(int)s.transOf.length, visFrames);
-			if(an > 0) drawAuthoredPitchStaircase(g, s, topPx, botPx, an, COL_DIM);
+			if(an > 0) drawAuthoredPitchStaircase(ins, g, s, topPx, botPx, an, COL_DIM);
 			// §14.2 derive the loop from the ACTUAL recorded frequency staircase.
 			int lf, lp;
 			loopFromRecording(fr, n, lf, lp);
@@ -4544,7 +4599,7 @@ class SoundEditor : Window, Undoable {
 		// editable mapping (freqBandScale / yForPitch) so a dragged block tracks the cursor.
 		int n = min(cast(int)s.transOf.length, visFrames);
 		if(n <= 0) return;
-		drawAuthoredPitchStaircase(g, s, topPx, botPx, n, COL_DIM);
+		drawAuthoredPitchStaircase(ins, g, s, topPx, botPx, n, COL_DIM);
 		drawLoopLines(g, topPx, botPx, s.loopFrame, s.loopPeriod, n);
 	}
 
@@ -4552,9 +4607,9 @@ class SoundEditor : Window, Undoable {
 	// mapping the pitch drag hit-tests against (yForPitch). This is the editable geometry,
 	// so it is drawn in BOTH view modes -- including the recording view, whose log2-Hz trace
 	// is on an unrelated auto-fitted axis and cannot be dragged against.
-	private void drawAuthoredPitchStaircase(ref Geo g, ref WaveFrameSim s,
+	private void drawAuthoredPitchStaircase(int ins, ref Geo g, ref WaveFrameSim s,
 			int topPx, int botPx, int n, int colour) {
-		int scale = freqBandScaleFrom(s);
+		int scale = freqBandScaleFrom(ins, s);
 		int prevY = -1;
 		int flo, fhi; visRange(n, flo, fhi);   // §17.1 only emit on-screen frames
 		foreach(f; flo .. fhi) {

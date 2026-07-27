@@ -96,6 +96,45 @@ Three separate defects here, in order of severity:
 
 </details>
 
+### [x] 8c. FIXED — the axis re-fitted on release, so the block jumped away from the cursor
+
+Reported 2026-07-27: "in the expanded view mode the blocks move in a different pace than my
+mouse drag". Measured with a new `pitchprobe` oracle (drawn-block pixel vs mouse pixel) at
+both the 160x50 layout minimum and a ~90-row autoscale grid:
+
+- **Mid-drag tracking was already correct** after 8: `delta` stayed within ±2px and the
+  block/mouse movement ratio averaged 1.0 at both geometries (the 0.87–1.25 spread is
+  integer semitone rounding — one semitone is 0.9px at the minimum, 3.25px at autoscale).
+- **The jump was at release**: the auto-fit axis re-fitted the moment the gesture ended.
+  Lowering the row that *was* the program's peak collapsed the scale (48 → 12), moving the
+  block **−16px at the minimum window and −10px at autoscale** with the mouse stationary.
+  Repeated gestures therefore felt like the block moved at its own pace.
+
+Fix: the axis no longer re-fits as a result of the edit. `freqScaleSticky` holds the fitted
+scale for as long as the editor stays on one instrument and only ever **grows** (so a value
+raised above the top stays visible); it re-fits when the instrument changes or
+`beginSession()` runs. Release jump measured **0px** at both geometries afterwards. A side
+benefit: the axis now holds the program's true peak instead of collapsing, so steps are
+finer (0.54px/semitone at the minimum).
+
+Also fixed a latent trap this exposed: the driver was hardcoded to `new Screen(160, 50)`,
+the layout **minimum**, so nothing in the suite had ever exercised the geometry the real
+autoscaled app uses. `ccdriver` gained `screen:COLSxROWS`, plus `presspx`/`movepx`/
+`releasepx` (mid-gesture oracles) and `pitchprobe`.
+
+Tests: `SoundEditorPitchTrackingTests.test_dragged_block_follows_the_cursor` in
+`tests/test_sound_editor_drag_precision.py` asserts |delta| ≤ half a semitone step during
+the drag and a 0px jump on release, parametrized over both geometries. Three tests that
+pinned drag *magnitudes* (`test_relative_absolute_and_carry_rows_use_pitch_only_vertical_drag`,
+`test_pitch_program_structure`, and the ratio test added in 8) now assert the encoding-class
+and W2-untouched contracts instead — the magnitude depends on the axis policy and pinning it
+is what let the original bug hide. Clean build + full suite green (122 passed / 259 subtests).
+
+**Known consequence of the policy:** after lowering a program's peak the axis stays zoomed
+out until you switch instruments or re-enter the editor. That is deliberate — an axis that
+shrinks in response to your own edit is what caused the jump. If a shrink-on-demand control
+is wanted, the natural home is the existing `se_fit` action.
+
 ### [x] 8b. FIXED — sibling drags: same cell-granularity defect, no scale mismatches
 
 Investigated 2026-07-27, after item 8. **Good news: the pitch band was the only place where

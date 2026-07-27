@@ -76,6 +76,19 @@ order, repeatable):
   loop does. Needed for widgets that read sub-cell precision: the Sound Editor's
   pitch drag resolves to the pixel, so a cell-granular `drag:` only reaches ~5 of
   its 96 values. X stays cell-granular.
+- `presspx:<cx>,<py>` / `movepx:<cx>,<py>` / `releasepx:<cx>,<py>` — the three phases
+  of `dragpx` as separate commands, so an oracle can be read **mid-gesture**
+  (`dragpx` only ever shows the released state).
+- `pitchprobe` — frequency-band mapping oracle: plot/band pixel bounds, the axis
+  scale (and the drag's latched scale), the edited row's value, the pixel the block
+  is **drawn** at, the mouse pixel, and their `delta`. `delta` within half a semitone
+  step means the dragged block is tracking the cursor.
+- `screen:<COLS>x<ROWS>` — startup flag: build the grid at this size instead of the
+  160x50 **minimum**. The real app autoscales to ~90% of the desktop (a 1440p display
+  gets ~92 rows), which makes graph bands ~3.6x taller. Use it whenever a bug could
+  depend on band height rather than on the layout minimum — most of the suite's
+  hardcoded cell rows (`CONTROL_ROW`, `FREQ_GRAPH_ROW`, `PLOT_WIDTH`, …) assume the
+  minimum and will not line up at other sizes.
 - `play` — start playback (`player.start`); `mult:<n>` — set multispeed (1..16)
 - `ff:<n>` — advance playback by `n*16` frames deterministically (calls the
   player directly; no audio device needed — that's how SID state changes here)

@@ -426,18 +426,22 @@ class SoundEditorUsageTests(unittest.TestCase):
             self.assertIsNotNone(vertical, "pitch row must advertise up/down")
             self.assertIsNotNone(horizontal, "delay row must advertise left/right")
 
-            # $95 = $80|21: absolute encoding kept, pitch read off the band's auto-fit
-            # scale (peak $30 -> 48 semitones full-height), not a fixed 0..$5F axis.
-            # See yForPitch/pitchForY in src/ui/soundedit.d.
+            # A vertical drag rewrites the pitch keeping its absolute ($80..$DF) encoding
+            # and leaving W2 alone. The exact magnitude depends on the band's vertical
+            # scale and is asserted against the drawn block in
+            # test_sound_editor_drag_precision.py, not pinned here.
             session.run(f"drag:{vertical},15,{vertical},16")
             pitched = _wave_rows(session.run(f"wavedump:0x{w0:02x}"), 3)
-            self.assertEqual(pitched[0][1:], (0x95, 0x81))
+            dragged_pitch = pitched[0][1]
+            self.assertIn(dragged_pitch, range(0x80, 0xE0))
+            self.assertNotEqual(dragged_pitch, 0xB0, "the drag must have moved the pitch")
+            self.assertEqual(pitched[0][2], 0x81)
             self.assertEqual(pitched[1][1:], (0x00, 0x04))
 
             # A horizontal (delay) drag must leave the pitch value alone.
             session.run(f"drag:{horizontal},15,{horizontal + 1},15")
             delayed = _wave_rows(session.run(f"wavedump:0x{w0:02x}"), 3)
-            self.assertEqual(delayed[0][1:], (0x95, 0x81))
+            self.assertEqual(delayed[0][1:], (dragged_pitch, 0x81))
             self.assertEqual(delayed[1][1:], (0x00, 0x05))
 
     def test_stop_program(self) -> None:
