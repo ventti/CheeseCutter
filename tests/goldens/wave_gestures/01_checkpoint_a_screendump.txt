@@ -12,10 +12,10 @@ screen10:    Release        0 ......    ADSR
 screen11:    Waveform       noi                 rst:soft                                                                                                                 
 screen12:    Wave ptr       $22                                                                                                                                          
 screen13:    Pulse ptr      $08                                                                                                                                          
-screen14:    Filter ptr     $02         Freq                                                                                                                             
+screen14:    Filter ptr     $02         Pitch                                                                                                                            
 screen15:    Restart        Soft                                             +                                                                                           
-screen16:    Arpeggio speed 0 ......                                                                                                                                     
-screen17:    HR wave        $80                                                                                                                                          
+screen16:    Arpeggio speed 0 ......    C-4                                                                                                                              
+screen17:    HR wave        $80         C-3                                                                                                                              
 screen18:    HR SR          $00         Pulse                                                                                                                            
 screen19:    Keyjam channel Voice 1                                                                                                                                      
 screen20:    Gate hold      50 T                                                                                                                                         

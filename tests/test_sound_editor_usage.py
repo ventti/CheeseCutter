@@ -143,7 +143,7 @@ class SoundEditorUsageTests(unittest.TestCase):
 
     def test_layout_axis_and_tracker_period(self) -> None:
         out = run_driver(*ENTER, "soundstate", "screendump", "mult:1", "frames:1", "soundstate")
-        for label in ("Output", "ADSR", "Freq", "Pulse", "Filter", "Noise", "Gate"):
+        for label in ("Output", "ADSR", "Pitch", "Pulse", "Filter", "Noise", "Gate"):
             self.assertIn(label, out)
         states = occurrences(out, "sound:")
         initial = re.search(r"vis=(\d+) preroll=(\d+) view=([-\d.]+)\.\.([-\d.]+)", states[0])

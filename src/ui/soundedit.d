@@ -1,7 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
 
-Visual Sound Editor screen: a live, keyjam-driven view of the selected instrument laid out as a left parameter column, a stack of time-aligned graph bands sharing one zoomable/pannable tick-based X axis (pixel-perfect output waveform, ADSR envelope, a frequency/arp pitch band, pulse, a filter band coloured per frame by filter type with a resonance-over-time overlay, and a stacked SID control-bit-lane wave view) with a restart pre-roll, a note-trigger divider, a single vertical playhead, a tick-snapped drag selection, a subtle zoom-control row, a raw-hex table strip along the bottom, and a context F12 help page.
+Visual Sound Editor screen: a live, keyjam-driven view of the selected instrument laid out as a left parameter column, a stack of time-aligned graph bands sharing one zoomable/pannable tick-based X axis (pixel-perfect output waveform, ADSR envelope, a piano-roll pitch band (relative arp + absolute notes on one note axis), pulse, a filter band coloured per frame by filter type with a resonance-over-time overlay, and a stacked SID control-bit-lane wave view) with a restart pre-roll, a note-trigger divider, a single vertical playhead, a tick-snapped drag selection, a subtle zoom-control row, a raw-hex table strip along the bottom, and a context F12 help page.
 
 This is the full-screen alternative sound-editing mode toggled from the classic
 editor (Ctrl-E). It runs keyjam (notes play) but uses the *normal* background,
@@ -50,7 +50,7 @@ import com.fb : FONT_X, FONT_Y, keyjamBackground, mousePixelY, traceMouseDrag;
 import com.session : screen, video, state, song, mainui, insertUndo, UndoValue, Undoable;
 import com.shortcuts : Ctx, formatShortcuts;
 import com.palette : idx, Role, BaseColor;
-import ct.base : Song;
+import ct.base : Song, NOTES;
 static import ct.purge;
 import ui.window;
 import ui.input;
@@ -1436,7 +1436,7 @@ class SoundEditor : Window, Undoable {
 		// Band TEXT labels (the pixel axis lines are drawn with the bands themselves).
 		drawBandLabelText(g, 0, "Output");
 		drawBandLabelText(g, 1, "ADSR");
-		drawBandLabelText(g, 2, "Freq");
+		drawBandLabelText(g, 2, "Pitch");
 		drawBandLabelText(g, 3, "Pulse");
 		drawBandLabelText(g, 4, "Filter");
 		// band 5 (wave) is self-labelled by its 8 bit-lane gutter labels.
@@ -4767,67 +4767,129 @@ class SoundEditor : Window, Undoable {
 		drawFilterRouteChip(ins, g);
 	}
 
-	// §10.3 Frequency/pitch band: the instrument's per-frame semitone program taken
-	// from the wave-table transpose/arp column (wave1), drawn as a step graph. Relative
-	// transpose ($00..$5F) and absolute tuning ($80..$DF) are coloured distinctly.
+	// PAL SID raw frequency -> absolute note index in the NOTES domain (C-0 = 0 ..
+	// B-7 = 95), or -1 when silent. NOTES index = midi - 12 (C-4 = midi 60 = index 48).
+	private static int freqToNoteIndex(int rawFreq) {
+		if(rawFreq <= 0) return -1;
+		double hz = rawFreq * 985248.0 / 16777216.0;
+		if(hz < 8.0) return -1;
+		int idx = cast(int)lround(57.0 + 12.0 * log2(hz / 440.0));   // 57 = A-4 index
+		if(idx < 0) idx = 0;
+		if(idx > 95) idx = 95;
+		return idx;
+	}
+
+	// §10.3 Pitch band, drawn as a mini PIANO ROLL on one absolute-note axis (C-0..B-7).
+	// The wave/arp transpose column carries two note kinds that can interleave and loop:
+	// RELATIVE offsets ($00..$5F, added to the played note — arps) and ABSOLUTE notes
+	// ($80..$DF, a fixed pitch). Both are resolved onto the SAME semitone axis so a mixed
+	// program reads as notes over time: a relative frame sits at (playedNote + offset)
+	// and the whole relative shape shifts live as you keyjam a different note; an absolute
+	// frame sits at its own fixed note and never moves. A bright reference line marks the
+	// played note (relative "0"); octave gridlines + note-name gutter labels make the
+	// pitch readable; the loop-back is marked as on the other bands. Recording view places
+	// the ACTUAL measured pitch on the very same axis (cyan) so you see it track the arp.
 	private void drawFreqBand(int ins, ref Geo g) {
 		int topPx, botPx; bandBox(g, 2, topPx, botPx);
 		int h = botPx - topPx;
-		if(h < 2) return;
+		if(h < 6) return;
+
+		// Played/preview note index (C-0=0 .. B-7=95); C-4 baseline before any note.
+		int played = inputKeyjam.previewNote();
+		if(played < 0 || played > 95) played = 48;   // C-4
+
 		int ptr = song.instrumentTable[ins + 7 * 48];
 		WaveFrameSim s = simWaveFrames(ptr, waveTimeForInstrument(ins));
-
-		// §11.2 recording path: the ACTUAL 16-bit SID frequency per frame, drawn on a
-		// log2 (pitch) scale auto-fitted to the recorded range so pitch moves read as
-		// even semitone steps. Absolute-tuning colour (cyan) — it is a real pitch.
+		const(int)[] fr;
+		int n;
 		if(useRec) {
-			auto fr = audio.visualizer.getRecordedFreq(viewVoice);
-			int n = min(cast(int)fr.length, visFrames);
-			if(n <= 0) return;
-			float lo = 1e9f, hi = -1e9f;
-			foreach(f; 0 .. n) if(fr[f] > 0) {
-				float l = log2(cast(float)fr[f]);
-				if(l < lo) lo = l;
-				if(l > hi) hi = l;
-			}
-			if(hi <= lo) hi = lo + 1.0f;       // flat / silent: avoid divide-by-zero
-			int flo, fhi; viewport.visRange(n, flo, fhi);   // §17.1 only emit on-screen frames
-			drawStaircase(g, flo, fhi, (int f) {
-				float l = fr[f] > 0 ? log2(cast(float)fr[f]) : lo;
-				return botPx - cast(int)lround((l - lo) / (hi - lo) * h);
-			}, COL_FREQ_ABS);
-			// The recorded trace above is on its own auto-fitted log2-Hz axis, which the
-			// pitch drag cannot hit-test against. Overlay the authored program on the
-			// editable semitone mapping so the blocks the user drags are visible here too
-			// and land where the cursor is.
-			int an = min(cast(int)s.transOf.length, visFrames);
-			if(an > 0) drawAuthoredPitchStaircase(ins, g, s, topPx, botPx, an, COL_DIM);
-			// §14.2 derive the loop from the ACTUAL recorded frequency staircase.
-			int lf, lp;
-			loopFromRecording(fr, n, lf, lp);
-			drawLoopLines(g, topPx, botPx, lf, lp, n);
-			return;
+			fr = audio.visualizer.getRecordedFreq(viewVoice);
+			n = min(cast(int)fr.length, visFrames);
+		} else {
+			n = min(cast(int)s.transOf.length, visFrames);
+		}
+		if(n <= 0) return;
+
+		// Frame -> absolute note index (-1 = silent/unknown), and the frame's colour.
+		int idxOf(int f) {
+			if(useRec) return freqToNoteIndex(fr[f]);
+			return s.absOf[f] ? s.transOf[f] : played + s.transOf[f];
+		}
+		int colOf(int f) {
+			if(useRec) return COL_FREQ_ABS;                        // a real, measured pitch
+			return s.absOf[f] ? COL_FREQ_ABS : COL_FREQ_REL;      // authored abs vs relative
 		}
 
-		// Idle dimmed sim: the wave-table transpose/arp program (semitones), on the shared
-		// editable mapping (freqBandScale / yForPitch) so a dragged block tracks the cursor.
-		int n = min(cast(int)s.transOf.length, visFrames);
-		if(n <= 0) return;
-		drawAuthoredPitchStaircase(ins, g, s, topPx, botPx, n, COL_DIM);
-		drawLoopLines(g, topPx, botPx, s.loopFrame, s.loopPeriod, n);
-	}
-
-	// The authored transpose/arp program as a step staircase, positioned through the SAME
-	// mapping the pitch drag hit-tests against (yForPitch). This is the editable geometry,
-	// so it is drawn in BOTH view modes -- including the recording view, whose log2-Hz trace
-	// is on an unrelated auto-fitted axis and cannot be dragged against.
-	private void drawAuthoredPitchStaircase(int ins, ref Geo g, ref WaveFrameSim s,
-			int topPx, int botPx, int n, int colour) {
-		int scale = freqBandScaleFrom(ins, s);
 		int flo, fhi; viewport.visRange(n, flo, fhi);   // §17.1 only emit on-screen frames
-		drawStaircase(g, flo, fhi, (int f) {
-			return yForPitch(topPx, botPx, scale, s.transOf[f]);
-		}, colour);
+
+		// Fit the visible pitch range, always including the played-note reference. To keep
+		// the (short) band readable we cap the window at two octaves: within that, fit the
+		// content and snap to whole octaves for a clean labelled grid; a rarer wider spread
+		// (e.g. one transient absolute note far away) centres a fixed window on the played
+		// note and pins the outliers to the band edge rather than crushing the main shape.
+		enum int MAX_SPAN = 24;   // at most two octaves visible at once
+		int clo = played, chi = played;
+		foreach(f; flo .. fhi) {
+			int m = idxOf(f);
+			if(m < 0) continue;
+			if(m < clo) clo = m;
+			if(m > chi) chi = m;
+		}
+		int lo, hi;
+		if(chi - clo <= MAX_SPAN) {
+			lo = clo - 1; hi = chi + 1;              // one-semitone breathing room
+			lo -= ((lo % 12) + 12) % 12;            // snap down to a C
+			hi += 11 - (((hi % 12) + 12) % 12);     // snap up to a B
+		} else {
+			lo = played - MAX_SPAN / 2;              // centre the window on the played note
+			hi = played + MAX_SPAN / 2;
+		}
+		if(lo < 0) lo = 0;
+		if(hi > 95) hi = 95;
+		if(hi - lo < 12) hi = min(95, lo + 12);     // at least one octave tall
+		int span = hi - lo; if(span < 1) span = 1;
+
+		int yOf(int m) { return botPx - cast(int)lround(cast(double)(m - lo) * h / span); }
+
+		// Octave gridlines + note-name gutter labels (only at C boundaries to stay legible;
+		// never on the band-name row so the "Pitch" label stays readable).
+		int bandNameRow = g.bandTopPx[2] / FONT_Y;
+		for(int m = lo - (lo % 12); m <= hi; m += 12) {
+			if(m < lo) continue;
+			int y = yOf(m);
+			video.olHLine(g.plotX0px, g.plotX0px + g.plotWpx - 1, y, COL_AXIS);
+			int row = y / FONT_Y;
+			if(row != bandNameRow && m < NOTES.length)
+				screen.cprint(g.labelX, row, COL_DIM, 0, NOTES[m]);
+		}
+
+		// Played-note reference line (relative "0") + its name, a touch brighter.
+		int refY = yOf(played);
+		video.olHLine(g.plotX0px, g.plotX0px + g.plotWpx - 1, refY, COL_HEAD);
+		int refRow = refY / FONT_Y;
+		if(refRow != bandNameRow && played < NOTES.length)
+			screen.cprint(g.labelX, refRow, COL_TRIGGER, 0, NOTES[played]);
+
+		// One piano-roll cell per frame at its resolved pitch. Relative frames also get a
+		// faint stem from the reference line so "offset from your note" reads at a glance.
+		int cellH = h / span;
+		if(cellH < 2) cellH = 2;
+		if(cellH > FONT_Y) cellH = FONT_Y;
+		foreach(f; flo .. fhi) {
+			int m = idxOf(f);
+			if(m < 0) continue;                       // silent / unknown frame
+			int mc = m < lo ? lo : (m > hi ? hi : m); // pin outliers to the band edge
+			int xa, xb; frameXSpan(g, f, xa, xb);
+			int cy = yOf(mc);
+			if(!useRec && !s.absOf[f] && s.transOf[f] != 0)
+				video.olVLine(xa, min(refY, cy), max(refY, cy), COL_DIM);
+			video.olFillRect(xa, cy - cellH / 2, xb - xa, cellH, colOf(f));
+		}
+
+		// §14.2 loop-back marker (recording derives it from the actual pitch staircase).
+		int lf = s.loopFrame, lp = s.loopPeriod;
+		if(useRec) loopFromRecording(fr, n, lf, lp);
+		drawLoopLines(g, topPx, botPx, lf, lp, n);
 	}
 
 	// ---- wave band = §9.3 stacked SID control-bit lanes ----
