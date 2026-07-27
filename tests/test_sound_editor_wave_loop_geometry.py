@@ -237,8 +237,11 @@ class SoundEditorWaveLoopGeometryTests(unittest.TestCase):
             self.assertEqual(_full_sound_dump(session.run("sounddump")), before)
 
     def test_wave_loop_retarget_outside_timeline_uses_nearest_legal_normal_row(self) -> None:
-        for target_x, expected_offset in ((-100, 0), (300, 5)):
-            with self.subTest(side="left" if target_x < 0 else "right"), _master_session() as session:
+        # §22 position decides the loop TYPE for an off-timeline drag: off the LEFT edge
+        # lands on the first authored row (a $7F jump); off the RIGHT edge lands on the
+        # last authored row, which is "loop to previous" ($7E, marker 0x7E / target 0).
+        for target_x, side in ((-100, "left"), (300, "right")):
+            with self.subTest(side=side), _master_session() as session:
                 w0 = _new_isolated_wave(session)
                 session.run("wavefixture:timing-b")
                 before = _full_sound_dump(session.run("sounddump"))
@@ -249,15 +252,20 @@ class SoundEditorWaveLoopGeometryTests(unittest.TestCase):
                     f"{y},{target_x},{y}"
                 )
                 after = _full_sound_dump(session.run("sounddump"))
+                marker = after["wave"][w0 + 6]
                 target = after["wave"][w0 + 6 + 256]
-                self.assertEqual(target, w0 + expected_offset)
-                self.assertGreaterEqual(target, w0)
-                self.assertLess(target, w0 + 6)  # terminal row itself is never legal
-                self.assertEqual(after["wave"][w0 + 6], 0x7F)
+                if side == "left":
+                    self.assertEqual(marker, 0x7F)
+                    self.assertEqual(target, w0)          # first authored row
+                    changed = [w0 + 6 + 256]
+                else:
+                    self.assertEqual(marker, 0x7E)        # loop to previous (last row)
+                    self.assertEqual(target, 0)
+                    changed = [w0 + 6, w0 + 6 + 256]
                 self.assertEqual(
                     [i for i, pair in enumerate(zip(before["wave"], after["wave"]))
                      if pair[0] != pair[1]],
-                    [w0 + 6 + 256],
+                    changed,
                 )
                 for key in ("instruments", "pulse", "filter"):
                     self.assertEqual(after[key], before[key])
@@ -298,8 +306,9 @@ class SoundEditorWaveLoopGeometryTests(unittest.TestCase):
                 else:
                     self.assertNotEqual(new_ptr, old_ptr)
                     self.assertEqual(during["wave"][old_ptr + 2 + 256], old_ptr)
-                self.assertEqual(during["wave"][new_ptr + 2], 0x7F)
-                self.assertEqual(during["wave"][new_ptr + 2 + 256], new_ptr + 1)
+                # §22 tick 3 lands on the last authored row => "loop to previous" ($7E)
+                self.assertEqual(during["wave"][new_ptr + 2], 0x7E)
+                self.assertEqual(during["wave"][new_ptr + 2 + 256], 0)
                 session.run(f"release:{_plot_x_for_tick(session, 3)},{y}")
                 after_generation = generation(session)
                 self.assertEqual(after_generation[1], before_generation[1] + 1)

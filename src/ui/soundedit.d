@@ -1058,6 +1058,7 @@ class SoundEditor : Window, Undoable {
 
 	this(Rectangle a) {
 		super(a);
+		expandedBand = -1;   // normal stacked view until a title is double-clicked
 		// §10.3 one-glance band table: output, adsr, freq, pulse, filter (weighted
 		// 1,1,0.9,0.9,0.9), then the fixed-height wave band. Drives layout() heights
 		// and update()'s per-band draw loop.
@@ -1200,9 +1201,16 @@ class SoundEditor : Window, Undoable {
 	private Geo cachedGeo;
 	private Rectangle cachedGeoArea;
 	private bool geoValid;
+	// §22 band expansion: double-clicking a graph band's title maximises it (index into
+	// `bands`, 0..4; -1 = normal stack). The others collapse to one-row title strips so
+	// you can double-click another to switch or the expanded title to restore. Part of the
+	// geo cache key so toggling it recomputes the layout.
+	private int expandedBand = -1;
+	private int cachedExpandedBand = -2;
 
 	private Geo layout() {
-		if(geoValid && cachedGeoArea.x == area.x && cachedGeoArea.y == area.y
+		if(geoValid && cachedExpandedBand == expandedBand
+				&& cachedGeoArea.x == area.x && cachedGeoArea.y == area.y
 				&& cachedGeoArea.width == area.width && cachedGeoArea.height == area.height)
 			return cachedGeo;
 		Geo g;
@@ -1235,21 +1243,37 @@ class SoundEditor : Window, Undoable {
 		// labels line up with its lane blocks, so it takes a FIXED height of
 		// bands[5].fixedRows (WAVE_ROWS) character rows at the bottom of the stack,
 		// and bands 0..4 share the remaining span by their weights.
-		int waveTopPx = g.stackBotPx - bands[5].fixedRows * FONT_Y;
-		float[5] wgt;
-		foreach(i; 0 .. 5) wgt[i] = bands[i].weight;
-		float tot = 0; foreach(w; wgt) tot += w;
-		float acc = 0;
-		int span = waveTopPx - g.stackTopPx;
-		g.bandTopPx[0] = g.stackTopPx;
-		foreach(i; 0 .. 5) {
-			acc += wgt[i];
-			g.bandTopPx[i + 1] = g.stackTopPx + cast(int)lround(acc / tot * span);
+		if(expandedBand >= 0 && expandedBand < 5) {
+			// §22 one band maximised: every other band collapses to a one-row title strip
+			// and the expanded band takes the rest of the stack. Order is preserved so the
+			// strip titles stay double-clickable to switch or restore.
+			int rowH = FONT_Y;
+			int big = (g.stackBotPx - g.stackTopPx) - 5 * rowH;
+			if(big < rowH) big = rowH;
+			int y = g.stackTopPx;
+			foreach(i; 0 .. 6) {
+				g.bandTopPx[i] = y;
+				y += (i == expandedBand) ? big : rowH;
+			}
+			g.bandTopPx[6] = g.stackBotPx;
+		} else {
+			int waveTopPx = g.stackBotPx - bands[5].fixedRows * FONT_Y;
+			float[5] wgt;
+			foreach(i; 0 .. 5) wgt[i] = bands[i].weight;
+			float tot = 0; foreach(w; wgt) tot += w;
+			float acc = 0;
+			int span = waveTopPx - g.stackTopPx;
+			g.bandTopPx[0] = g.stackTopPx;
+			foreach(i; 0 .. 5) {
+				acc += wgt[i];
+				g.bandTopPx[i + 1] = g.stackTopPx + cast(int)lround(acc / tot * span);
+			}
+			g.bandTopPx[5] = waveTopPx;      // wave band: fixed WAVE_ROWS tall
+			g.bandTopPx[6] = g.stackBotPx;
 		}
-		g.bandTopPx[5] = waveTopPx;      // wave band: fixed WAVE_ROWS tall
-		g.bandTopPx[6] = g.stackBotPx;
 		cachedGeo = g;
 		cachedGeoArea = area;
+		cachedExpandedBand = expandedBand;
 		geoValid = true;
 		return g;
 	}
@@ -1439,7 +1463,9 @@ class SoundEditor : Window, Undoable {
 		drawBandLabelText(g, 2, "Pitch");
 		drawBandLabelText(g, 3, "Pulse");
 		drawBandLabelText(g, 4, "Filter");
-		// band 5 (wave) is self-labelled by its 8 bit-lane gutter labels.
+		// band 5 (wave) is self-labelled by its 8 bit-lane gutter labels — except when
+		// another band is expanded and wave is a one-row strip, where it gets a title.
+		if(expandedBand >= 0) drawBandLabelText(g, 5, "Wave");
 
 		drawRawData(ins, g);
 	}
@@ -1516,6 +1542,9 @@ class SoundEditor : Window, Undoable {
 		// Stacked, frame-aligned graph bands (top -> bottom); text labels are already
 		// drawn by drawTextChrome, so here we draw only the pixel axis + band content.
 		foreach(bi, ref band; bands) {
+			// §22 in expand mode only the maximised band draws content; the rest are
+			// one-row title strips (their titles are drawn by drawTextChrome).
+			if(expandedBand >= 0 && cast(int)bi != expandedBand) continue;
 			drawBandAxis(g, cast(int)bi);
 			band.draw(ins, g);
 			// Wave overlays paint across the FREQUENCY band (row references into the
@@ -1564,7 +1593,7 @@ class SoundEditor : Window, Undoable {
 
 		// §19 P4a draggable A/D/S/R handles on the ADSR curve (drawn on top of the band
 		// so the grab targets are visible; the grabbed one lights up while dragging).
-		drawAdsrHandles(ins, g);
+		if(bandVisible(1)) drawAdsrHandles(ins, g);
 
 		// §17.3 subtle zoom-control button row + the current selection readout.
 		drawZoomControls(g);
@@ -1579,10 +1608,10 @@ class SoundEditor : Window, Undoable {
 		drawProbe(ins, g);
 		// §21 P4c interactive step box (duration edges + ramp handles) on the hovered step,
 		// drawn AFTER the probe so its YELLOW hot edge shows on top of the hover line.
-		drawSweepStepBox(ins, g);
+		if(bandVisible(3) || bandVisible(4)) drawSweepStepBox(ins, g);
 		// Authored LOOP/END triangles are the final graph chrome.  Their one-cell filled
 		// silhouette must remain exact even when the closing step is selected.
-		drawSweepLoopIndicatorsForInstrument(ins, g);
+		if(bandVisible(3) || bandVisible(4)) drawSweepLoopIndicatorsForInstrument(ins, g);
 	}
 
 	// §11.2 Choose the voice whose real SID recording should drive the bands for the
@@ -2752,8 +2781,16 @@ class SoundEditor : Window, Undoable {
 	private void updateWaveLoopDragRaw(ref Geo g, int cellX) {
 		int target = waveRetargetRowAt(waveLoopIns, g, cellX);
 		if(target < 0) return;
-		song.waveTable[waveLoopCloseRow] = 0x7f;
-		song.waveTable[waveLoopCloseRow + 256] = cast(ubyte)target;
+		// §22 position decides the loop type: dropping the loop-back on the LAST authored
+		// row (or dragging fully to the end) is "loop to previous" ($7E, a one-row sustain);
+		// any earlier row is a $7F jump back to that row. One drag sets and moves both kinds.
+		if(target >= waveLoopCloseRow - 1) {
+			song.waveTable[waveLoopCloseRow] = 0x7e;
+			song.waveTable[waveLoopCloseRow + 256] = 0;
+		} else {
+			song.waveTable[waveLoopCloseRow] = 0x7f;
+			song.waveTable[waveLoopCloseRow + 256] = cast(ubyte)target;
+		}
 	}
 
 	private SoundEditorWaveAddDebug waveAddTarget(int ins, ref Geo g) {
@@ -4451,6 +4488,21 @@ class SoundEditor : Window, Undoable {
 		screen.cprint(g.labelX, row, COL_LABEL, 0, label);
 	}
 
+	// §22 true when a band's content should draw: always in the normal stack, and only
+	// the maximised band in expand mode.
+	private bool bandVisible(int band) { return expandedBand < 0 || expandedBand == band; }
+
+	// §22 the expandable graph band (0..4) whose TITLE cell the pointer is over, else -1.
+	// Titles sit in the label gutter on the band's top character row; double-clicking one
+	// toggles expansion. The wave band (5) has no single title, so it is not a target.
+	private int bandTitleAt(ref Geo g, int cellX, int cellY) {
+		int plotX0c = g.plotX0px / FONT_X;
+		if(cellX < g.sepX || cellX >= plotX0c) return -1;
+		foreach(b; 0 .. 5)
+			if(cellY == g.bandTopPx[b] / FONT_Y) return b;
+		return -1;
+	}
+
 	private void drawBandAxis(ref Geo g, int band) {
 		// Faint baseline axis at the band's bottom.
 		int botPx = g.bandTopPx[band + 1] - 2;
@@ -4836,7 +4888,9 @@ class SoundEditor : Window, Undoable {
 			if(m > chi) chi = m;
 		}
 		int lo, hi;
-		if(chi - clo <= MAX_SPAN) {
+		// §22 when the Pitch band is expanded there is room for the whole range, so drop
+		// the two-octave cap and fit every note (with per-octave labels).
+		if(expandedBand == 2 || chi - clo <= MAX_SPAN) {
 			lo = clo - 1; hi = chi + 1;              // one-semitone breathing room
 			lo -= ((lo % 12) + 12) % 12;            // snap down to a C
 			hi += 11 - (((hi % 12) + 12) % 12);     // snap up to a B
@@ -5903,6 +5957,12 @@ class SoundEditor : Window, Undoable {
 		// A fresh press cannot belong to a previously completed button gesture.
 		pressedBtn = -1;
 		pressedOver = false;
+		// §22 double-click a graph band's title to maximise it for fine-tuning; double-click
+		// the maximised title (or any strip title) to switch/restore. Consumes the click.
+		if(clicks >= 2) {
+			int tb = bandTitleAt(g, x, y);
+			if(tb >= 0) { expandedBand = (expandedBand == tb) ? -1 : tb; clickWasButton = true; return; }
+		}
 		// The retro parameter list is also a mouse target: clicking a row selects it,
 		// after which Left/Right is the same predictable edit gesture as keyboard focus.
 		int paramY0 = area.y + 3;
