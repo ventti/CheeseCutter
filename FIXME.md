@@ -96,10 +96,38 @@ Three separate defects here, in order of severity:
 
 </details>
 
-Check whether the sibling drags share defect 3 (and possibly 1): `soundedit.d:2496` (ADSR),
-`2555`, `2582`, `2631` all reconstruct `x * FONT_X + FONT_X / 2` / `y * FONT_Y + FONT_Y / 2`
-the same way. **Not investigated or changed** — deliberately left out of the pitch fix to keep
-its diff reviewable. They can now opt into precision by calling `pitchDragPixelY`.
+### [x] 8b. FIXED — sibling drags: same cell-granularity defect, no scale mismatches
+
+Investigated 2026-07-27, after item 8. **Good news: the pitch band was the only place where
+the draw and hit-test disagreed.** Every sibling mapping checked is already a proper inverse
+pair — `adsrHandlePositions` is explicitly shared by drawer and hit-test, `filterCutoffY` ↔
+`filterCutoffValue` match, and `drawValueBand` ↔ `sweepLevelDragUpdate` match. So defect 1
+was unique to the frequency band.
+
+Defect 3 (cell-granular quantization) was real in two more continuous-value drags, and both
+are fixed by reading the exact pixel via `dragPixelY` (renamed from `pitchDragPixelY`, now
+shared by all three):
+
+- **`sweepLevelDragUpdate`** — pulse width (0..4095, step 16) and filter cutoff (0..2047)
+  off a ~5-row band, i.e. ~745 pulse units per cell step. Measured 3 → 24 distinct levels.
+  Added `filterCutoffValueAtPixel`; the cell-based `filterCutoffValue` now delegates to it,
+  so its other (correctly cell-snapped) callers are untouched.
+- **`adsrDragUpdate`** — sustain level, both via the `ADSR_SUSTAIN` handle and the
+  `ADSR_DECAY` handle's Y component. Measured **5 of 16** levels reachable (0, 4, 8, 13, 15)
+  → **all 16**. `tests/test_sound_editor_master_usage.py` had a comment documenting that old
+  limitation and worked around it with arrow keys; corrected to point at the new contract.
+
+Regression tests: `tests/test_sound_editor_drag_precision.py` (pulse level resolution, all-16
+sustain reachability). Clean build + full suite green (121 passed / 257 subtests).
+
+**Deliberately NOT changed** — the sweep *winding/slope* family
+(`sweepValueForCell`, `sweepUnwrappedValueForCell`, `sweepEndDragUpdate`). These still use
+cell centres, but `sweepUnwrappedValueForCell` *intentionally* compensates for cell
+granularity: it maps the reachable cell-centre range onto the value range via `railTop`/
+`railBot` so the band's exact max/min stay reachable, and deliberately extrapolates past them
+for ramp winding (see its comment). Converting it to pixels means redesigning that rail
+compensation and re-baselining the winding tests — a separate, riskier change with its own
+design decision to make. Left for a deliberate follow-up rather than folded in here.
 
 ### [ ] 1. Keyjam mode leaks into the classic editor when exiting during playback
 `src/ui/toplevel.d:611`

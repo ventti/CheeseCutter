@@ -607,8 +607,10 @@ def _drag_adsr_to_9327(session: CCDriverSession) -> None:
     session.run(f"drag:{decay[0]},{decay[1]},{_plot_x_for_tick(session, 32)},14")
     release = _adsr_handle_cell(session, 1, last=True)
     session.run(f"drag:{release[0]},{release[1]},{_plot_x_for_tick(session, 64)},14")
-    # Character-cell mouse input maps the sustain dot to 0,4,8...; the normal
-    # selected-parameter keys provide the documented exact nibble adjustment.
+    # This helper drags in character cells, which reaches only 5 of the 16 sustain
+    # levels (0, 4, 8, 13, 15) -- so it finishes with the selected-parameter keys for
+    # the exact nibble. A real mouse resolves to the pixel and reaches every level;
+    # see test_sound_editor_drag_precision.py.
     session.run("click:10,9")
     session.run("key:RIGHT")
     session.run("key:RIGHT")

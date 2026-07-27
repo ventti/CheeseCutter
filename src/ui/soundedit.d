@@ -318,12 +318,17 @@ class SoundEditor : Window, Undoable {
 		return bottom - 1 - cast(int)lround(
 			cast(double)clampInt(cutoff, 0, 2047) * span / 2047.0);
 	}
-	private int filterCutoffValue(ref Geo g, int cellY, bool clampValue = true) {
+	// Inverse of filterCutoffY at an exact band pixel row. A live drag passes the real
+	// mouse pixel (see dragPixelY): the band is only ~5 character rows tall, so a cell
+	// centre reaches barely 5 of the 2048 cutoff values.
+	private int filterCutoffValueAtPixel(ref Geo g, int py, bool clampValue = true) {
 		int top, bottom; bandBox(g, 4, top, bottom);
 		int span = max(1, bottom - top - 1);
-		int py = cellY * FONT_Y + FONT_Y / 2;
 		int value = cast(int)lround(cast(double)(bottom - 1 - py) * 2047 / span);
 		return clampValue ? clampInt(value, 0, 2047) : value;
+	}
+	private int filterCutoffValue(ref Geo g, int cellY, bool clampValue = true) {
+		return filterCutoffValueAtPixel(g, cellY * FONT_Y + FONT_Y / 2, clampValue);
 	}
 	private FilterRegions filterRegions(ref Geo g, int mode, int cutoff) {
 		FilterRegions r;
@@ -2305,7 +2310,7 @@ class SoundEditor : Window, Undoable {
 	// no real mouse, so com.fb.mousePixelY would still hold a stale position from an earlier
 	// motion. Disagreement means "no pixel for this event" -> fall back to the cell centre,
 	// which is what the rest of the editor uses.
-	private int pitchDragPixelY(int cellY) {
+	private int dragPixelY(int cellY) {
 		int px = mousePixelY;
 		if(px >= 0 && px / FONT_Y == cellY) return px;
 		return cellY * FONT_Y + FONT_Y / 2;
@@ -2390,7 +2395,7 @@ class SoundEditor : Window, Undoable {
 		// UI dispatches would quantize the whole pitch range to 5 reachable values (~20 of
 		// 96 units per step). Prefer the exact pixel the mouse is at; fall back to the cell
 		// centre when it is unavailable (headless/driver-injected clicks set no pixel).
-		int py = pitchDragPixelY(y);
+		int py = dragPixelY(y);
 		int pitch = pitchForY(topPx, botPx, freqBandScale(clampedIns()), py);
 		bool absolute = waveGraphAnchorValue >= 0x80 && waveGraphAnchorValue <= 0xdf;
 		song.waveTable[waveGraphRow] = cast(ubyte)(absolute ? 0x80 | pitch : pitch);
@@ -2643,7 +2648,10 @@ class SoundEditor : Window, Undoable {
 	private void adsrDragUpdate(ref Geo g, int cellx, int celly) {
 		int ins = clampedIns();
 		int px = cellx * FONT_X + FONT_X / 2;
-		int py = celly * FONT_Y + FONT_Y / 2;
+		// Sustain is read off the exact mouse pixel: the ADSR band is ~5 character rows
+		// tall, so a cell centre reached only ~6 of the 16 sustain levels, ~3 apart.
+		// adsrHandlePositions draws the handle at the matching pixel.
+		int py = dragPixelY(celly);
 		double t = tickForPixel(g, px);
 		ubyte ad = song.instrumentTable[ins + 0 * 48];
 		int attack = (ad >> 4) & 0x0f, decay = ad & 0x0f;
@@ -2906,10 +2914,14 @@ class SoundEditor : Window, Undoable {
 		int maxVal = (sweepTable == 0) ? 4095 : 2047;
 		int topPx, botPx; bandBox(g, band, topPx, botPx);
 		int h = botPx - topPx; if(h < 1) h = 1;
-		int py = celly * FONT_Y + FONT_Y / 2;
+		// Exact mouse pixel, not the cell centre: these bands are ~5 character rows tall,
+		// so cell granularity offered ~5 of 4096 pulse widths (~745 apart) or of 2048
+		// cutoffs. drawValueBand/filterCutoffY place the drawn level at the same pixel,
+		// so the level now lands under the cursor.
+		int py = dragPixelY(celly);
 		int v;
 		if(sweepTable == 1 && sweepRow >= 1) {
-			v = filterCutoffValue(g, celly);
+			v = filterCutoffValueAtPixel(g, py);
 		} else {
 			v = cast(int)lround(cast(double)(botPx - py) * maxVal / h);
 			v = clampInt(v, 0, maxVal);
