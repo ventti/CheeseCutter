@@ -55,7 +55,8 @@ PITCH_PROBE = re.compile(
     r"plot=(?P<plot_left>\d+)\.\.(?P<plot_right>\d+) "
     r"band=(?P<top>\d+)\.\.(?P<bottom>\d+) h=(?P<height>\d+) "
     r"scale=(?P<scale>\d+) latched=(?P<latched>-?\d+) row=(?P<row>-?\d+) "
-    r"value=\$(?P<value>[0-9a-f]+) pitch=(?P<pitch>-?\d+) "
+    r"value=\$(?P<value>[0-9a-f]+) pitch=(?P<pitch>-?\d+) note=(?P<note>-?\d+) "
+    r"played=(?P<played>-?\d+) window=(?P<window_lo>\d+)\.\.(?P<window_hi>\d+) "
     r"drawnY=(?P<drawn_y>-?\d+) mouseY=(?P<mouse_y>-?\d+) "
     r"valueAtMouseY=(?P<value_at_mouse>-?\d+) delta=(?P<delta>-?\d+) "
     r"stepPx=(?P<step_px>[\d.]+) dragging=(?P<dragging>\w+)"
@@ -63,7 +64,7 @@ PITCH_PROBE = re.compile(
 
 
 def _pitch_probe(session: CCDriverSession) -> dict[str, float]:
-    """Parse the pitchprobe oracle: where the block is drawn vs where the cursor is."""
+    """Parse the pitchprobe oracle: where the cell is drawn vs where the cursor is."""
     out = session.run("pitchprobe")
     match = PITCH_PROBE.search(out)
     if match is None:
@@ -74,10 +75,24 @@ def _pitch_probe(session: CCDriverSession) -> dict[str, float]:
     probe["step_px"] = float(fields["step_px"])
     for key in (
         "plot_left", "plot_right", "top", "bottom", "height", "scale", "latched",
-        "row", "pitch", "drawn_y", "mouse_y", "value_at_mouse", "delta",
+        "row", "pitch", "note", "played", "window_lo", "window_hi",
+        "drawn_y", "mouse_y", "value_at_mouse", "delta",
     ):
         probe[key] = int(fields[key])
     return probe
+
+
+def _reference_line_y(probe: dict[str, float]) -> int:
+    """Pixel row of the played-note reference line, i.e. a relative row's value $00.
+
+    A relative wave row stores an UNSIGNED offset above the played note ($00..$5F), so no
+    note below this line is representable and a drag there clamps to $00. Tracking is only
+    meaningful above it.
+    """
+    span = max(1, int(probe["scale"]))
+    return int(probe["bottom"]) - round(
+        (int(probe["played"]) - int(probe["window_lo"])) * int(probe["height"]) / span
+    )
 
 
 def _grab_a_pitch_block(session: CCDriverSession, probe: dict[str, float]) -> tuple[int, int]:
@@ -132,33 +147,79 @@ class SoundEditorPitchTrackingTests(unittest.TestCase):
                     probe = _pitch_probe(session)
                     cell_x, _ = _grab_a_pitch_block(session, probe)
 
-                    top, bottom = int(probe["top"]), int(probe["bottom"])
-                    step = max(1, int(probe["height"]) // 10)
-                    # One semitone is the finest the value can express, so the block can
-                    # only ever be within half a step of the cursor -- plus a pixel of
-                    # integer rounding.
+                    top = int(probe["top"])
+                    # Sweep only the representable half of the band: this is a relative row,
+                    # whose offset is unsigned, so nothing below the played-note reference
+                    # line can be expressed (see _reference_line_y).
+                    floor_y = _reference_line_y(probe)
+                    step = max(1, (floor_y - top) // 8)
+                    # One semitone is the finest the value can express, so the cell can only
+                    # ever be within half a step of the cursor -- plus a pixel of rounding.
                     tolerance = probe["step_px"] / 2 + 1.5
-                    for pixel_y in range(top + 2, bottom - 1, step):
+                    swept = 0
+                    for pixel_y in range(top + 2, floor_y, step):
                         session.run(f"movepx:{cell_x},{pixel_y}")
                         during = _pitch_probe(session)
+                        swept += 1
                         self.assertLessEqual(
                             abs(during["delta"]),
                             tolerance,
-                            f"{name}: block {during['delta']:+d}px from the cursor at "
-                            f"mouseY={during['mouse_y']} (tolerance {tolerance:.1f})",
+                            f"{name}: cell {during['delta']:+d}px from the cursor at "
+                            f"mouseY={during['mouse_y']} note={during['note']} "
+                            f"(tolerance {tolerance:.1f})",
                         )
+                    self.assertGreaterEqual(swept, 4, "sweep covered too little of the band")
 
                     before = _pitch_probe(session)
-                    session.run(f"releasepx:{cell_x},{bottom - 2}")
+                    session.run(f"releasepx:{cell_x},{before['mouse_y']}")
                     after = _pitch_probe(session)
-                    # Releasing must not move the block: the axis may not re-fit as a
-                    # result of the edit that was just made.
+                    # The axis is latched for the gesture and re-fits on release, so the
+                    # window may change by a semitone (it is snapped to whole octaves) and
+                    # shift the cell by less than one step. The VALUE must not change, and
+                    # the cell must not jump by a visible amount the way it used to (-16px
+                    # when the axis collapsed to the edited value).
                     self.assertEqual(
-                        after["drawn_y"],
-                        before["drawn_y"],
-                        f"{name}: block jumped {after['drawn_y'] - before['drawn_y']:+d}px "
-                        f"on release (scale {before['scale']} -> {after['scale']})",
+                        after["value"], before["value"],
+                        f"{name}: release changed the authored value",
                     )
+                    self.assertLessEqual(
+                        abs(after["drawn_y"] - before["drawn_y"]),
+                        before["step_px"] + 1,
+                        f"{name}: cell jumped {after['drawn_y'] - before['drawn_y']:+d}px "
+                        f"on release (span {before['scale']} -> {after['scale']}, "
+                        f"one step = {before['step_px']:.1f}px)",
+                    )
+
+    def test_relative_row_cannot_be_dragged_below_the_played_note(self) -> None:
+        """Dragging a relative row below the reference line clamps to $00, never wraps.
+
+        The wave table has no negative relative offset; only an absolute row ($80..$DF) can
+        sit below the played note. Guard the clamp so a future mapping change cannot turn
+        the unrepresentable region into a wrapped or wildly wrong value.
+        """
+        from tests.test_sound_editor_master_usage import (
+            _new_isolated_wave,
+            _set_selected_wave_row,
+        )
+
+        with self._session(["wide", "screen:170x63"]) as session:
+            session.run("frames:2")
+            _new_isolated_wave(session)
+            _set_selected_wave_row(session, 0x30, 0x41)
+            probe = _pitch_probe(session)
+            cell_x, _ = _grab_a_pitch_block(session, probe)
+
+            bottom = int(probe["bottom"])
+            for pixel_y in range(_reference_line_y(probe) + 2, bottom - 1, 4):
+                session.run(f"movepx:{cell_x},{pixel_y}")
+                below = _pitch_probe(session)
+                self.assertEqual(
+                    below["value"],
+                    0x00,
+                    f"below the reference the offset must clamp to $00, got "
+                    f"${int(below['value']):02X} at mouseY={below['mouse_y']}",
+                )
+                self.assertEqual(below["note"], below["played"])
 
 
 class SoundEditorDragPrecisionTests(unittest.TestCase):

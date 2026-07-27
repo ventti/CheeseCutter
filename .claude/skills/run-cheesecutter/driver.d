@@ -576,11 +576,12 @@ private bool processCommand(string arg) {
 			// one value step (stepPx) if the drag maps 1:1 to the UI.
 			int delta = (p.drawnY >= 0 && p.mouseY >= 0) ? p.drawnY - p.mouseY : 0;
 			stderr.writefln("pitch: plot=%d..%d band=%d..%d h=%d scale=%d latched=%d row=%d value=$%02x "
-				~ "pitch=%d drawnY=%d mouseY=%d valueAtMouseY=%d delta=%d stepPx=%.2f "
-				~ "dragging=%s clamped=%s",
+				~ "pitch=%d note=%d played=%d window=%d..%d drawnY=%d mouseY=%d "
+				~ "valueAtMouseY=%d delta=%d stepPx=%.2f dragging=%s clamped=%s",
 				p.plotLeft, p.plotRight,
 				p.bandTop, p.bandBottom, p.bandHeight, p.scale, p.latchedScale,
-				p.row, p.value, p.pitch, p.drawnY, p.mouseY, p.valueAtMouseY,
+				p.row, p.value, p.pitch, p.note, p.played, p.windowLo, p.windowHi,
+				p.drawnY, p.mouseY, p.valueAtMouseY,
 				delta, p.stepPixels1000 / 1000.0, p.dragging, p.clampedByScale);
 			break;
 		}

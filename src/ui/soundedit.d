@@ -236,15 +236,17 @@ struct SoundEditorSweepLoopDebug {
 	int startLeft, startRight, endLeft, endRight, top, bottom;
 }
 
-// Frequency-band pitch mapping probe: everything needed to check that a dragged block
-// tracks the cursor 1:1. `drawnY` is where drawAuthoredPitchStaircase puts the row's
-// current value; `mouseY` is the pixel the drag read. If they differ by more than one
-// value step, the block is not following the mouse.
+// Pitch-band mapping probe: everything needed to check that a dragged cell tracks the
+// cursor 1:1. `drawnY` is where the piano roll places the row's current value, `mouseY` is
+// the pixel the drag read; a `delta` beyond half a semitone step means it is not tracking.
 struct SoundEditorPitchProbe {
 	int bandTop, bandBottom, bandHeight;
 	int plotLeft, plotRight;   // band's X pixel range; a press outside starts no drag
-	int scale, latchedScale;
-	int row, value, pitch;
+	int played;                // note the reference line sits on (relative offset 0)
+	int windowLo, windowHi;    // visible absolute-note window
+	int scale, latchedScale;   // semitones spanned by the band; -1 latched = not dragging
+	int row, value, pitch;     // wave row, its raw byte, and the byte's pitch field
+	int note;                  // the ABSOLUTE note the roll draws that row at
 	int drawnY, mouseY, valueAtMouseY;
 	int stepPixels1000;   // pixels per one semitone, x1000 (integer transport)
 	bool dragging, clampedByScale;
@@ -635,19 +637,27 @@ class SoundEditor : Window, Undoable {
 		p.plotLeft = g.plotX0px;
 		p.plotRight = g.plotX0px + g.plotWpx;
 		int ins = clampedIns();
-		p.latchedScale = waveGraphScale;
-		p.scale = freqBandScale(ins);
+		PitchAxis axis = pitchAxis(ins, g);
+		p.played = axis.played;
+		p.windowLo = axis.lo;
+		p.windowHi = axis.hi;
+		p.scale = axis.span;                    // semitones spanned by the band
+		p.latchedScale = pitchAxisLatched ? axis.span : -1;
 		p.dragging = waveGraphDragging;
 		p.row = waveGraphDragging ? waveGraphRow : selectedWaveRow;
 		if(p.row >= 0 && p.row < 256) {
 			p.value = song.waveTable[p.row];
-			p.pitch = (p.value >= 0x80 && p.value <= 0xdf) ? p.value & 0x7f : p.value;
-		} else p.value = p.pitch = -1;
-		p.drawnY = p.pitch >= 0 ? yForPitch(p.bandTop, p.bandBottom, p.scale, p.pitch) : -1;
+			bool absolute = p.value >= 0x80 && p.value <= 0xdf;
+			p.pitch = absolute ? p.value & 0x7f : p.value;
+			// The note the piano roll actually places this row at: a relative row is drawn
+			// at (played + offset), an absolute row at its own note.
+			p.note = absolute ? p.pitch : axis.played + p.pitch;
+		} else p.value = p.pitch = p.note = -1;
+		p.drawnY = p.note >= 0 ? axis.yOf(p.note) : -1;
 		p.mouseY = mousePixelY;
-		p.valueAtMouseY = pitchForY(p.bandTop, p.bandBottom, p.scale, p.mouseY);
-		p.stepPixels1000 = p.scale > 0 ? p.bandHeight * 1000 / p.scale : 0;
-		p.clampedByScale = p.pitch > p.scale;
+		p.valueAtMouseY = clampInt(axis.noteAt(p.mouseY), 0, 95);
+		p.stepPixels1000 = axis.span > 0 ? axis.h * 1000 / axis.span : 0;
+		p.clampedByScale = p.note >= 0 && (p.note < axis.lo || p.note > axis.hi);
 		return p;
 	}
 
@@ -1024,11 +1034,6 @@ class SoundEditor : Window, Undoable {
 	private int waveGraphRow = -1;
 	private int waveGraphField = 0; // 0 pitch (vertical), 1 delay (horizontal)
 	private int waveGraphAnchorX = 0, waveGraphAnchorValue = 0;
-	// The frequency band's vertical scale auto-fits to the program's largest value, so
-	// editing a value would move the axis the value is measured against: the dragged block
-	// runs away from the cursor and every other block jumps. Latch the scale at drag start
-	// and keep drawing AND hit-testing against it until the gesture ends. -1 = not dragging.
-	private int waveGraphScale = -1;
 	private bool waveLoopDragging = false;
 	private bool waveLoopAuthorizing = false;
 	private bool waveLoopMoved = false;
@@ -1085,8 +1090,8 @@ class SoundEditor : Window, Undoable {
 		linkedEditKind = linkedEditStart = -1;
 		hoveredControlAction = "";
 		// Re-fit the frequency axis for a fresh session (it is otherwise grow-only, so a
-		// previous session's zoomed-out axis would persist). See freqScaleSticky.
-		freqScaleSticky = freqScaleStickyIns = -1;
+		// Never start a session holding a previous gesture's frozen Pitch axis.
+		releasePitchAxis();
 		syncKeyjamConfiguration();
 	}
 
@@ -2565,56 +2570,109 @@ class SoundEditor : Window, Undoable {
 		waveBitChanged = writeWaveBit(row, ctrl, bit, waveBitDesired) || waveBitChanged;
 	}
 
-	// ---- frequency band vertical mapping (§9.4) ----
-	// SINGLE SOURCE OF TRUTH for value<->pixel on the frequency band. drawFreqBand and the
-	// pitch drag MUST share it: when they disagreed (a fixed 0x5f hit-test against an
-	// auto-fitted draw) a dragged block was written ~8x the value it was drawn at, so it
-	// never followed the cursor. Change these two together or not at all.
+	// ---- Pitch band vertical mapping (§9.4/§10.3) ----
+	// SINGLE SOURCE OF TRUTH for note<->pixel on the piano-roll Pitch band: drawFreqBand
+	// places every cell through PitchAxis.yOf and the pitch drag inverts the SAME axis
+	// through noteAt. They must never be derived separately -- when they were (a fixed
+	// 0..$5F hit-test against a windowed piano-roll draw) a dragged block moved at
+	// $5F/span the cursor's rate, 4x-8x too fast, and off a wrong origin as well.
 	//
-	// Semitones (transOf: relative offset, or absolute note number) map linearly onto the
-	// band, bottom = 0. The scale auto-fits the program's largest value with a one-octave
-	// floor so small arps stay legible; while a drag is live it is latched (waveGraphScale)
-	// so the axis cannot move under the cursor mid-gesture.
-	// The axis auto-fits to the program's peak, which would make it depend on the very
-	// value being edited: lowering the peak re-fitted the axis the moment the drag ended,
-	// so the block jumped away from the cursor (measured -16px at the minimum window,
-	// -10px at ~90-row autoscale). Hold the fitted scale while the editor stays on one
-	// instrument and only ever let it GROW, so no edit can move the axis under the user.
-	// Re-fits when the instrument changes or a new session starts.
-	private int freqScaleSticky = -1, freqScaleStickyIns = -1;
+	// The window is fitted to the visible content, so it depends on the notes on screen AND
+	// on the played note. That makes it move while you edit, so it is LATCHED for the
+	// duration of a drag (latchPitchAxis) and released on button-up.
+	private struct PitchAxis {
+		int played;              // played/preview note: where a relative offset of 0 sits
+		int lo, hi, span;        // visible absolute-note window (C-0=0 .. B-7=95)
+		int topPx, botPx, h;
+		bool valid;
 
-	private int freqBandScaleFrom(int ins, ref WaveFrameSim s) {
-		if(waveGraphScale > 0) return waveGraphScale;   // latched for a whole drag
-		int n = min(cast(int)s.transOf.length, visFrames);
-		int fit = 12;   // one octave: keep small arps visible
-		foreach(f; 0 .. n) if(s.transOf[f] > fit) fit = s.transOf[f];
-		if(freqScaleStickyIns != ins) {
-			freqScaleStickyIns = ins;
-			freqScaleSticky = fit;
+		// Absolute note -> pixel row (band bottom = lo).
+		int yOf(int note) const {
+			return botPx - cast(int)lround(cast(double)(note - lo) * h / (span < 1 ? 1 : span));
 		}
-		else if(fit > freqScaleSticky) freqScaleSticky = fit;   // grow only
-		return freqScaleSticky;
+		// Pixel row -> nearest absolute note. Exact inverse of yOf.
+		int noteAt(int py) const {
+			return lo + cast(int)lround(cast(double)(botPx - py) * (span < 1 ? 1 : span) / h);
+		}
 	}
 
-	// Same fit for callers that have no simulation at hand (the hit-test). The draw path
-	// uses freqBandScaleFrom with the sim it already has rather than simulating twice.
-	private int freqBandScale(int ins) {
-		if(waveGraphScale > 0) return waveGraphScale;
+	private bool pitchAxisLatched = false;
+	private PitchAxis latchedPitchAxis;
+
+	// Fit the axis from the pieces drawFreqBand already has, so it does not simulate twice.
+	// `noteOf` returns the absolute note of a visible frame, or -1 for silent/unknown.
+	private PitchAxis fitPitchAxis(ref Geo g, int played, int flo, int fhi,
+			scope int delegate(int) noteOf) {
+		if(pitchAxisLatched) return latchedPitchAxis;
+		PitchAxis a;
+		a.played = played;
+		bandBox(g, 2, a.topPx, a.botPx);
+		a.h = a.botPx - a.topPx; if(a.h < 1) a.h = 1;
+		// Fit the visible pitch range, always including the played-note reference. Cap the
+		// window at two octaves so the (short) band stays readable: within that, fit the
+		// content and snap to whole octaves for a clean labelled grid; a wider spread (e.g.
+		// one transient absolute note far away) centres a fixed window on the played note
+		// and pins outliers to the band edge rather than crushing the main shape.
+		enum int MAX_SPAN = 24;
+		int clo = played, chi = played;
+		foreach(f; flo .. fhi) {
+			int m = noteOf(f);
+			if(m < 0) continue;
+			if(m < clo) clo = m;
+			if(m > chi) chi = m;
+		}
+		// §22 an expanded Pitch band has room for the whole range, so drop the cap there.
+		if(expandedBand == 2 || chi - clo <= MAX_SPAN) {
+			a.lo = clo - 1; a.hi = chi + 1;                  // one-semitone breathing room
+			a.lo -= ((a.lo % 12) + 12) % 12;                 // snap down to a C
+			a.hi += 11 - (((a.hi % 12) + 12) % 12);          // snap up to a B
+		} else {
+			a.lo = played - MAX_SPAN / 2;                    // centre on the played note
+			a.hi = played + MAX_SPAN / 2;
+		}
+		if(a.lo < 0) a.lo = 0;
+		if(a.hi > 95) a.hi = 95;
+		if(a.hi - a.lo < 12) a.hi = min(95, a.lo + 12);      // at least one octave tall
+		a.span = a.hi - a.lo; if(a.span < 1) a.span = 1;
+		a.valid = true;
+		return a;
+	}
+
+	// The same axis for callers with no simulation at hand (the drag hit-test and probes).
+	private PitchAxis pitchAxis(int ins, ref Geo g) {
+		if(pitchAxisLatched) return latchedPitchAxis;
+		int played = inputKeyjam.previewNote();
+		if(played < 0 || played > 95) played = 48;            // C-4 before any note
 		WaveFrameSim s = simWaveFrames(song.instrumentTable[ins + 7 * 48],
 			waveTimeForInstrument(ins));
-		return freqBandScaleFrom(ins, s);
+		int n = min(cast(int)s.transOf.length, visFrames);
+		int flo, fhi; viewport.visRange(n, flo, fhi);
+		return fitPitchAxis(g, played, flo, fhi,
+			(int f) => s.absOf[f] ? s.transOf[f] : played + s.transOf[f]);
 	}
 
-	private int yForPitch(int topPx, int botPx, int scale, int pitch) {
-		int h = botPx - topPx; if(h < 1) h = 1;
-		if(scale < 1) scale = 1;
-		return botPx - clampInt(pitch, 0, scale) * h / scale;
+	// Freeze the axis for a gesture: it is fitted to the content being edited (and to the
+	// played note, which keyjam can change mid-drag), so leaving it live would move the
+	// block out from under the cursor as the very edit lands.
+	private void latchPitchAxis(int ins) {
+		pitchAxisLatched = false;             // fit fresh, not from a previous gesture
+		Geo g = layout();
+		PitchAxis a = pitchAxis(ins, g);
+		if(!a.valid) return;
+		latchedPitchAxis = a;
+		pitchAxisLatched = true;
 	}
 
-	private int pitchForY(int topPx, int botPx, int scale, int py) {
-		int h = botPx - topPx; if(h < 1) h = 1;
-		if(scale < 1) scale = 1;
-		return clampInt(cast(int)lround(cast(double)(botPx - py) * scale / h), 0, 0x5f);
+	private void releasePitchAxis() { pitchAxisLatched = false; }
+
+	// The wave-table byte for `note` on `axis`, preserving the row's encoding class:
+	// relative rows store an offset from the played note ($00..$5F, so notes below the
+	// reference clamp to 0 -- the format has no negative offset), absolute rows store the
+	// note itself ($80..$DF).
+	private ubyte pitchByteForNote(ref const PitchAxis axis, int note, bool absolute) {
+		int value = absolute ? note : note - axis.played;
+		value = clampInt(value, 0, 0x5f);
+		return cast(ubyte)(absolute ? 0x80 | value : value);
 	}
 
 	// Exact mouse pixel row for a vertical drag, given the character cell the UI dispatched.
@@ -2669,11 +2727,10 @@ class SoundEditor : Window, Undoable {
 		waveGraphField = gesture == WAVE_GESTURE_DELAY ? 1 : 0;
 		waveGraphAnchorX = x;
 		waveGraphAnchorValue = waveGraphField ? raw2 : song.waveTable[row];
-		// Latch the band's vertical scale for the gesture (see waveGraphScale). Must be read
-		// BEFORE the first edit, while it still reflects what the user sees on screen. Clear
-		// first so freqBandScale() recomputes instead of returning a previous gesture's latch.
-		waveGraphScale = -1;
-		if(waveGraphField == 0) waveGraphScale = freqBandScale(clampedIns());
+		// Latch the piano-roll axis for the gesture. Must be fitted BEFORE the first edit,
+		// while it still reflects what the user sees on screen.
+		releasePitchAxis();
+		if(waveGraphField == 0) latchPitchAxis(clampedIns());
 		clickWasButton = true;
 	}
 
@@ -2702,25 +2759,28 @@ class SoundEditor : Window, Undoable {
 				waveGraphAnchorValue + (x - waveGraphAnchorX), 1, 0x0f);
 			return;
 		}
-		int topPx, botPx; bandBox(g, 2, topPx, botPx);
-		// Sub-cell Y: the band is only ~5 character rows tall, so the cell-granular y the
-		// UI dispatches would quantize the whole pitch range to 5 reachable values (~20 of
-		// 96 units per step). Prefer the exact pixel the mouse is at; fall back to the cell
-		// centre when it is unavailable (headless/driver-injected clicks set no pixel).
+		// Invert the SAME piano-roll axis the band is drawn on (see PitchAxis), latched for
+		// this gesture. Sub-cell Y: the band can be under 5 character rows tall, so the
+		// cell-granular y the UI dispatches would quantize the whole range to ~5 reachable
+		// notes; prefer the exact mouse pixel, falling back to the cell centre when there
+		// is none (headless/driver-injected clicks publish no pixel).
+		PitchAxis axis = pitchAxis(clampedIns(), g);
 		int py = dragPixelY(y);
-		int scale = freqBandScale(clampedIns());
-		int pitch = pitchForY(topPx, botPx, scale, py);
+		int note = clampInt(axis.noteAt(py), 0, 95);
 		bool absolute = waveGraphAnchorValue >= 0x80 && waveGraphAnchorValue <= 0xdf;
-		song.waveTable[waveGraphRow] = cast(ubyte)(absolute ? 0x80 | pitch : pitch);
+		song.waveTable[waveGraphRow] = pitchByteForNote(axis, note, absolute);
 		if(traceMouseDrag) {
-			// drawnY is where the staircase will put this value; delta is how far the block
-			// ends up from the cursor. Anything beyond half a step means it is not tracking.
-			int drawnY = yForPitch(topPx, botPx, scale, pitch);
+			// drawnY is where the piano roll will place this note; delta is how far the cell
+			// ends up from the cursor. Beyond half a step means it is not tracking.
+			int drawnY = axis.yOf(note);
 			import std.stdio : stderr;
 			stderr.writefln("pitchdrag: cellY=%d mousePixelY=%d usedY=%d (fallback=%s) "
-				~ "band=%d..%d scale=%d pitch=%d drawnY=%d delta=%+d stepPx=%.2f",
-				y, mousePixelY, py, py != mousePixelY, topPx, botPx, scale, pitch,
-				drawnY, drawnY - py, scale > 0 ? cast(double)(botPx - topPx) / scale : 0.0);
+				~ "band=%d..%d window=%d..%d span=%d played=%d note=%d value=$%02x "
+				~ "drawnY=%d delta=%+d stepPx=%.2f latched=%s",
+				y, mousePixelY, py, py != mousePixelY, axis.topPx, axis.botPx,
+				axis.lo, axis.hi, axis.span, axis.played, note,
+				song.waveTable[waveGraphRow], drawnY, drawnY - py,
+				cast(double)axis.h / axis.span, pitchAxisLatched);
 		}
 	}
 
@@ -4874,36 +4934,12 @@ class SoundEditor : Window, Undoable {
 
 		int flo, fhi; viewport.visRange(n, flo, fhi);   // §17.1 only emit on-screen frames
 
-		// Fit the visible pitch range, always including the played-note reference. To keep
-		// the (short) band readable we cap the window at two octaves: within that, fit the
-		// content and snap to whole octaves for a clean labelled grid; a rarer wider spread
-		// (e.g. one transient absolute note far away) centres a fixed window on the played
-		// note and pins the outliers to the band edge rather than crushing the main shape.
-		enum int MAX_SPAN = 24;   // at most two octaves visible at once
-		int clo = played, chi = played;
-		foreach(f; flo .. fhi) {
-			int m = idxOf(f);
-			if(m < 0) continue;
-			if(m < clo) clo = m;
-			if(m > chi) chi = m;
-		}
-		int lo, hi;
-		// §22 when the Pitch band is expanded there is room for the whole range, so drop
-		// the two-octave cap and fit every note (with per-octave labels).
-		if(expandedBand == 2 || chi - clo <= MAX_SPAN) {
-			lo = clo - 1; hi = chi + 1;              // one-semitone breathing room
-			lo -= ((lo % 12) + 12) % 12;            // snap down to a C
-			hi += 11 - (((hi % 12) + 12) % 12);     // snap up to a B
-		} else {
-			lo = played - MAX_SPAN / 2;              // centre the window on the played note
-			hi = played + MAX_SPAN / 2;
-		}
-		if(lo < 0) lo = 0;
-		if(hi > 95) hi = 95;
-		if(hi - lo < 12) hi = min(95, lo + 12);     // at least one octave tall
-		int span = hi - lo; if(span < 1) span = 1;
-
-		int yOf(int m) { return botPx - cast(int)lround(cast(double)(m - lo) * h / span); }
+		// The axis the drag hit-tests against (PitchAxis) — never fitted separately here,
+		// or a dragged cell stops following the cursor. Latched while a drag is in flight.
+		PitchAxis axis = fitPitchAxis(g, played, flo, fhi, (int f) => idxOf(f));
+		played = axis.played;                       // the latch may hold an earlier note
+		int lo = axis.lo, hi = axis.hi, span = axis.span;
+		int yOf(int m) { return axis.yOf(m); }
 
 		// Octave gridlines + note-name gutter labels (only at C boundaries to stay legible;
 		// never on the band-name row so the "Pitch" label stays readable).
@@ -6283,7 +6319,7 @@ class SoundEditor : Window, Undoable {
 			waveGraphDragging = false;
 			waveGraphAuthorizing = false;
 			waveGraphRow = -1;
-			waveGraphScale = -1;   // release the latched band scale: the axis auto-fits again
+			releasePitchAxis();    // the Pitch band's axis re-fits to content again
 			clickWasButton = false;
 			if(waveGraphMoved) retriggerIfSounding();
 			waveGraphMoved = false;

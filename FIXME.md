@@ -96,6 +96,52 @@ Three separate defects here, in order of severity:
 
 </details>
 
+### [x] 8d. FIXED — piano-roll Pitch band hit-test was never updated for the redesign
+
+Root cause of the symptom that survived 8/8b/8c: **it was being tested on a different
+branch.** Items 8–8c were fixed on `feat/sound-editor`; the running binary was built from
+`refactor-soundedit-dedup`, whose `8fbc437` redesigned the Pitch band as a piano roll but
+left `updateWaveGraphDragRaw` on the *old* band's mapping. (`refactor-soundedit-dedup` has
+since been rebased onto `feat/sound-editor`; backup branch
+`backup/refactor-soundedit-dedup-20260727` = pre-rebase `5bf4c37`.)
+
+The mismatch on that branch was worse than the original:
+
+- **Draw**: `yOf(m) = botPx - (m - lo) * h / span`, where `m` is an ABSOLUTE note
+  (`played + offset` for relative rows) and `[lo,hi]` is a window fitted to the visible
+  content, octave-snapped, normally **23–24 semitones** (whole range when the band is
+  expanded).
+- **Hit-test**: still `pitch = (botPx - py) * 0x5F / h` — the full 96-semitone range over
+  the whole band, written back as a relative offset.
+
+So the drag moved the value at **0x5F/span ≈ 4x** the cursor's rate *and* off a wrong origin
+(no `lo`, no `played` term). Measured `span=24`, i.e. 3.96x.
+
+Fix: one `PitchAxis` struct owns the mapping (`yOf` / `noteAt`); `drawFreqBand` fits it via
+`fitPitchAxis` and the drag inverts the same instance. It is **latched for the gesture**
+(`latchPitchAxis` / `releasePitchAxis`) because the window depends on the content being
+edited *and* on the played note, which keyjam can change mid-drag. `pitchByteForNote`
+converts the resolved note back to the row's encoding class. Sub-cell Y (`dragPixelY`) is
+retained. Measured after: tracking ratio ~1.0, |delta| <= 2px at both the 160x50 minimum and
+a 170x63 autoscale grid, release shift <= one semitone step.
+
+**Format limitation, not a bug:** a relative row stores an UNSIGNED offset (`$00..$5F`), so
+no note below the played-note reference line is representable and dragging there clamps to
+`$00` — the lower part of the band is dead space for relative rows. Only absolute rows
+(`$80..$DF`) can sit below the reference. Locked by
+`test_relative_row_cannot_be_dragged_below_the_played_note`.
+
+**Residual by design:** the axis re-fits on release (the chosen policy), and because the
+window snaps to whole octaves the span can change by a semitone, shifting the cell by under
+one step. The authored value does not change. If that is still visible in use, the
+alternative is to hold the axis until the instrument changes (the "sticky" option).
+
+Note: `tests/goldens/new_sound/02_after_pitch_drag_wavedump` was regenerated (`22:2a` ->
+`22:00`). Its gesture drags to cell row 16, ~3px BELOW the reference line, so the correct
+result is now the `$00` clamp — which makes that particular golden a weak oracle. The real
+contract lives in `tests/test_sound_editor_drag_precision.py`. All screendump goldens stayed
+byte-identical, confirming the axis extraction did not change rendering.
+
 ### [x] 8c. FIXED — the axis re-fitted on release, so the block jumped away from the cursor
 
 Reported 2026-07-27: "in the expanded view mode the blocks move in a different pace than my
