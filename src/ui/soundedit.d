@@ -46,7 +46,7 @@ import std.string : format, stripRight, leftJustify;
 import std.algorithm : max, min;
 import std.math : lround, log2, floor, ceil, abs;
 import derelict.sdl2.sdl;
-import com.fb : FONT_X, FONT_Y, keyjamBackground, mousePixelY;
+import com.fb : FONT_X, FONT_Y, keyjamBackground, mousePixelY, traceMouseDrag;
 import com.session : screen, video, state, song, mainui, insertUndo, UndoValue, Undoable;
 import com.shortcuts : Ctx, formatShortcuts;
 import com.palette : idx, Role, BaseColor;
@@ -2451,9 +2451,20 @@ class SoundEditor : Window, Undoable {
 		// 96 units per step). Prefer the exact pixel the mouse is at; fall back to the cell
 		// centre when it is unavailable (headless/driver-injected clicks set no pixel).
 		int py = dragPixelY(y);
-		int pitch = pitchForY(topPx, botPx, freqBandScale(clampedIns()), py);
+		int scale = freqBandScale(clampedIns());
+		int pitch = pitchForY(topPx, botPx, scale, py);
 		bool absolute = waveGraphAnchorValue >= 0x80 && waveGraphAnchorValue <= 0xdf;
 		song.waveTable[waveGraphRow] = cast(ubyte)(absolute ? 0x80 | pitch : pitch);
+		if(traceMouseDrag) {
+			// drawnY is where the staircase will put this value; delta is how far the block
+			// ends up from the cursor. Anything beyond half a step means it is not tracking.
+			int drawnY = yForPitch(topPx, botPx, scale, pitch);
+			import std.stdio : stderr;
+			stderr.writefln("pitchdrag: cellY=%d mousePixelY=%d usedY=%d (fallback=%s) "
+				~ "band=%d..%d scale=%d pitch=%d drawnY=%d delta=%+d stepPx=%.2f",
+				y, mousePixelY, py, py != mousePixelY, topPx, botPx, scale, pitch,
+				drawnY, drawnY - py, scale > 0 ? cast(double)(botPx - topPx) / scale : 0.0);
+		}
 	}
 
 	private int waveRetargetRowAt(int ins, ref Geo g, int cellX) {

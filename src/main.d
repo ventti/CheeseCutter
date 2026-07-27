@@ -500,6 +500,7 @@ int main(char[][] args) {
 			break;
 		case "--verbose":
 			verbose = true;
+			com.fb.traceMouseDrag = true;   // per-tick pitch-drag mouse/geometry trace
 			break;
 		default:
 				version (OSX) {

@@ -101,9 +101,9 @@ class SoundEditorPitchTrackingTests(unittest.TestCase):
     """The dragged block must stay under the cursor -- the user-visible contract."""
 
     # 160x50 is the layout minimum; the real app autoscales to ~90% of the desktop, so
-    # a ~92-row grid is the geometry a 1440p display actually gets. Band height (and
+    # a 170x63 grid is what this project's reference display produces. Band height (and
     # therefore pixels per semitone) differs by ~3.6x between them.
-    GEOMETRIES = (("minimum", ["screen:160x50"]), ("autoscale", ["wide", "screen:230x92"]))
+    GEOMETRIES = (("minimum", ["screen:160x50"]), ("autoscale", ["wide", "screen:170x63"]))
 
     def _session(self, extra: list[str]) -> CCDriverSession:
         import shutil

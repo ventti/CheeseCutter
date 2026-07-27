@@ -71,6 +71,11 @@ __gshared bool keyjamBackground = false;
 // SDL event loop in main.mainloop (com.fb has no dependency on the UI, so it's a flag).
 __gshared int mousePixelX = 0, mousePixelY = 0;
 
+// --verbose: trace each pitch-drag tick (mouse pixel vs the pixel the block is drawn at)
+// to stderr. For diagnosing "the object does not follow my mouse" on a real display,
+// where the window/renderer geometry cannot be reproduced headlessly.
+__gshared bool traceMouseDrag = false;
+
 immutable CHECKX = "assert(x >= 0 && x < width);";
 immutable CHECKY = "assert(y >= 0 && y < height);";
 immutable CHECKS = "assert(x >= 0 && y >= 0 && x + y * width >= 0 && x + y * width < width*height);";
@@ -148,13 +153,60 @@ abstract class Video {
 
 	bool isFullscreen() { return useFullscreen; }
 
+	// Convert an SDL mouse position into the coordinate space the UI is DRAWN in.
+	//
+	// SDL reports mouse coordinates in window POINTS, but every draw call here uses
+	// renderer OUTPUT PIXELS. Those are not the same number whenever the drawing surface
+	// is scaled — a HiDPI/Retina backing store makes the output 2x the window, and a
+	// fullscreen-desktop or user-resized window stretches it by an arbitrary ratio. Left
+	// unconverted (the scaling below used to be commented out), a drag moved the pointer
+	// at a different rate than the graphics it was dragging: the classic symptom is a
+	// grabbed object travelling a different distance than the mouse.
+	//
+	// Derive the factor from the live SDL sizes rather than the requested ones, so it
+	// stays correct after a resize or a fullscreen toggle. Exactly 1:1 (and a no-op) when
+	// the surface is unscaled, which is the case under the dummy video driver.
 	void scalePosition(ref int x, ref int y) {
+		int outW, outH, winW, winH;
+		if(renderer !is null && window !is null) {
+			SDL_GetRendererOutputSize(renderer, &outW, &outH);
+			SDL_GetWindowSize(window, &winW, &winH);
+			if(winW > 0 && winH > 0 && (outW != winW || outH != winH)) {
+				if(!warnedMouseScale) {
+					warnedMouseScale = true;
+					import std.stdio : stderr;
+					stderr.writefln("fb: scaled drawing surface — window %dx%d points, "
+						~ "renderer %dx%d pixels (x%.3f/%.3f); mouse input converted.",
+						winW, winH, outW, outH,
+						cast(double)outW / winW, cast(double)outH / winH);
+				}
+				x = cast(int)(cast(long)x * outW / winW);
+				y = cast(int)(cast(long)y * outH / winH);
+			}
+		}
+		// Letterbox offset, in the same (pixel) space as the converted position above.
 		x -= rect.x;
 		y -= rect.y;
-    /+
-		x *= cast(float)requestedWidth / width;
-		y *= cast(float)requestedHeight / height;
-    +/
+	}
+	private bool warnedMouseScale = false;
+
+	// Report the window(points) vs renderer(pixels) geometry once at startup. Silent when
+	// they match; a mismatch means the drawing surface is scaled, which is exactly what
+	// scalePosition has to compensate for, so make it visible rather than mysterious.
+	protected void reportSurfaceScale() {
+		if(renderer is null || window is null) return;
+		int outW, outH, winW, winH;
+		SDL_GetRendererOutputSize(renderer, &outW, &outH);
+		SDL_GetWindowSize(window, &winW, &winH);
+		if(winW <= 0 || winH <= 0) return;
+		bool scaled = (outW != winW || outH != winH);
+		import std.stdio : stderr;
+		stderr.writefln("fb: window %dx%d points, renderer %dx%d pixels (x%.3f/%.3f), "
+			~ "grid %dx%d px — surface %s.",
+			winW, winH, outW, outH,
+			cast(double)outW / winW, cast(double)outH / winH,
+			requestedWidth, requestedHeight,
+			scaled ? "SCALED (mouse input converted)" : "unscaled (1:1)");
 	}
 
 	// Capture the current frame to a PNG in the current working directory.
@@ -225,6 +277,7 @@ class VideoStandard : Video {
 			SDL_SetWindowTitle(window, com.util.APP_NAME);
 			setWindowIcon();
 			SDL_StartTextInput();
+			reportSurfaceScale();
 		} else {
 			// Subsequent toggles: switch the EXISTING window in place. Recreating
 			// the window/renderer here leaked the old fullscreen window — it stayed

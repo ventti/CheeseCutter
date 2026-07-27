@@ -1041,8 +1041,11 @@ int main(string[] args) {
 	seq.sequencer.initialHeight = rows - 10 > 64 ? 64 : rows - 10;
 	// `wide` (anywhere in argv) selects the wide UI layout (com.fb.mode>0, the
 	// app's autoscale default) — must be set before the UI/layout is built.
-	foreach(arg; args[1 .. $])
+	foreach(arg; args[1 .. $]) {
 		if(arg == "wide") com.fb.mode = 1;
+		// `trace` mirrors the app's --verbose pitch-drag trace (com.fb.traceMouseDrag).
+		if(arg == "trace") com.fb.traceMouseDrag = true;
+	}
 	initSession();
 	mainui = new UI();
 	mainui.update();
@@ -1053,8 +1056,8 @@ int main(string[] args) {
 	bool serve = false;
 	foreach(arg; args[1 .. $]) {
 		if(arg == "serve" || arg == "-") { serve = true; continue; }
-		if(arg == "wide") continue;   // handled before UI construction
-		if(arg.startsWith("screen:")) continue;   // ditto
+		if(arg == "wide" || arg == "trace") continue;   // handled before UI construction
+		if(arg.startsWith("screen:")) continue;        // ditto
 
 		if(!processCommand(arg)) return 2;   // batch: unknown command fails the run
 	}
