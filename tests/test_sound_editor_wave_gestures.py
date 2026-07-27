@@ -7,6 +7,7 @@ import unittest
 
 from tests.test_sound_editor_master_usage import (
     BTN_ADD,
+    FILTER_TOP_ROW,
     FREQ_GRAPH_ROW,
     _click_control,
     _full_sound_dump,
@@ -95,10 +96,17 @@ class SoundEditorWaveGestureTests(unittest.TestCase):
                 )
 
     def test_relative_absolute_and_carry_rows_use_pitch_only_vertical_drag(self) -> None:
+        # The dragged-to value follows the frequency band's auto-fit vertical scale
+        # (max(12, largest value in the program)), which is what the band is drawn
+        # against -- so one cell down from row 15 is a different number of semitones
+        # for a program that peaks at 32 than for one that peaks at 48. These
+        # expectations previously assumed a fixed 0..$5F axis that the drawing side
+        # never used, which is why a dragged block did not follow the cursor; see
+        # yForPitch/pitchForY in src/ui/soundedit.d.
         for w1, w2, expected_w1 in (
-            (0x20, 0x41, 0x2A),  # relative pitch keeps the $00..$5F encoding class
-            (0xB0, 0x81, 0xAA),  # absolute pitch keeps the $80..$DF encoding class
-            (0x20, 0x00, 0x2A),  # Carry stays Carry; only W1 is changed
+            (0x20, 0x41, 0x0E),  # relative pitch keeps the $00..$5F encoding class
+            (0xB0, 0x81, 0x95),  # absolute pitch keeps the $80..$DF encoding class
+            (0x20, 0x00, 0x0E),  # Carry stays Carry; only W1 is changed
         ):
             with self.subTest(row=f"{w1:02X}/{w2:02X}"), _master_session() as session:
                 w0 = _new_isolated_wave(session)
@@ -118,6 +126,81 @@ class SoundEditorWaveGestureTests(unittest.TestCase):
                     _wave_rows(session.run(f"wavedump:0x{w0:02x}"), 1)[0][1:],
                     (w1, w2),
                 )
+
+    def test_pitch_drag_value_tracks_the_bands_auto_fit_scale(self) -> None:
+        """A dragged pitch block must land where the cursor is.
+
+        The frequency band is drawn on an auto-fitted axis (0..max(12, peak value)),
+        so the value a given cursor height means depends on that scale. The drag
+        hit-test once used a fixed 0..$5F axis instead, which wrote roughly $5F/scale
+        (~8x at the one-octave floor) too much: the block jumped far above the cursor
+        and, because the axis then re-fitted to the new peak, every other block moved
+        too. Pin the property that broke rather than the arithmetic: at one fixed
+        cursor height, programs with different scales must yield values in the same
+        ratio as their scales, and the bottom of the band must always mean zero.
+        """
+        drag_row = FREQ_GRAPH_ROW + 1
+        values: dict[int, int] = {}
+        for peak in (0x0C, 0x18, 0x30):  # 12 (the floor), 24, 48 semitones
+            with self.subTest(peak=f"{peak:02X}"), _master_session() as session:
+                w0 = _new_isolated_wave(session)
+                _set_selected_wave_row(session, peak, 0x41)
+                x0 = _plot_x_for_tick(session, 0)
+
+                session.run(f"drag:{x0},{FREQ_GRAPH_ROW},{x0},{drag_row}")
+                values[peak] = _wave_rows(session.run(f"wavedump:0x{w0:02x}"), 1)[0][1]
+
+                # The very bottom of the band is 0 on every scale.
+                _set_selected_wave_row(session, peak, 0x41)
+                session.run(f"drag:{x0},{FREQ_GRAPH_ROW},{x0},{FILTER_TOP_ROW - 1}")
+                self.assertEqual(
+                    _wave_rows(session.run(f"wavedump:0x{w0:02x}"), 1)[0][1],
+                    0x00,
+                    "the band floor must mean zero semitones on every scale",
+                )
+
+        # Same cursor height, scales 12:24:48 -> values must rise in step. The old
+        # fixed-axis hit-test produced the SAME value for all three.
+        self.assertLess(values[0x0C], values[0x18])
+        self.assertLess(values[0x18], values[0x30])
+        for smaller, larger in ((0x0C, 0x18), (0x18, 0x30)):
+            self.assertAlmostEqual(
+                values[larger] / values[smaller],
+                larger / smaller,
+                delta=0.35,  # integer semitone quantization on a ~5-row-tall band
+                msg=f"value ratio must follow the scale ratio: {values}",
+            )
+
+    def test_pitch_drag_resolves_below_one_character_cell(self) -> None:
+        """Pitch must be draggable at pixel resolution, not cell resolution.
+
+        Mouse events reach the UI as character cells, and the frequency band is under
+        five cells tall -- so reconstructing a cell centre caps the whole 0..$5F range
+        at ~5 reachable values, ~20 semitones apart. The drag reads the exact pixel row
+        (com.fb.mousePixelY) instead; `dragpx` publishes it the way main.mainloop does.
+        """
+        font_y = 14  # com.fb.FONT_Y
+        rows = range(FREQ_GRAPH_ROW * font_y, (FREQ_GRAPH_ROW + 3) * font_y)
+        with _master_session() as session:
+            w0 = _new_isolated_wave(session)
+            x0 = _plot_x_for_tick(session, 0)
+            seen: list[int] = []
+            for pixel_y in rows:
+                _set_selected_wave_row(session, 0x30, 0x41)  # peak $30 -> scale 48
+                session.run(
+                    f"dragpx:{x0},{FREQ_GRAPH_ROW * font_y + font_y // 2},{x0},{pixel_y}"
+                )
+                seen.append(_wave_rows(session.run(f"wavedump:0x{w0:02x}"), 1)[0][1])
+
+            cells_spanned = len({y // font_y for y in rows})
+            self.assertGreater(
+                len(set(seen)),
+                cells_spanned,
+                f"pitch still quantized to character cells: {seen}",
+            )
+            # Moving the cursor down must never raise the pitch.
+            for earlier, later in zip(seen, seen[1:]):
+                self.assertGreaterEqual(earlier, later, f"non-monotonic drag: {seen}")
 
     def test_delay_w2_is_horizontal_clamped_and_never_crosses_encoding_class(self) -> None:
         with _master_session() as session:

@@ -46,7 +46,7 @@ import std.string : format, stripRight, leftJustify;
 import std.algorithm : max, min;
 import std.math : lround, log2, floor, ceil, abs;
 import derelict.sdl2.sdl;
-import com.fb : FONT_X, FONT_Y, keyjamBackground;
+import com.fb : FONT_X, FONT_Y, keyjamBackground, mousePixelY;
 import com.session : screen, video, state, song, mainui, insertUndo, UndoValue, Undoable;
 import com.shortcuts : Ctx, formatShortcuts;
 import com.palette : idx, Role, BaseColor;
@@ -788,6 +788,11 @@ class SoundEditor : Window, Undoable {
 	private int waveGraphRow = -1;
 	private int waveGraphField = 0; // 0 pitch (vertical), 1 delay (horizontal)
 	private int waveGraphAnchorX = 0, waveGraphAnchorValue = 0;
+	// The frequency band's vertical scale auto-fits to the program's largest value, so
+	// editing a value would move the axis the value is measured against: the dragged block
+	// runs away from the cursor and every other block jumps. Latch the scale at drag start
+	// and keep drawing AND hit-testing against it until the gesture ends. -1 = not dragging.
+	private int waveGraphScale = -1;
 	private bool waveLoopDragging = false;
 	private bool waveLoopAuthorizing = false;
 	private bool waveLoopMoved = false;
@@ -2256,6 +2261,56 @@ class SoundEditor : Window, Undoable {
 		waveBitChanged = writeWaveBit(row, ctrl, bit, waveBitDesired) || waveBitChanged;
 	}
 
+	// ---- frequency band vertical mapping (§9.4) ----
+	// SINGLE SOURCE OF TRUTH for value<->pixel on the frequency band. drawFreqBand and the
+	// pitch drag MUST share it: when they disagreed (a fixed 0x5f hit-test against an
+	// auto-fitted draw) a dragged block was written ~8x the value it was drawn at, so it
+	// never followed the cursor. Change these two together or not at all.
+	//
+	// Semitones (transOf: relative offset, or absolute note number) map linearly onto the
+	// band, bottom = 0. The scale auto-fits the program's largest value with a one-octave
+	// floor so small arps stay legible; while a drag is live it is latched (waveGraphScale)
+	// so the axis cannot move under the cursor mid-gesture.
+	private int freqBandScaleFrom(ref WaveFrameSim s) {
+		if(waveGraphScale > 0) return waveGraphScale;
+		int n = min(cast(int)s.transOf.length, visFrames);
+		int scale = 12;   // one octave: keep small arps visible
+		foreach(f; 0 .. n) if(s.transOf[f] > scale) scale = s.transOf[f];
+		return scale;
+	}
+
+	// Same fit for callers that have no simulation at hand (the hit-test). The draw path
+	// uses freqBandScaleFrom with the sim it already has rather than simulating twice.
+	private int freqBandScale(int ins) {
+		if(waveGraphScale > 0) return waveGraphScale;
+		WaveFrameSim s = simWaveFrames(song.instrumentTable[ins + 7 * 48],
+			waveTimeForInstrument(ins));
+		return freqBandScaleFrom(s);
+	}
+
+	private int yForPitch(int topPx, int botPx, int scale, int pitch) {
+		int h = botPx - topPx; if(h < 1) h = 1;
+		if(scale < 1) scale = 1;
+		return botPx - clampInt(pitch, 0, scale) * h / scale;
+	}
+
+	private int pitchForY(int topPx, int botPx, int scale, int py) {
+		int h = botPx - topPx; if(h < 1) h = 1;
+		if(scale < 1) scale = 1;
+		return clampInt(cast(int)lround(cast(double)(botPx - py) * scale / h), 0, 0x5f);
+	}
+
+	// Exact mouse pixel row for a vertical drag, given the character cell the UI dispatched.
+	// Trusted only when it agrees with that cell: a synthetic click (ccdriver, tests) moves
+	// no real mouse, so com.fb.mousePixelY would still hold a stale position from an earlier
+	// motion. Disagreement means "no pixel for this event" -> fall back to the cell centre,
+	// which is what the rest of the editor uses.
+	private int pitchDragPixelY(int cellY) {
+		int px = mousePixelY;
+		if(px >= 0 && px / FONT_Y == cellY) return px;
+		return cellY * FONT_Y + FONT_Y / 2;
+	}
+
 	// Frequency graph hit maps through the same delay-aware row timeline the graph
 	// draws. Clicking selects that authored row; dragging edits its meaningful axis:
 	// pitch rows move vertically, delay rows ($01..$0F in wave2) resize horizontally.
@@ -2297,6 +2352,11 @@ class SoundEditor : Window, Undoable {
 		waveGraphField = gesture == WAVE_GESTURE_DELAY ? 1 : 0;
 		waveGraphAnchorX = x;
 		waveGraphAnchorValue = waveGraphField ? raw2 : song.waveTable[row];
+		// Latch the band's vertical scale for the gesture (see waveGraphScale). Must be read
+		// BEFORE the first edit, while it still reflects what the user sees on screen. Clear
+		// first so freqBandScale() recomputes instead of returning a previous gesture's latch.
+		waveGraphScale = -1;
+		if(waveGraphField == 0) waveGraphScale = freqBandScale(clampedIns());
 		clickWasButton = true;
 	}
 
@@ -2326,9 +2386,12 @@ class SoundEditor : Window, Undoable {
 			return;
 		}
 		int topPx, botPx; bandBox(g, 2, topPx, botPx);
-		int h = botPx - topPx; if(h < 1) h = 1;
-		int py = y * FONT_Y + FONT_Y / 2;
-		int pitch = clampInt(cast(int)lround(cast(double)(botPx - py) * 0x5f / h), 0, 0x5f);
+		// Sub-cell Y: the band is only ~5 character rows tall, so the cell-granular y the
+		// UI dispatches would quantize the whole pitch range to 5 reachable values (~20 of
+		// 96 units per step). Prefer the exact pixel the mouse is at; fall back to the cell
+		// centre when it is unavailable (headless/driver-injected clicks set no pixel).
+		int py = pitchDragPixelY(y);
+		int pitch = pitchForY(topPx, botPx, freqBandScale(clampedIns()), py);
 		bool absolute = waveGraphAnchorValue >= 0x80 && waveGraphAnchorValue <= 0xdf;
 		song.waveTable[waveGraphRow] = cast(ubyte)(absolute ? 0x80 | pitch : pitch);
 	}
@@ -4452,6 +4515,12 @@ class SoundEditor : Window, Undoable {
 					video.olVLine(xa, min(prevY, y), max(prevY, y), COL_FREQ_ABS);
 				prevY = y;
 			}
+			// The recorded trace above is on its own auto-fitted log2-Hz axis, which the
+			// pitch drag cannot hit-test against. Overlay the authored program on the
+			// editable semitone mapping so the blocks the user drags are visible here too
+			// and land where the cursor is.
+			int an = min(cast(int)s.transOf.length, visFrames);
+			if(an > 0) drawAuthoredPitchStaircase(g, s, topPx, botPx, an, COL_DIM);
 			// §14.2 derive the loop from the ACTUAL recorded frequency staircase.
 			int lf, lp;
 			loopFromRecording(fr, n, lf, lp);
@@ -4459,26 +4528,33 @@ class SoundEditor : Window, Undoable {
 			return;
 		}
 
-		// Idle dimmed sim: the wave-table transpose/arp program (semitones), floor at
-		// 12 semitones (one octave) so small arps stay visible.
+		// Idle dimmed sim: the wave-table transpose/arp program (semitones), on the shared
+		// editable mapping (freqBandScale / yForPitch) so a dragged block tracks the cursor.
 		int n = min(cast(int)s.transOf.length, visFrames);
 		if(n <= 0) return;
-		int scale = 12;
-		foreach(f; 0 .. n) if(s.transOf[f] > scale) scale = s.transOf[f];
+		drawAuthoredPitchStaircase(g, s, topPx, botPx, n, COL_DIM);
+		drawLoopLines(g, topPx, botPx, s.loopFrame, s.loopPeriod, n);
+	}
+
+	// The authored transpose/arp program as a step staircase, positioned through the SAME
+	// mapping the pitch drag hit-tests against (yForPitch). This is the editable geometry,
+	// so it is drawn in BOTH view modes -- including the recording view, whose log2-Hz trace
+	// is on an unrelated auto-fitted axis and cannot be dragged against.
+	private void drawAuthoredPitchStaircase(ref Geo g, ref WaveFrameSim s,
+			int topPx, int botPx, int n, int colour) {
+		int scale = freqBandScaleFrom(s);
 		int prevY = -1;
 		int flo, fhi; visRange(n, flo, fhi);   // §17.1 only emit on-screen frames
 		foreach(f; flo .. fhi) {
-			int pv = s.transOf[f];
-			int y = botPx - pv * h / scale;
+			int y = yForPitch(topPx, botPx, scale, s.transOf[f]);
 			int xa = xForFrame(g, f);
 			int xb = xForFrame(g, f + 1);
 			if(xb <= xa) xb = xa + 1;
-			video.olHLine(xa, xb - 1, y, COL_DIM);               // level segment (dim)
+			video.olHLine(xa, xb - 1, y, colour);                  // level segment
 			if(prevY >= 0 && prevY != y)
-				video.olVLine(xa, min(prevY, y), max(prevY, y), COL_DIM); // step riser
+				video.olVLine(xa, min(prevY, y), max(prevY, y), colour); // step riser
 			prevY = y;
 		}
-		drawLoopLines(g, topPx, botPx, s.loopFrame, s.loopPeriod, n);
 	}
 
 	// ---- wave band = §9.3 stacked SID control-bit lanes ----
@@ -5918,6 +5994,7 @@ class SoundEditor : Window, Undoable {
 			waveGraphDragging = false;
 			waveGraphAuthorizing = false;
 			waveGraphRow = -1;
+			waveGraphScale = -1;   // release the latched band scale: the axis auto-fits again
 			clickWasButton = false;
 			if(waveGraphMoved) retriggerIfSounding();
 			waveGraphMoved = false;

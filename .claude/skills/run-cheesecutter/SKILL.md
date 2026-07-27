@@ -71,6 +71,11 @@ order, repeatable):
 - `click:<cx>,<cy>[,<button>[,<clicks>]]` — inject a mouse click at character-cell
   coords (like the editor's own handler). Use it to drive the menu bar: e.g.
   `click:3,0` opens the File menu, then `click:3,2` runs the first item.
+- `dragpx:<cx1>,<py1>,<cx2>,<py2>` — like `drag:`, but the Y coords are **grid
+  pixels**, and each step publishes `com.fb.mousePixelY` exactly as the real event
+  loop does. Needed for widgets that read sub-cell precision: the Sound Editor's
+  pitch drag resolves to the pixel, so a cell-granular `drag:` only reaches ~5 of
+  its 96 values. X stays cell-granular.
 - `play` — start playback (`player.start`); `mult:<n>` — set multispeed (1..16)
 - `ff:<n>` — advance playback by `n*16` frames deterministically (calls the
   player directly; no audio device needed — that's how SID state changes here)

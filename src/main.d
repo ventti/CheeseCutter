@@ -106,6 +106,14 @@ void initVideo(bool useFullscreen, bool useyuv, int seqHeight = 0, int uiWidthCo
 	// SDL_WM_SetCaption("CheeseCutter".toStringz(),"CheeseCutter".toStringz());
 }
 
+// Publish the letterbox-corrected mouse position in grid pixels for widgets that need
+// sub-cell precision (see com.fb.mousePixelX/Y). The UI itself keeps receiving character
+// cells; this is strictly extra resolution alongside it, never a replacement.
+private void publishMousePixel(int x, int y) {
+	com.fb.mousePixelX = x;
+	com.fb.mousePixelY = y;
+}
+
 void mainloop(bool verbose) {
 	int mods, key, unicode;
 	bool quit = false;
@@ -182,6 +190,7 @@ void mainloop(bool verbose) {
 					int x, y;
 					SDL_GetMouseState(&x, &y);
 					video.scalePosition(x, y);
+					publishMousePixel(x, y);
 					int cx = x / FONT_X, cy = y / FONT_Y;
 					mainui.clickedAt(cx, cy, evt.button.button, evt.button.clicks);
 					break;
@@ -219,6 +228,7 @@ void mainloop(bool verbose) {
 					int x, y;
 					SDL_GetMouseState(&x, &y);
 					video.scalePosition(x, y);
+					publishMousePixel(x, y);
 					mainui.releasedAt(x / FONT_X, y / FONT_Y);
 					mainui.update();
 				}
@@ -227,6 +237,7 @@ void mainloop(bool verbose) {
 				{
 					int x = evt.motion.x, y = evt.motion.y;
 					video.scalePosition(x, y);
+					publishMousePixel(x, y);
 					if(evt.motion.state & SDL_BUTTON_LMASK) {
 						// Drag = motion with the left button held.
 						mainui.draggedTo(x / FONT_X, y / FONT_Y);

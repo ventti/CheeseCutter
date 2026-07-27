@@ -63,6 +63,14 @@ private bool isDirty = false;
 // keyjam mode toggles (com.fb has no com.session dependency, so it's a flag).
 __gshared bool keyjamBackground = false;
 
+// Last mouse position in GRID PIXELS: letterbox-corrected (Video.scalePosition) but NOT
+// yet divided down to a character cell. The UI dispatches mouse events in cells, which is
+// too coarse for a continuous vertical drag — a graph band can be under 5 cells tall, so
+// cell granularity quantizes the whole band to 5 reachable values. Widgets that need
+// sub-cell precision read this instead of reconstructing a cell centre. Published by the
+// SDL event loop in main.mainloop (com.fb has no dependency on the UI, so it's a flag).
+__gshared int mousePixelX = 0, mousePixelY = 0;
+
 immutable CHECKX = "assert(x >= 0 && x < width);";
 immutable CHECKY = "assert(y >= 0 && y < height);";
 immutable CHECKS = "assert(x >= 0 && y >= 0 && x + y * width >= 0 && x + y * width < width*height);";

@@ -146,6 +146,8 @@ private void usage(File f) {
 "  click:cx,cy[,b[,n]]  inject a mouse click at char-cell coords (b=button,\n" ~
 "                   n=clicks); e.g. click:3,0 opens the File menu\n" ~
 "  drag:x1,y1,x2,y2 left-drag from (x1,y1) to (x2,y2) (press, move, release)\n" ~
+"  dragpx:x1,py1,x2,py2  same, but Y in GRID PIXELS (publishes com.fb.mousePixelY)\n" ~
+"                   for widgets with sub-cell precision, e.g. the pitch drag\n" ~
 "  press:cx,cy[,b]  mouse button-down only (no release) — e.g. to capture the\n" ~
 "                   menu bar's armed/yellow pressed state in a screenshot\n" ~
 "  release:cx,cy    mouse button-up at a cell (pairs with press)\n" ~
@@ -371,6 +373,28 @@ private bool processCommand(string arg) {
 			mainui.draggedTo(x2, y2); mainui.update();
 			mainui.releasedAt(x2, y2); mainui.update();
 			stderr.writefln("drag %d,%d -> %d,%d", x1, y1, x2, y2);
+			break;
+		}
+		case "dragpx": {
+			// dragpx:CX1,PY1,CX2,PY2 — like `drag`, but the Y values are GRID PIXELS,
+			// not character cells: each step publishes com.fb.mousePixelY exactly as
+			// main.mainloop does, so widgets that read sub-cell precision (the pitch
+			// drag) see a real pixel instead of falling back to the cell centre. X
+			// stays cell-granular — no widget needs sub-cell X.
+			auto p = val.split(",");
+			int x1 = to!int(p[0]), py1 = to!int(p[1]);
+			int x2 = to!int(p[2]), py2 = to!int(p[3]);
+			void at(int cx, int py, void delegate(int, int) dispatch) {
+				com.fb.mousePixelX = cx * FONT_X + FONT_X / 2;
+				com.fb.mousePixelY = py;
+				dispatch(cx, py / FONT_Y);
+				mainui.update();
+			}
+			at(x1, py1, (cx, cy) => mainui.clickedAt(cx, cy, 1, 1));
+			at((x1 + x2) / 2, (py1 + py2) / 2, (cx, cy) => mainui.draggedTo(cx, cy));
+			at(x2, py2, (cx, cy) => mainui.draggedTo(cx, cy));
+			at(x2, py2, (cx, cy) => mainui.releasedAt(cx, cy));
+			stderr.writefln("dragpx %d,%dpx -> %d,%dpx", x1, py1, x2, py2);
 			break;
 		}
 		case "ff":
