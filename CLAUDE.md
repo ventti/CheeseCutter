@@ -40,7 +40,8 @@ incomplete.
 
 Doc surfaces — check each that applies:
 
-- **`README.md`** — top-level feature/usage summary and the version line.
+- **`README.md`** — top-level feature/usage summary. Keep the build recipe a
+  pointer to `doc/BUILD.md`, not a second copy of it.
 - **`guide/README.md`** — the user guide (rendered through `guide/index.md`).
   Update the *Global Shortcuts* / *Playback* tables and add or extend a section
   when you introduce a feature.
@@ -62,11 +63,34 @@ Doc surfaces — check each that applies:
   version = editing `Version` then rebuilding; it flows to `--help`, the man
   pages and the exported PRGs automatically. Because `APP_VERSION` is an enum
   (inlined), the Makefiles rebuild every user via `VERSION_USERS` — add new
-  `APP_VERSION` users to that list. (Top-level `README.md` still states the
-  version in prose; update it by hand on a bump.)
+  `APP_VERSION` users to that list. No prose file repeats the version: the guide
+  gets it as `{{ site.version }}` (injected by `.github/workflows/pages.yml`) and
+  `README.md` does not state it at all. Keep it that way.
 
-There is no fully-automatic generator for the prose docs — treat the list above
-as the checklist to run through before considering a feature/fix done.
+The `docs` CI job regenerates every generated file and fails on any diff, so a
+stale generated doc breaks the build rather than rotting quietly. The prose docs
+have no generator — treat the list above as the checklist to run through before
+considering a feature/fix done.
+
+## Working notes are NOT documentation
+
+Plans, audits, review findings, loop/iteration logs and progress reports are
+**session state**. They describe one moment, nothing reads them, and once
+committed they rot in place and then mislead — the repo has been cleaned of
+~2,300 such lines once already.
+
+**Never commit them.** Write them under `.scratch/` (gitignored). Before you
+finish, promote anything durable into the surface that owns it:
+
+| The note contains | Promote it to |
+| --- | --- |
+| a design decision + its rationale | a new `doc/adr/NNNN-*.md` (append-only) |
+| a fact about how the code works | the module's header synopsis, or `doc/` prose |
+| an open bug or task | `TODO` |
+| a behaviour worth locking down | a test |
+
+Then delete the note. If it survives only as prose in the repo root, it is an
+artifact — that is the thing this rule exists to prevent.
 
 ## Build note
 

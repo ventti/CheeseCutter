@@ -37,7 +37,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Ctrl-N` | Clear the song and start a new project |
 | `Shift-F10` | Export song: Full player .prg / Optimized .prg / PSID (options dialog) |
 | `Shift-F9` | Import a ProTracker module (.mod): pick the file, then choose channels and which effects to translate |
-| `Ctrl-O` / `F9` | Open the Load song dialog |
+| `F9` / `Ctrl-O` | Open the Load song dialog |
 | `F10` | Open the Save song dialog |
 | `Ctrl-F10` / `Ctrl-S` | Quick save song (doesn't ask a filename) |
 | `Ctrl-Shift-F10` | Render audio: .wav / .flac (duration, normalize, bit depth, rate) |
@@ -48,13 +48,13 @@ _Generated from the shortcut registry (com.shortcuts)._
 |---|---|
 | `F12` | Open context help |
 | `Ctrl-P` | Open the command palette: search commands and songs by name or shortcut (also Esc, then type) |
-| `Alt-S` / `F11` | Show the splash / about screen |
+| `F11` / `Alt-S` | Show the splash / about screen |
 
 ### Keyjam
 
 | Shortcut | Action |
 |---|---|
-| `Ctrl-K` / `Ctrl-Space` | Toggle keyjam mode |
+| `Ctrl-Space` / `Ctrl-K` | Toggle keyjam mode |
 
 ### Playback
 
@@ -68,7 +68,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `F3` | Play from cursor position (loops the selected block if one is active) |
 | `F1` | Play from playback mark (loops the selected block if one is active) |
 | `F2` | Play from the start (loops the selected block if one is active) |
-| `Ctrl-F5` / `ScrollLock` | Start/stop tracking (works only when playing) |
+| `ScrollLock` / `Ctrl-F5` | Start/stop tracking (works only when playing) |
 | `F4` | Stop playback |
 
 ### Playback options
@@ -153,7 +153,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 | Shortcut | Action |
 |---|---|
 | `Ctrl-L` | Center the cursor on screen |
-| `Ctrl-H` / `Ctrl-Home` | Jump to playback mark (realigns the voices) |
+| `Ctrl-Home` / `Ctrl-H` | Jump to playback mark (realigns the voices) |
 | `Shift-End` | Move cursor to song end |
 | `Shift-Home` | Move cursor to song start |
 | `Ctrl-Backspace` | Set loop (wrap) mark to current position |
@@ -206,7 +206,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Shift-Insert` | Insert a row (with sequence expand) |
 | `End` | Move cursor to sequence end (or screen bottom) |
 | `Home` | Move cursor to sequence start (or screen top) |
-| `Ctrl-Shift-P` / `Keypad 0` | Play notes for all voices in current row |
+| `Keypad 0` / `Ctrl-Shift-P` | Play notes for all voices in current row |
 | `Shift-Return` | Quick expand sequence (by highlight value * 4) |
 | `Ctrl-Delete` | Shrink the sequence |
 | `Alt-P` | Split current sequence into two from cursor pos |
@@ -217,7 +217,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 
 | Shortcut | Action |
 |---|---|
-| `Alt-Z` / `Ctrl-C` | Ask for a number and copy tracks into clipboard |
+| `Ctrl-C` / `Alt-Z` | Ask for a number and copy tracks into clipboard |
 | `Ctrl-Shift-Delete` | Delete a track for all voices |
 | `Delete` | Delete track at cursor |
 | `Ctrl-Delete` | Delete track to end of voice and move there |
@@ -226,7 +226,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Ctrl-Shift-Insert` | Insert a track for all voices |
 | `Ctrl-Insert` | Insert a track to end of voice and move there |
 | `Ctrl-V` | Paste copied tracks (ask insert or overwrite) |
-| `Alt-B` / `Ctrl-I` | Paste copied tracks as insert |
+| `Ctrl-I` / `Alt-B` | Paste copied tracks as insert |
 | `Ctrl-O` | Paste copied tracks as overwrite |
 | `>` | Select next sequence |
 | `<` | Select previous sequence |
@@ -260,6 +260,50 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Shift-Home` | Jump to first row |
 | `Shift-End` | Jump to last used row |
 
+## Sound Editor
+
+### Sound
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl-Shift-N` | Create a new private sound |
+| `Ctrl-Shift-1` | Edit selected wave byte 1 |
+| `Ctrl-Shift-2` | Edit selected wave byte 2 |
+
+### Sound Editor controls
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl-Shift-R` | Cycle Filter channel route |
+| `Ctrl-Shift-3` | Decrease Filter resonance |
+| `Ctrl-Shift-PageDown` / `Keypad /` | Decrease keyjam octave |
+| `Ctrl-Shift-9` | Decrease selected sweep duration |
+| `Ctrl-Shift-7` | Decrease selected sweep end value |
+| `Ctrl-Shift-5` | Decrease selected sweep start value |
+| `Ctrl-Shift-D` / `Delete` | Delete the selected programme row |
+| `Ctrl-Shift-A` / `Home` | Fit the full sound |
+| `Ctrl-Shift-4` | Increase Filter resonance |
+| `Ctrl-Shift-PageUp` / `Keypad *` | Increase keyjam octave |
+| `Ctrl-Shift-0` | Increase selected sweep duration |
+| `Ctrl-Shift-8` | Increase selected sweep end value |
+| `Ctrl-Shift-6` | Increase selected sweep start value |
+| `Ctrl-Shift-J` / `Insert` | Insert the selected programme row |
+| `Ctrl-PageDown` / `Keypad +` | Select next instrument |
+| `Ctrl-PageUp` / `Keypad -` | Select previous instrument |
+| `Shift-PageDown` | Select the next wave row |
+| `Shift-PageUp` | Select the previous wave row |
+| `Ctrl-L` | Set the wave loop target |
+| `Ctrl-Shift-S` | Stop the selected programme |
+| `Ctrl-Shift-B` | Toggle Filter band-pass |
+| `Ctrl-Shift-H` | Toggle Filter high-pass |
+| `Ctrl-Shift-L` | Toggle Filter low-pass |
+| `Ctrl-T` | Toggle Filter sweep/config row type |
+| `Ctrl-Shift-E` | Toggle linked programme edits |
+| `Ctrl-I` | Toggle selected sweep carry value |
+| `Ctrl-Shift-I` | Zoom in |
+| `Ctrl-Shift-O` | Zoom out |
+| `Ctrl-Shift-G` / `End` | Zoom to the time selection |
+
 ## File dialogs
 
 _Active inside the load / save / import / instrument file dialogs._
@@ -274,8 +318,9 @@ _Active inside the load / save / import / instrument file dialogs._
 
 ## Platform notes
 
-- macOS: the Cmd key acts as Ctrl+Shift for any shortcut.
-- macOS: Cmd+1..9 act as the numeric keypad 1..9.
-- macOS: Cmd+Up / Cmd+Down act as Shift+Home / Shift+End.
+- macOS outside Sound Editor: legacy Cmd translation acts as Ctrl+Shift.
+- macOS outside Sound Editor: Cmd+1..9 act as numeric keypad 1..9.
+- macOS outside Sound Editor: Cmd+Up / Cmd+Down act as Shift+Home / Shift+End.
+- Sound Editor uses physical Ctrl/Shift primaries; Cmd variants are inert.
 - macOS: F11 may be intercepted by the system (Show Desktop).
 

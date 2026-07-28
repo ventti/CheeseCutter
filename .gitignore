@@ -20,6 +20,12 @@ _backup.ct
 run_debug.sh
 teppo/
 .claude/agent-memory-local/
+# Working notes for whatever is being built right now: plans, audits, review
+# findings, loop/iteration logs, progress reports. These are session state, not
+# documentation -- they describe a moment, nothing reads them, and once committed
+# they rot in place and mislead. Keep them here; promote anything durable into an
+# ADR (a decision), doc/ prose (a fact), or TODO (an open task). See CLAUDE.md.
+.scratch/
 # Screenshots dumped by the editor (Ctrl-F12) / driver
 screenshot_*.png
 screenshot_*.bmp

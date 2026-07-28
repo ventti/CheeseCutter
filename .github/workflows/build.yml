@@ -118,6 +118,31 @@ jobs:
           name: cheesecutter-macos
           path: CheeseCutter-Extended.app
 
+  # Generated documentation must match the source it is generated FROM. Everything
+  # `make docs` writes (the man pages, doc/KEYBOARD.md, doc/ARCHITECTURE.md) is
+  # committed, so regenerating it in a clean checkout has to be a no-op. Without this
+  # job the generators exist but nothing enforces them and the committed copies drift
+  # silently -- which is what happened to doc/ARCHITECTURE.md. `make check-map` was
+  # written as a "CI/pre-commit guard" but was never wired to anything.
+  docs:
+    name: Generated docs are current
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install ldc sdl2
+
+      - name: Regenerate every generated doc
+        run: make -f Makefile.mac docs LIBSPATH="$(brew --prefix)/lib"
+
+      - name: Fail if a generated doc was out of date
+        run: |
+          if ! git diff --exit-code -- doc/ guide/; then
+            echo "::error::Generated documentation is stale. Run 'make docs' and commit the result."
+            exit 1
+          fi
+
   # Headless regression suite: build the ccdriver harness and run the Sound
   # Editor tests (layers 1-3) plus the tolerance-based visual-regression
   # checkpoints (layer 4). Runs on macOS to match the platform the baselines
