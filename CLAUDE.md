@@ -92,6 +92,13 @@ finish, promote anything durable into the surface that owns it:
 Then delete the note. If it survives only as prose in the repo root, it is an
 artifact — that is the thing this rule exists to prevent.
 
+Every tracked doc is listed in **`doc/MANIFEST.toml`** with the mechanism that keeps
+it true (generated / tested / decision / prose / agent / vendor).
+`tests/test_docs_manifest.py` fails if a tracked doc is missing from it, if an entry
+points at a file that is gone, if a declared generator or reader does not exist, or
+if a committed doc reads as session state. So adding documentation means choosing how
+it stays honest — if you cannot name a mechanism, it probably belongs in `.scratch/`.
+
 ## Build note
 
 The Makefiles have no inter-module dependency tracking: run `make clean` after

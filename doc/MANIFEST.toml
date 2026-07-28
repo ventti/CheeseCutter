@@ -1,0 +1,242 @@
+# Documentation manifest — every doc in the repo, and the mechanism that keeps it true.
+#
+# The problem this solves: documentation does not rot because people are careless, it rots
+# because most documents have NO mechanism that would notice. This file makes the mechanism
+# an explicit, checked property of each doc. tests/test_docs_manifest.py fails if a tracked
+# doc is missing from here, if a listed doc is missing from disk, or if a `generator`/`reader`
+# claim is untrue — so adding a document requires a deliberate decision about how it stays
+# honest, which is exactly the friction an agent session lacks.
+#
+# category (pick the strongest that applies):
+#   generated  — written by a tool from code. Cannot drift; CI regenerates and diffs it.
+#   tested     — prose whose content is asserted by a test. Rots loudly, not silently.
+#   decision   — an ADR. Append-only, superseded but never edited; cannot go stale because
+#                it only ever claimed to record a decision made on a date.
+#   prose      — hand-written and hand-maintained. The only category with no automatic
+#                guard, so keep it small, owned, and reviewed in the same PR as the code.
+#   agent      — instructions/config consumed by AI agents (CLAUDE.md, skills, subagents).
+#   vendor     — upstream/third-party text we do not maintain.
+#
+# NOT a category: plans, audits, review findings, loop logs, progress reports. Those are
+# session state — keep them in .scratch/ (gitignored). See CLAUDE.md.
+
+[[doc]]
+path = "README.md"
+category = "prose"
+note = "Front page. Points at doc/BUILD.md rather than repeating it; states no version."
+
+[[doc]]
+path = "guide/README.md"
+category = "prose"
+note = """User guide, rendered through guide/index.md by .github/workflows/pages.yml.
+KNOWN DUPLICATION: hand-types ~97 shortcut rows that doc/KEYBOARD.md already generates
+from the com.shortcuts registry. Should be generated; see TODO."""
+
+[[doc]]
+path = "guide/index.md"
+category = "prose"
+note = "Jekyll shim that include_relative's guide/README.md."
+
+[[doc]]
+path = "doc/BUILD.md"
+category = "prose"
+note = "Authoritative build guide for all three platforms."
+
+[[doc]]
+path = "doc/cti-instrument-format.md"
+category = "prose"
+note = "On-disk .cti instrument format reference."
+
+[[doc]]
+path = "doc/SOUND_EDITOR_DESIGN.md"
+category = "prose"
+note = """Design record + research for the Sound Editor: why it is shaped as it is.
+Explicitly NOT maintained as a description of current behaviour (says so in its header)."""
+
+[[doc]]
+path = "doc/ADSR_VISUALIZATION_SPEC.md"
+category = "prose"
+reader = "src/ui/soundedit.d"
+note = """Source of the SID ADSR ms tables. src/ui/soundedit.d:129 cites it as the authority.
+KNOWN DUPLICATION: the tables exist in src/audio/visualizer.d, are copied in soundedit.d,
+and are tabulated again here. soundedit.d should use the visualizer's copy; see TODO."""
+
+[[doc]]
+path = "doc/README"
+category = "prose"
+note = "One-line pointer into doc/."
+
+[[doc]]
+path = "TODO"
+category = "prose"
+note = "The open-work surface. Task-per-`---` with a Status line; agents read and update it."
+
+[[doc]]
+path = "INSTALL"
+category = "prose"
+
+[[doc]]
+path = "ChangeLog"
+category = "prose"
+
+[[doc]]
+path = "NEWS"
+category = "prose"
+
+[[doc]]
+path = "AUTHORS"
+category = "prose"
+
+[[doc]]
+path = "doc/ct2util.1"
+category = "prose"
+note = "Hand-maintained, unlike ccutter's man pages. Update on ct2util CLI changes."
+
+[[doc]]
+path = "doc/ct2util.fr.1"
+category = "prose"
+note = "Hand-maintained French translation of doc/ct2util.1."
+
+# ---- generated: regenerated and diffed by the `docs` CI job ----
+
+[[doc]]
+path = "doc/ARCHITECTURE.md"
+category = "generated"
+generator = "tools/genmap.py"
+note = "make map. Per-module synopsis comes from each module's header comment."
+
+[[doc]]
+path = "doc/KEYBOARD.md"
+category = "generated"
+generator = "src/ui/shorthelp.d"
+reader = "tests/test_sound_editor_keyboard_portability.py"
+note = "ccutter --dump-keys, from the com.shortcuts registry. Also content-asserted by tests."
+
+[[doc]]
+path = "doc/ccutter.1"
+category = "generated"
+generator = "src/manpage.d"
+note = "ccutter --dump-man. Option list comes from cliOptions() in src/main.d."
+
+[[doc]]
+path = "doc/ccutter.de.1"
+category = "generated"
+generator = "src/manpage.d"
+note = "Machine-translated; flag native-speaker review when strings change."
+
+[[doc]]
+path = "doc/ccutter.fi.1"
+category = "generated"
+generator = "src/manpage.d"
+note = "Machine-translated; flag native-speaker review when strings change."
+
+[[doc]]
+path = "doc/ccutter.fr.1"
+category = "generated"
+generator = "src/manpage.d"
+note = "Machine-translated; flag native-speaker review when strings change."
+
+[[doc]]
+path = "doc/ccutter.sv.1"
+category = "generated"
+generator = "src/manpage.d"
+note = "Machine-translated; flag native-speaker review when strings change."
+
+# ---- tested: prose that a test reads and asserts against ----
+
+[[doc]]
+path = "doc/SOUND_EDITOR_MASTER_TEST_PLAN.md"
+category = "tested"
+reader = "tests/test_sound_editor_master_usage.py"
+note = """The master regression sequence's canonical plan; the suite asserts it defines every
+requirement in order. Was referenced by tests while untracked for weeks, so a clean clone
+could not pass — that is why `reader` claims are now checked."""
+
+[[doc]]
+path = "doc/SOUND_EDITOR_USABILITY_REVIEW.md"
+category = "tested"
+reader = "tests/test_sound_editor_usage.py"
+note = "Comparative review vs Ableton Wavetable / Surge XT / Pigments; tests assert the references."
+
+[[doc]]
+path = "doc/SOUND_EDITOR_REQUIREMENTS_AUDIT.md"
+category = "tested"
+reader = "tests/test_sound_editor_usage.py"
+note = "Requirement audit cited by the usage suite's module docstring."
+
+# ---- decision: append-only ADRs ----
+
+[[doc]]
+path = "doc/adr/README.md"
+category = "decision"
+note = "How to add an ADR (Nygard template). Never edit an accepted ADR — supersede it."
+
+[[doc]]
+path = "doc/adr/0001-record-architecture-decisions.md"
+category = "decision"
+
+[[doc]]
+path = "doc/adr/0002-live-song-image-memory-layout.md"
+category = "decision"
+
+[[doc]]
+path = "doc/adr/0003-single-shortcut-registry.md"
+category = "decision"
+
+[[doc]]
+path = "doc/adr/0004-editor-export-shares-ct2util-core.md"
+category = "decision"
+
+[[doc]]
+path = "doc/adr/0005-remote-playback-backends.md"
+category = "decision"
+
+[[doc]]
+path = "doc/adr/0006-instrument-color-tags.md"
+category = "decision"
+
+[[doc]]
+path = "doc/adr/0007-about-splash-scroller.md"
+category = "decision"
+
+[[doc]]
+path = "doc/adr/0008-oscilloscope-overlay-non-modal.md"
+category = "decision"
+
+[[doc]]
+path = "doc/adr/0009-one-shared-mapping-per-editable-graph-axis.md"
+category = "decision"
+
+# ---- agent: instructions consumed by AI coding agents ----
+
+[[doc]]
+path = "CLAUDE.md"
+category = "agent"
+note = """Project instructions for Claude Code. Governs future behaviour, so keep it minimal:
+if a rule can be enforced by a tool (a test, a make target, CI), enforce it there and do not
+restate it here. If this file changes often, its content belongs elsewhere."""
+
+[[doc]]
+path = ".claude/skills/run-cheesecutter/SKILL.md"
+category = "agent"
+note = "How to build/run/drive the editor and ccdriver headlessly."
+
+[[doc]]
+path = ".claude/skills/sdl2-ui-debug-qa/SKILL.md"
+category = "agent"
+note = "Generic SDL2 UI test strategy; ccdriver is its reference implementation."
+
+[[doc]]
+path = ".claude/agents/soundedit-implementer.md"
+category = "agent"
+
+[[doc]]
+path = ".claude/agents/soundedit-verifier.md"
+category = "agent"
+
+# ---- vendor: not ours to maintain ----
+
+[[doc]]
+path = "LICENSE.md"
+category = "vendor"
+note = "GNU GPL text."
