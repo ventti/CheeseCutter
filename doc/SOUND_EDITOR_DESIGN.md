@@ -1,6 +1,12 @@
 # Visual Sound Editor — Design & Research
 
-Status: **DRAFT / in progress** (feat/sound-editor)
+Status: **Implemented** — shipped on master; the branch this was drafted on is merged.
+
+This is the design record and the research behind it: *why* the screen is shaped the way
+it is. It is deliberately not maintained as a description of the current code. For what
+the code does now read `src/ui/soundedit.d` and `doc/ARCHITECTURE.md`; for the keyboard
+surface `doc/KEYBOARD.md`; for decisions taken since, `doc/adr/`.
+
 An alternative, visual instrument/sound-editing screen that "sugarcoats" the
 hex wave/pulse/filter tables behind pixel-accurate, realtime, mouse-and-keyboard
 editable graphs — while writing back to the exact same `ct.base` data the classic

@@ -25,3 +25,43 @@ Status: DONE
 "Go to instrument wave" <G> should work on instrument table too, and it shall be visible in the menu as well. Instead of "Tables" menu, it should be on "Navigate" menu.
 Status: DONE
 ---
+Sound Editor bugs found by an automated code review of the feat/sound-editor diff on
+2026-07-27. NONE of these were reproduced — confirm each before fixing. Line numbers
+were accurate at commit c443a33 and have since drifted (soundedit.d was refactored).
+The pitch-drag findings from the same review are already fixed; see doc/adr/0009.
+
+(a) Exiting the Sound Editor with Ctrl-E *while the song is playing* leaves keyjam mode
+    stuck on, so every key in the tracker goes to the keyjam instead of the editor.
+    stopSoundEditor() restores state.keyjamStatus through ui.enableKeyjamMode(), which
+    early-returns when audio.player.isPlaying. Restore the flag (and com.fb.keyjamBackground)
+    unconditionally instead. Repro: keyjam off, F2, Ctrl-E in, Ctrl-E out. HIGH.
+(b) HelpDialog truncates its pages: the render loop stops at an absolute screen row
+    (`if(ypos >= 36) break;` in src/ui/dialogs.d) while the dialog's area.y is dynamic.
+    At the 160x50 minimum only 27 of 31 lines of the Sound Editor help page 2 show; on a
+    ~92-row autoscaled grid only ~6 lines of ANY help page show. Bound it by
+    area.y + area.height - 1. HIGH.
+(c) simPulse accepts a pulse pointer of 0 and then walks into whatever program lives at
+    row 1, so a pulse-less instrument draws a phantom staircase plus phantom LOOP/END
+    markers belonging to another sound. Every sibling (simFilter, pulseProgramExtent,
+    sweepProgramRows, sweepCloseRow) guards with `<= 0`; simPulse uses `< 0`. MEDIUM.
+(d) A wave program starting at row 0 bypasses the copy-on-write fork: waveProgramRows
+    returns an empty set for startRow <= 0, so waveProgramShared() is always false and
+    authorizeWaveMutation writes in place. Row 0 IS reachable (seekTableEnd() returns 0 for
+    an empty wave table). Two instruments on wave row 0: editing one silently rewrites the
+    other. MEDIUM.
+(e) doSweepRowOp's insert has no upper bound: selected row 0x3f gives a new row index 0x40,
+    which trips `assert(row < 64)` in ct.purge.genericInsertRow and writes t[256] on a
+    256-byte table. Release builds use --release --boundscheck=off, so both are silent
+    memory corruption rather than an abort. The filter logical-block branch just above it
+    does guard. MEDIUM.
+(f) The Sound Editor's beginSession() never clears its private keyjam's held-key set, so
+    noteHeld() can stay true forever: hold a note, Ctrl-E out, release the key (the release
+    goes to the *global* keyjam), Ctrl-E back in. Afterwards every parameter edit fires a
+    phantom note and overwrites the capture. MEDIUM.
+(g) ADSR handles can be placed outside the reachable viewport and so can never be grabbed:
+    the handle frames are unclamped while computeContentMax caps the pannable extent (its
+    own aF/dF locals are computed and never used). With AD == $FF the decay/sustain handle
+    sits at frame ~1604 against a max of 1253. Clamp the handle frames, or fold aF + dF
+    into computeContentMax. LOW.
+Status: TODO
+---
