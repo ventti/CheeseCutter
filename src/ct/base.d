@@ -41,6 +41,28 @@ immutable string[] NOTES =
 	  "C-7", "C#7", "D-7", "D#7", "E-7", "F-7",
 	  "F#7", "G-7", "G#7", "A-7", "A#7", "B-7" ];
 
+// Flat spelling of the same notes, generated to mirror NOTES one-for-one.
+__gshared string[] NOTES_FLAT;
+
+shared static this() {
+	static immutable string[12] flat =
+		["C-", "Db", "D-", "Eb", "E-", "F-", "Gb", "G-", "Ab", "A-", "Bb", "B-"];
+	NOTES_FLAT.length = NOTES.length;
+	foreach(i; 0 .. NOTES.length)
+		NOTES_FLAT[i] = flat[i % 12] ~ cast(char)('0' + i / 12);
+}
+
+// When set, note names are displayed with flat (b) accidentals instead of
+// sharps (#). A pure display preference toggled from the View menu; the data
+// layer owns it so Note.toString can honour it without importing com.session.
+__gshared bool noteSpellingFlats = false;
+
+// Name of note index `idx` (0..NOTES.length-1) in the active spelling.
+string noteName(int idx) {
+	if(idx < 0 || idx >= NOTES.length) return "???";
+	return noteSpellingFlats ? NOTES_FLAT[idx] : NOTES[idx];
+}
+
 enum {
 	MAX_SEQ_ROWS = 0x40,
 	MAX_SEQ_NUM = 0x80,
@@ -96,9 +118,54 @@ struct Cmd {
 
 	string toPlainString() {
 		ubyte v = data[3];
-		if(v > 0) 
+		if(v > 0)
 			return format("%02X", v);
-		else return "--"; 
+		else return "--";
+	}
+}
+
+// Human-readable name of a command-table command (low nibble 0..8). Shared by
+// the command-table byte help and the sequence-editor effect-column help.
+string commandName(int cmd) {
+	switch(cmd) {
+	case 0: return "Slide up";
+	case 1: return "Slide down";
+	case 2: return "Hi-fi vibrato";
+	case 3: return "Detune current note";
+	case 4: return "Set ADSR for the current note";
+	case 5: return "Lo-fi vibrato";
+	case 6: return "Set wave";
+	case 7: return "Portamento a tie note";
+	case 8: return "Stop portamento";
+	default: return "Unknown command";
+	}
+}
+
+// Description of a command-table command's parameter byte (byteNo 2 or 3).
+string commandParameterDescription(int cmd, int byteNo) {
+	switch(cmd) {
+	case 0, 1:
+		return byteNo == 2 ? "Slide speed high byte (signed 16-bit)." :
+			"Slide speed low byte (signed 16-bit).";
+	case 2:
+		return byteNo == 2 ? "Hi-fi vibrato feel in low nibble." :
+			"Hi-fi vibrato speed in high nibble, depth divider in low nibble.";
+	case 3:
+		return byteNo == 2 ? "Detune high byte (signed 16-bit)." :
+			"Detune low byte (signed 16-bit).";
+	case 4:
+		return byteNo == 2 ? "Attack / decay." : "Sustain / release.";
+	case 5:
+		return byteNo == 2 ? "Lo-fi vibrato speed." : "Lo-fi vibrato depth.";
+	case 6:
+		return byteNo == 2 ? "Unused." : "SID control register waveform value.";
+	case 7:
+		return byteNo == 2 ? "Portamento speed high byte." :
+			"Portamento speed low byte. Runs until command $8.";
+	case 8:
+		return "Unused. Command $8 stops portamento.";
+	default:
+		return "Parameter value.";
 	}
 }
 
@@ -197,8 +264,8 @@ struct Note {
 		default:
 			if((v + trns) > 0x5e || (v + trns) < 0)
 				return format("%s???", col);
-			else return format("%s%s", col, 
-							   NOTES[v + trns]);
+			else return format("%s%s", col,
+							   noteName(v + trns));
 		}
 	}
 
@@ -213,7 +280,7 @@ struct Note {
 		default:
 			if((v + trns) > 0x5e || (v + trns) < 0)
 				return "???";
-			else return NOTES[v + trns];
+			else return noteName(v + trns);
 		}
 	}
 }
@@ -1794,6 +1861,21 @@ class Song {
 			}
 		}
 		chordIndexTable[crd++] = cast(ubyte)(p);
+	}
+
+	// Signed transpose offsets of chord `idx` ($00-$3f up, $40-$7f down), read
+	// from chordTable starting at chordIndexTable[idx] until the >=$80 loop/end
+	// marker. Shared by the sequence effect-column help and the chord table help.
+	int[] chordProgram(int idx) {
+		int[] offs;
+		if(idx < 0 || idx >= chordIndexTable.length) return offs;
+		int start = chordIndexTable[idx];
+		for(int k = start; k < chordTable.length && k < start + 64; k++) {
+			ubyte b = chordTable[k];
+			if(b >= 0x80) break;
+			offs ~= (b < 0x40) ? b : (b - 0x80);
+		}
+		return offs;
 	}
 
 	void importData(Song insong) {

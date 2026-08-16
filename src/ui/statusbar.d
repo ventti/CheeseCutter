@@ -194,6 +194,14 @@ class Statusline : Window {
 		update();
 	}
 
+	// Blank the status line immediately (no timeout). Used when the cursor moves
+	// onto a cell that has no contextual help, so stale text never lingers.
+	void clear() {
+		message = "";
+		counter = 0;
+		screen.clrtoeol(2, 0);
+	}
+
 	override void deactivate() {
 		counter = 0;
 		update();

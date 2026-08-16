@@ -400,6 +400,13 @@ abstract class VoiceTable : Window {
 		}
 	}
 
+	// Resync the active voice's cursor row/element to the current position, the
+	// same way update() does each frame (refreshPointer(pointerOffset)). Lets a
+	// caller read activeRow immediately after a move instead of one frame late.
+	final void syncActiveRow() {
+		activeVoice.refreshPointer(posTable.pointerOffset);
+	}
+
 	void centralize() {
 		jump(activeVoice.activeRow.trkOffset,true);
 	}

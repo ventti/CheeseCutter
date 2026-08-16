@@ -12,7 +12,8 @@ import ui.help;
 import com.session;
 import com.util;
 import ct.purge;
-import ct.base : MAX_SEQ_NUM, NOTES;
+import ct.base : MAX_SEQ_NUM, NOTES, noteName, commandName, commandParameterDescription;
+import ct.chordname : chordQualityName;
 import derelict.sdl2.sdl;
 import com.palette : Role, idx;
 import std.string;
@@ -868,48 +869,6 @@ private:
 		return format("Byte %d: %s", byteNo, commandParameterDescription(cmd, byteNo));
 	}
 
-	string commandName(int cmd) {
-		switch(cmd) {
-		case 0: return "Slide up";
-		case 1: return "Slide down";
-		case 2: return "Hi-fi vibrato";
-		case 3: return "Detune current note";
-		case 4: return "Set ADSR for the current note";
-		case 5: return "Lo-fi vibrato";
-		case 6: return "Set wave";
-		case 7: return "Portamento a tie note";
-		case 8: return "Stop portamento";
-		default: return "Unknown command";
-		}
-	}
-
-	string commandParameterDescription(int cmd, int byteNo) {
-		switch(cmd) {
-		case 0, 1:
-			return byteNo == 2 ? "Slide speed high byte (signed 16-bit)." :
-				"Slide speed low byte (signed 16-bit).";
-		case 2:
-			return byteNo == 2 ? "Hi-fi vibrato feel in low nibble." :
-				"Hi-fi vibrato speed in high nibble, depth divider in low nibble.";
-		case 3:
-			return byteNo == 2 ? "Detune high byte (signed 16-bit)." :
-				"Detune low byte (signed 16-bit).";
-		case 4:
-			return byteNo == 2 ? "Attack / decay." : "Sustain / release.";
-		case 5:
-			return byteNo == 2 ? "Lo-fi vibrato speed." : "Lo-fi vibrato depth.";
-		case 6:
-			return byteNo == 2 ? "Unused." : "SID control register waveform value.";
-		case 7:
-			return byteNo == 2 ? "Portamento speed high byte." :
-				"Portamento speed low byte. Runs until command $8.";
-		case 8:
-			return "Unused. Command $8 stops portamento.";
-		default:
-			return "Parameter value.";
-		}
-	}
-
 }
 
 class ChordTable : HexTable {
@@ -931,6 +890,31 @@ class ChordTable : HexTable {
 		}
 	}
 
+	// Which chord does chord-table row `r` belong to? Every >=$80 byte ends a
+	// chord, so the index is the number of markers strictly before the row.
+	private int chordIndexOfRow(int r) {
+		int idx = 0;
+		for(int i = 0; i < r && i < song.chordTable.length; i++)
+			if(song.chordTable[i] >= 0x80) idx++;
+		return idx;
+	}
+
+	override void showByteDescription() {
+		if(!state.displayHelp) return;
+		int chordIdx = chordIndexOfRow(row);
+		int[] offs = song.chordProgram(chordIdx);
+		if(offs.length == 0) {
+			UI.statusline.display(format("Chord %d (empty)", chordIdx));
+			return;
+		}
+		string list;
+		foreach(o; offs)
+			list ~= format("%+d ", o);
+		string name = chordQualityName(offs);
+		UI.statusline.display(format("Chord %d: [%s]%s", chordIdx, strip(list),
+									 name is null ? "" : " (" ~ name ~ ")"));
+	}
+
 	override void update() {
 		int i;
 		if(state.shortTitles)
@@ -942,6 +926,10 @@ class ChordTable : HexTable {
 			int row = (i + viewOffset) & 0x7f;
 			string col = "`05";
 			if(data[row] >= 0x80) col = "`0d";
+			// Cursor hint: tint the data values of the chord referenced by the
+			// sequence cursor cyan (same hint colour as the active instrument).
+			else if(state.cursorChord >= 0 && chordIndexOfRow(row) == state.cursorChord)
+				col = format("`0%x", activeInstrumentColor);
 			int indexColor = playbackIndexColor(
 				audio.visualizer.getTableRowBrightness(audio.visualizer.PlaybackTable.Chord, row));
 
@@ -1822,7 +1810,7 @@ private:
 						  byteHex(value), byteHex(waveValue));
 		if(value >= 0x80 && value <= 0xdf) {
 			int note = value & 0x7f;
-			string noteText = note < NOTES.length ? " (" ~ NOTES[note] ~ ")" : "";
+			string noteText = note < NOTES.length ? " (" ~ noteName(note) ~ ")" : "";
 			return format("%s absolute note %d%s.", byteHex(value), note, noteText);
 		}
 		return byteHex(value) ~ " reserved transpose value.";

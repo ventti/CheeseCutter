@@ -83,6 +83,11 @@ bar remembers the last menu and item you used, so re-opening with <kbd>Esc</kbd>
 returns you to the same place. Hovering an item for a second shows its full
 description as a tooltip.
 
+The **View** menu also has a **Flat note names** toggle: when on, all note names
+are displayed with flats (`Db`, `Eb`, …) instead of sharps (`C#`, `D#`, …). It is
+purely cosmetic — it changes how notes are shown everywhere (the note column and
+the wave-table absolute-note help), not the stored data.
+
 On/off commands (voices, interpolation, keyjam, help texts, fullscreen, tracking)
 show their current state with a `[x]` / `[ ]` checkbox in an aligned column; each
 item's keyboard shortcut is shown on the right. <kbd>Space</kbd> flips such an
@@ -139,7 +144,7 @@ bar it flips the highlighted on/off item), but it works fine inside a query
 | <kbd>F12</kbd> again in context help | Global help |
 | <kbd>Ctrl</kbd>-<kbd>F12</kbd> | Screenshot |
 | <kbd>Shift</kbd>-<kbd>F12</kbd> | Toggle the oscilloscope overlay (see [Oscilloscope](#oscilloscope)) |
-| <kbd>Alt</kbd>-<kbd>H</kbd> | Toggle table byte help |
+| <kbd>Alt</kbd>-<kbd>H</kbd> | Toggle context help (table bytes + sequence-editor cells) |
 | <kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>F</kbd> | Toggle the filter track column (see [Filter Track](#filter-track)) |
 | <kbd>Alt</kbd>-<kbd>F4</kbd> | Quit (asks for confirmation) |
 
@@ -474,6 +479,14 @@ listed in the **Navigate** menu and the command palette:
 | <kbd>Alt</kbd>-<kbd>T</kbd> | Toggle relative notes |
 | <kbd>Ctrl</kbd>-<kbd>Space</kbd> or <kbd>Ctrl</kbd>-<kbd>K</kbd> | Toggle keyjam (use <kbd>Ctrl</kbd>-<kbd>K</kbd> on macOS, which claims Ctrl-Space) |
 
+With context help on (<kbd>Alt</kbd>-<kbd>H</kbd>), moving the cursor in the note
+column shows a statusline explanation of the cell under it: the **instrument**
+column shows that instrument's description, and the **command** column explains
+the effect value (command-table entry / set pulse / filter / chord / ADSR /
+volume / song speed). When the command selects a chord, the chord's transpose
+offsets and derived chord name (rooted on the row's note) are shown, e.g.
+`Chord 0 [+0 +3 +7] (Gmin)`.
+
 ### Block Selection (copy / cut / paste / merge)
 
 Select a rectangular block — a range of rows across one or more voice columns —
@@ -705,6 +718,12 @@ Notes and quirks:
   (emulated or real) C64, but the local reSID engine is kept running silently, so
   the scope still shows an approximation of the output.
 - It is a single combined trace — there are no per-voice scopes.
+
+With context help on (<kbd>Alt</kbd>-<kbd>H</kbd>), the chord table's statusline
+shows the chord under the cursor (number, transpose offsets and derived name).
+When the sequence cursor is on a chord command (`80-9F`), that chord's values are
+tinted cyan in the chord table, the same cursor hint used for the active
+instrument.
 
 ## Practical Tips
 

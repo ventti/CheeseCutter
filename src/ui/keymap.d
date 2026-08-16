@@ -487,6 +487,12 @@ void registerShortcuts(UI ui) {
 		statusline.display("Sound Editor " ~ (toplevel.soundEditorActive ? "opened." : "closed."));
 	});
 
+	sm.registerMenuOnly("toggle_note_spelling", Ctx.global, "Display",
+				"Display note names with flats (b) instead of sharps (#)", {
+		noteSpellingFlats = !noteSpellingFlats;
+		UI.statusline.display("Note names: " ~ (noteSpellingFlats ? "flats (b)." : "sharps (#)."));
+	}, "Flat note names");
+
 	// Dialogs
 	sm.register("about_dialog", Ctx.global, "Help",
 				"Show the splash / about screen", SDLK_F11, 0, {
@@ -509,6 +515,7 @@ void registerShortcuts(UI ui) {
 	sm.setChecked("toggle_follow_mode", () => toplevel.fplayEnabled());
 	sm.setChecked("toggle_filter_track", () => showFilterTrack);
 	sm.setChecked("toggle_oscilloscope", () => scopeVisible);
+	sm.setChecked("toggle_note_spelling", () => noteSpellingFlats);
 
 	// Context-specific command shortcuts (sequencer, tables, ...)
 	registerContextShortcuts(ui);

@@ -14,6 +14,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 
 | Shortcut | Action |
 |---|---|
+|  | Display note names with flats (b) instead of sharps (#) |
 | `Alt-Up` | Oscilloscope: zoom in on the recorded keyjam note (shorter window) |
 | `Alt-Down` | Oscilloscope: zoom out toward the whole recorded keyjam note |
 | `Ctrl-F12` | Save screenshot |

@@ -13,6 +13,7 @@ import seq.sequencer;
 import com.session;
 import com.selection;
 import ct.base;
+import ct.chordname : chordQualityName;
 import ui.input;
 import derelict.sdl2.sdl;
 import std.string;
@@ -138,6 +139,90 @@ class SeqVoice : Voice, Undoable {
 		activeRow = getRowData(pos.trkOffset, pos.seqOffset + y);
 		activeInput.setCoord(0, 1 + area.y + y + anchor);
 		(cast(InputSeq)seqinput).setElement(activeRow.element);
+	}
+
+	// Contextual Alt-H help for the cell under the cursor, or "" when there is
+	// nothing to explain. SequenceTable.keypress shows this on the statusline.
+	// Columns: 0 note, 1 octave, 2 instrument, 3 command (see InputSeq).
+	string contextHelpString() {
+		if(!state.displayHelp) return "";
+		InputSeq i = cast(InputSeq)seqinput;
+		Element e = activeRow.element;
+		switch(i.activeColumn) {
+		case 2:
+			if(!e.instr.hasValue) return "";
+			string label = strip(format("%s", song.insLabels[e.instr.value][0..32]));
+			return label.length ?
+				format("Instr %02X: %s", e.instr.value, label) :
+				format("Instr %02X", e.instr.value);
+		case 3:
+			return describeSuperCommand(e.cmd.rawValue);
+		default:
+			return "";
+		}
+	}
+
+	// Decode a sequence effect-column byte. It is a range-dispatched "super
+	// command" (see src/c64/player_v4.acme): $00 none, $01-$3f command-table
+	// entry, $40-$5f set pulse, $60-$7f set filter, $80-$9f set chord,
+	// $a0-$ef ADSR/volume nibbles, $f0-$ff song speed.
+	private string describeSuperCommand(ubyte v) {
+		if(v == 0) return "Cmd 00: no command";
+		if(v < 0x40)
+			return format("Cmd %02X: %s", v, commandName(song.superTable[v] & 15));
+		if(v < 0x60)
+			return format("Cmd %02X: Set pulse program %X", v, v & 0x1f);
+		if(v < 0x80)
+			return format("Cmd %02X: Set filter program %X", v, v & 0x1f);
+		if(v < 0xa0)
+			return describeChordCommand(v);
+		if(v < 0xb0)
+			return format("Cmd %02X: Set attack %X", v, v & 0x0f);
+		if(v < 0xc0)
+			return format("Cmd %02X: Set decay %X", v, v & 0x0f);
+		if(v < 0xd0)
+			return format("Cmd %02X: Set sustain %X", v, v & 0x0f);
+		if(v < 0xe0)
+			return format("Cmd %02X: Set release %X", v, v & 0x0f);
+		if(v < 0xf0)
+			return format("Cmd %02X: Set master volume %X", v, v & 0x0f);
+		if(v == 0xf0)
+			return format("Cmd %02X: Song speed 0 (global sync tick)", v);
+		return format("Cmd %02X: Set song speed %X", v, v & 0x0f);
+	}
+
+	// $80-$9f: "set chord N". Show the chord's signed transpose offsets and,
+	// when recognisable, its quality name. Chord N starts at chordIndexTable[N]
+	// and runs through chordTable until a >=$80 loop/end marker; transpose bytes
+	// are signed 7-bit ($00-$3f up, $40-$7f down).
+	private string describeChordCommand(ubyte v) {
+		int ci = v & 0x1f;
+		int[] offs = song.chordProgram(ci);
+		if(offs.length == 0)
+			return format("Cmd %02X: Chord %d (empty)", v, ci);
+		string list;
+		foreach(o; offs)
+			list ~= format("%+d ", o);
+		string name = chordQualityName(offs);
+		string nameStr;
+		if(name !is null)
+			nameStr = " (" ~ chordRootName(offs) ~ name ~ ")";
+		return format("Cmd %02X: Chord %d [%s]%s", v, ci, strip(list), nameStr);
+	}
+
+	// Pitch-class name of the chord's root for the cell under the cursor: the
+	// row's note plus the chord's lowest offset (the root, since naming treats
+	// the lowest note as the root). Returns "" when the row has no concrete note
+	// (rest/tie/continue) - then only the quality is shown. Honours the sharp/
+	// flat display toggle via noteName.
+	private string chordRootName(const(int)[] offs) {
+		Element e = activeRow.element;
+		if(e.note.value < 3) return "";   // ---, ===, +++ : no concrete root
+		int minOff = offs[0];
+		foreach(o; offs) if(o < minOff) minOff = o;
+		string nm = noteName(e.note.value + e.transpose + minOff);
+		if(nm.length < 2 || nm == "???") return "";
+		return nm[1] == '-' ? nm[0 .. 1] : nm[0 .. 2];  // strip octave/natural dash
 	}
 
 	override void update() {
@@ -509,6 +594,47 @@ class SequenceTable : VoiceTable, Undoable {
 	override void clickedAt(int x, int y, int button, int clicks = 1) {
 		y -= 1;
 		step(y-posTable.normalPointerOffset);
+		refreshContextHelp();
+	}
+
+	private string lastHelpKey;
+
+	// Update the statusline help to match the cell under the cursor, but only
+	// when the cursor (voice/column/row) or the cell's help text has actually
+	// changed. Keys that don't move the cursor (e.g. Ctrl-T) leave their own
+	// transient status messages intact; moving onto a no-help cell clears any
+	// stale text instead of letting it time out to blank. Drives keyboard and
+	// mouse navigation alike.
+	void refreshContextHelp() {
+		// A move only updates `pos`; the active row/element is otherwise resynced
+		// one frame later by update() (via refreshPointer(pointerOffset)), so
+		// reading activeRow here would lag a step behind the cursor. Resync now
+		// so the help matches the cell the cursor just landed on.
+		syncActiveRow();
+		updateCursorChord();
+		if(!state.displayHelp) { lastHelpKey = null; return; }
+		SeqVoice v = cast(SeqVoice)activeVoice;
+		string help = v.contextHelpString();
+		string key = format("%d:%d:%d:%s", activeVoiceNum,
+							(cast(InputSeq)v.seqinput).activeColumn, activeRowAbs(), help);
+		if(key == lastHelpKey) return;
+		lastHelpKey = key;
+		if(help.length) UI.statusline.display(help);
+		else UI.statusline.clear();
+	}
+
+	// Track which chord (if any) the effect cell under the cursor references, so
+	// the chord table can tint that chord's rows cyan (a cursor hint like the
+	// active-instrument highlight). Runs regardless of the help-text toggle.
+	private void updateCursorChord() {
+		SeqVoice v = cast(SeqVoice)activeVoice;
+		Element e = v.activeRow.element;
+		int c = -1;
+		if((cast(InputSeq)v.seqinput).activeColumn == 3) {
+			ubyte cmd = e.cmd.rawValue;
+			if(cmd >= 0x80 && cmd <= 0x9f) c = cmd & 0x1f;
+		}
+		state.cursorChord = c;
 	}
 
 	override int keypress(Keyinfo key) {
@@ -620,6 +746,7 @@ class SequenceTable : VoiceTable, Undoable {
 				break;
 			}
 		}
+		refreshContextHelp();
 		return OK;
 	}
 
