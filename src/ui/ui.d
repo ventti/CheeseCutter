@@ -300,9 +300,15 @@ final class UI {
 			}
 		}
 
-		// Draw the oscilloscope overlay last, so it sits on top of everything
-		// repainted this tick. Redrawn every frame -> it animates live.
+		// Draw the oscilloscope overlay after the content passes, so it sits on
+		// top of the tables it floats over. Redrawn every frame -> it animates live.
 		drawScope();
+		// The menu bar, its dropdown and the command palette are the topmost
+		// layer — above both the ADSR row tint and the scope, either of which
+		// paints over the cells they occupy. Re-assert them last so the z-order
+		// holds: the tint covers the whole track column, and the scope window is
+		// centred right where a dropdown hangs down.
+		drawMenu();
 		updateOverlayMasks();
 	}
 
@@ -313,11 +319,14 @@ final class UI {
 		// framebuffer before the next timer tick.  Repaint the same adjacent register
 		// rectangle here so help-suppression transitions never make it blink blank.
 		drawRegisterStatus();
+		// Scope first, menu after: the scope window is centred on screen and its
+		// frame/title cells would otherwise erase an open dropdown that hangs
+		// down into it. Same z-order as the timer path above.
+		drawScope();
 		drawMenu();
 		if(dialog) {
 			dialog.update();
 		}
-		drawScope();
 		updateOverlayMasks();
 	}
 

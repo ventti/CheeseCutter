@@ -608,6 +608,10 @@ final package class Toplevel : WindowSwitcher, Undoable {
 		int n = savedActiveWindowNum;
 		if(n < 0 || n >= cast(int)windows.length) n = 0;
 		// Restore the caller's prior keyjam state and the classic screen.
+		// enableKeyjamMode refuses user toggles during playback, but leaving this
+		// view must restore routing and tint even while a song/note is playing.
+		state.keyjamStatus = prevKeyjamStatus;
+		com.fb.keyjamBackground = prevKeyjamStatus;
 		ui.enableKeyjamMode(prevKeyjamStatus);
 		activateWindow(n);
 	}

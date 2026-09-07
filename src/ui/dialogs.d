@@ -159,6 +159,7 @@ class HelpDialog : Window {
 
 	override void update() {
 		int ypos = area.y + 2;
+		int contentBottom = min(screen.height, area.y + area.height - 1);
 		drawFrame(area);
 		screen.cprint(area.x + 2, area.y, 1, 0, format(" %s %d/%d (press SPACE for more) ", title,
 											   page,numpages));
@@ -167,14 +168,12 @@ class HelpDialog : Window {
 					  std.array.replicate(" ", area.width-3));
 
 		foreach(line; pages[page-1]) {
-			if(ypos >= 36) break;   // clamp: never render past the content area (a too-long
-			                        // help page would otherwise overflow the screen and assert
-			                        // in Screen.cprint). Pages should be sized to fit; this guards.
+			if(ypos >= contentBottom) break; // relative to this dialog, not the screen origin
 			screen.cprint(area.x+1, ypos, 1, 0, std.array.replicate(" ", area.width-3));
 			screen.fprint(txt_x, ypos, "`0f" ~ line);
 			ypos++;
 		}
-		for(; ypos < 36; ypos++) {
+		for(; ypos < contentBottom; ypos++) {
 			screen.cprint(area.x+1, ypos, 1, 0, std.array.replicate(" ", area.width-2));
 		}
 		

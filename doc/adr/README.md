@@ -36,3 +36,6 @@ where things live, the ADRs say why they're shaped that way.
 | [0006](0006-instrument-color-tags.md) | Instrument color tags live in the description text |
 | [0007](0007-about-splash-scroller.md) | About-splash scroller renders directly over the SDL renderer |
 | [0008](0008-oscilloscope-overlay-non-modal.md) | Oscilloscope overlay is a non-modal, text-cell window over the combined mix |
+| [0009](0009-one-shared-mapping-per-editable-graph-axis.md) | An editable graph axis has exactly one shared value↔pixel mapping |
+| [0010](0010-menu-overlays-are-the-topmost-layer.md) | Menu bar, dropdown and command palette are the topmost layer |
+| [0011](0011-replace-foreground-masks-on-every-ui-pass.md) | Replace foreground masks on every UI pass without erasing graphs |

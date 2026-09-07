@@ -183,6 +183,8 @@ private void usage(File f) {
 "  envpreview:<n>   dump the Sound Editor's silent reSID envelope preview\n" ~
 "  filtershape[:mode,cutoff] dump filter response regions or active one-axis handles\n" ~
 "  soundstate       dump semantic Sound Editor viewport/recording/cursor state\n" ~
+"  sessionstate     dump keyjam routing, held-note state and ADSR handle visibility\n" ~
+"  bugfixture:<state> seed zero/tail pulse, shared-zero wave, or slow ADSR cases\n" ~
 "  waveaddstate     dump the trailing in-band Wave-row creation target\n" ~
 "  waveloopstate    dump Wave END/LOOP triangle geometry\n" ~
 "  sweeploopstate:P|F dump Pulse/Filter END/LOOP triangle geometry\n" ~
@@ -609,6 +611,35 @@ private bool processCommand(string arg) {
 				s.cursorDirection, audio.audio.captureLen, audio.audio.captureInstr,
 				audio.player.keyjamNoteTrigger, s.previewInstrument, s.previewNote,
 				mainui.toplevel.soundEditor.debugOwnershipMode());
+			break;
+		}
+		case "sessionstate": {
+			auto editor = mainui.toplevel.soundEditor;
+			stderr.writefln("session: keyjam=%s background=%s playing=%s held=%s handles=%s",
+				state.keyjamStatus, keyjamBackground, audio.player.isPlaying(),
+				editor.debugNoteHeld(), editor.debugAdsrHandlesVisible());
+			break;
+		}
+		case "bugfixture": {
+			int ins = state.activeInstrument;
+			if(val == "zero-pulse") {
+				song.instrumentTable[ins + 5 * 48] = 0;
+				song.pulseTable[0 .. 4] = 0;
+				song.pulseTable[4 .. 8] = [0x88, 0, 0x80, 0x01];
+			} else if(val == "tail-pulse") {
+				song.instrumentTable[ins + 5 * 48] = 0x3f;
+				song.pulseTable[0x3f * 4 .. 0x40 * 4] = 0;
+			} else if(val == "shared-zero-wave") {
+				song.instrumentTable[ins + 7 * 48] = 0;
+				song.instrumentTable[(ins + 1) % 48 + 7 * 48] = 0;
+				song.waveTable[0 .. 2] = [0xb0, 0x7f];
+				song.waveTable[256 .. 258] = [0x41, 0];
+			} else if(val == "slow-adsr") {
+				song.instrumentTable[ins] = 0xff;
+				song.instrumentTable[ins + 48] = 0x8f;
+			} else throw new Exception("unknown bugfixture state");
+			mainui.update();
+			stderr.writefln("bug fixture: %s", val);
 			break;
 		}
 		case "waveaddstate": {

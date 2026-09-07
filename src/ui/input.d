@@ -991,6 +991,9 @@ class InputKeyjam : ExtendedInput {
 	// True while at least one note key is held down (a keyjam note is sounding). Used by
 	// the Sound Editor to decide whether an envelope edit should re-trigger the note.
 	bool noteHeld() { return heldKeys.length > 0; }
+	// A view can lose key-up events while another input owns the keyboard.
+	// Reset physical state at the next session boundary without triggering audio.
+	final void clearHeldKeys() { heldKeys.length = 0; }
 	bool hasPreviewNote() { return previewAvailable; }
 	bool hasPlayedPreviewNote() { return previewWasPlayed; }
 	bool previewMatchesInstrument(int ins) {

@@ -109,8 +109,8 @@ private enum float NOMINAL_GATE_MS = 918.0f;
 private enum int MIN_VIS = 24;
 private enum int MAX_VIS = 1600;
 // §17.3 The viewport can zoom/scroll out PAST the fitted note (visFrames) so the
-// release-tail dot is reachable even for a long release. MAX_CONTENT bounds that
-// extended right edge (enough to hold a full nibble-F release at 2x multispeed).
+// release-tail dot is reachable even for a long release. MAX_CONTENT caps offline
+// preview work; the viewport may extend farther to reach handles at high multispeed.
 private enum int MAX_CONTENT = 3200;
 // §12.1: envelope-amplitude threshold for "the note is still audible" when reading
 // the recorded extent (below this counts as silence / note ended).
@@ -628,6 +628,15 @@ class SoundEditor : Window, Undoable {
 			durationRows, durationValue, configuredGateTicks(), keyjamChannel + 1);
 	}
 
+	final bool debugNoteHeld() { return inputKeyjam.noteHeld(); }
+	final bool[4] debugAdsrHandlesVisible() {
+		Geo g = layout();
+		int[4] hx, hy;
+		bool[4] visible;
+		adsrHandlePositions(clampedIns(), g, hx, hy, visible);
+		return visible;
+	}
+
 	// Read-only probe of the pitch mapping for the selected wave row (see the struct).
 	SoundEditorPitchProbe pitchProbe() {
 		Geo g = layout();
@@ -671,7 +680,8 @@ class SoundEditor : Window, Undoable {
 		switch(actionId) {
 			case "se_zoom_out": case "se_zoom_in": case "se_fit": return true;
 			case "se_selection": return hasSelection;
-			case "se_add": return (sweepSelected && !sweepTableFull(selectedSweepTable))
+			case "se_add": return (sweepSelected && selectedSweepRow < 0x3f
+				&& !sweepTableFull(selectedSweepTable))
 				|| waveSelected;
 			case "se_delete": return sweepSelected || waveSelected;
 			case "se_stop": return sweepSelected;
@@ -1085,6 +1095,7 @@ class SoundEditor : Window, Undoable {
 	// A newly opened Sound Editor always starts on the leftmost SID voice. The
 	// choice remains editable for the duration of that editor session.
 	void beginSession() {
+		inputKeyjam.clearHeldKeys();
 		keyjamChannel = 0;
 		selectedWaveRow = -1;
 		linkedEditKind = linkedEditStart = -1;
@@ -1388,12 +1399,15 @@ class SoundEditor : Window, Undoable {
 	private int computeContentMax(int ins) {
 		ubyte ad = song.instrumentTable[ins + 0 * 48];
 		int attack = (ad >> 4) & 0x0f, decay = ad & 0x0f;
-		int aF = cast(int)lround(ATTACK_TIME_MS[attack]       / tickMs);
-		int dF = cast(int)lround(DECAY_RELEASE_TIME_MS[decay]  / tickMs);
-		int rFmax = cast(int)lround(DECAY_RELEASE_TIME_MS[15]  / tickMs);
-		int cm = nominalGateFrames + rFmax;
+		// Round outward: rounding down can hide even the release dot at the limit.
+		int adEnd = cast(int)ceil((ATTACK_TIME_MS[attack]
+			+ DECAY_RELEASE_TIME_MS[decay]) / tickMs);
+		int releaseEnd = cast(int)ceil(nominalGateFrames
+			+ DECAY_RELEASE_TIME_MS[15] / tickMs);
+		int cm = max(adEnd, releaseEnd);
 		if(cm < visFrames) cm = visFrames;   // never narrower than the fitted note
-		if(cm > MAX_CONTENT) cm = MAX_CONTENT;
+		// Keep every handle reachable, including high-multispeed AD=$FF. Rendering
+		// still caps sample counts independently; zooming out does not allocate cm samples.
 		return cm;
 	}
 
@@ -2246,7 +2260,7 @@ class SoundEditor : Window, Undoable {
 	// $7e end marker or a previously visited row is reached.
 	private bool[256] waveProgramRows(int startRow) {
 		bool[256] rows;
-		if(startRow <= 0 || startRow > 0xff) return rows;
+		if(startRow < 0 || startRow > 0xff) return rows;
 		int row = startRow & 0xff;
 		while(!rows[row]) {
 			rows[row] = true;
@@ -3714,7 +3728,7 @@ class SoundEditor : Window, Undoable {
 	private void sweepRowOp(int table, bool insert) {
 		int ins = clampedIns();
 		if(selectedSweepRow < 0 || selectedSweepRow >= 0x40) return;
-		if(insert && sweepTableFull(table)) {
+		if(insert && (selectedSweepRow >= 0x3f || sweepTableFull(table))) {
 			UI.statusline.display(format("%s table full - cannot insert step.",
 				sweepKind(table).name));
 			return;
@@ -5499,7 +5513,7 @@ class SoundEditor : Window, Undoable {
 	private SweepSim simPulse(int startRow) {
 		SweepSim s;
 		int MAXF = visFrames;   // §12.2 sims produce/replicate up to the dynamic window
-		if(startRow < 0 || startRow >= 0x40) return s;
+		if(startRow <= 0 || startRow >= 0x40) return s;
 		int pw = 0x800;
 		int row = startRow;
 		bool[0x40] visited;

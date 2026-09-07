@@ -24,7 +24,7 @@ screen22:   ADSR: drag square handles    LP
 screen23:   -- Probe (hover) --          BP                                                                                                                              
 screen24:   frame 69  ~688.3 ms          HP                                                                                                                              
 screen25:   Note  abs 79                 Rtn/a                                                                                                                           
-screen26:   Pulse $800                  Noise                                                                                                                            
+screen26:   Pulse n/a                   Noise                                                                                                                            
 screen27:   Filter n/a                  Pulse                                                                                                                            
 screen28:                               Saw                                                                                                                              
 screen29:   Ctrl $81                    Tri                                                                                                                              

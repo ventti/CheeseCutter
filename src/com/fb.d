@@ -475,7 +475,10 @@ class VideoStandard : Video {
 				SDL_RenderDrawLine(renderer, op.a, op.b, op.a, op.c);
 				break;
 			case OlKind.hline:
-				SDL_RenderDrawLine(renderer, op.a, op.c, op.b, op.c);
+				// Single-pixel triangle tips are points: some SDL renderers drop
+				// a line whose two endpoints coincide.
+				if(op.a == op.b) SDL_RenderDrawPoint(renderer, op.a, op.c);
+				else SDL_RenderDrawLine(renderer, op.a, op.c, op.b, op.c);
 				break;
 			case OlKind.rect:
 				SDL_Rect ro = { op.a, op.b, op.c, op.d };

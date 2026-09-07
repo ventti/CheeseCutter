@@ -207,6 +207,14 @@ category = "decision"
 path = "doc/adr/0009-one-shared-mapping-per-editable-graph-axis.md"
 category = "decision"
 
+[[doc]]
+path = "doc/adr/0010-menu-overlays-are-the-topmost-layer.md"
+category = "decision"
+
+[[doc]]
+path = "doc/adr/0011-replace-foreground-masks-on-every-ui-pass.md"
+category = "decision"
+
 # ---- agent: instructions consumed by AI coding agents ----
 
 [[doc]]

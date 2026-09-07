@@ -566,6 +566,21 @@ Z X C V B N M
 <kbd>1</kbd> enters gate off, <kbd>A</kbd> or <kbd>!</kbd> enters gate on,
 <kbd>,</kbd> toggles tie, and <kbd>;</kbd> toggles automatic instrument entry.
 
+## Visual Sound Editor
+
+<kbd>Ctrl</kbd>-<kbd>E</kbd> opens or closes the visual Sound Editor. Closing it
+restores the previous keyjam mode even during playback. Reopening starts with no
+held note keys, so a key released in another view cannot trigger phantom notes.
+
+Use <kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>O</kbd> to zoom out to the ADSR handles,
+including long attack, decay and release settings at higher multispeeds.
+<kbd>F12</kbd> opens context help; <kbd>Space</kbd> changes pages. The complete
+help page fits its dialog at every supported window height.
+
+Pulse pointer `00` has no program preview. Wave row `00` is a valid program start
+and uses the same automatic copying for shared edits as other wave rows. Adding
+a pulse/filter step past the final table row (`3F`) is disabled.
+
 ## Player Tables
 
 ![Instrument table](pics/ins.png)
@@ -721,6 +736,10 @@ Notes and quirks:
   (emulated or real) C64, but the local reSID engine is kept running silently, so
   the scope still shows an approximation of the output.
 - It is a single combined trace — there are no per-voice scopes.
+- The scope floats over the editor, but the **menu bar, its dropdown and the
+  command palette draw above it**: open a menu over the scope and the menu stays
+  readable while the trace keeps running underneath. A dialog (Load, Save,
+  Export, …) hides the scope entirely instead.
 
 With context help on (<kbd>Alt</kbd>-<kbd>H</kbd>), the chord table's statusline
 shows the chord under the cursor (number, transpose offsets and derived name).
