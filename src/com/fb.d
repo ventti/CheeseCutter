@@ -252,6 +252,9 @@ abstract class Video {
 	// preceding overlay ops. Used by menus/dialogs so graphs remain visible around
 	// them without bleeding through their foreground chrome.
 	void olMaskRect(int x, int y, int w, int h) {}
+	// Foreground chrome refreshes independently of the Sound Editor graphs.
+	// Replace its masks each UI pass without discarding retained graph ops.
+	void olClearMasks() {}
 }
 
 class VideoStandard : Video {
@@ -411,6 +414,23 @@ class VideoStandard : Video {
 	}
 	override void olMaskRect(int x, int y, int w, int h) {
 		olOps ~= OlOp(OlKind.maskrect, x, y, w, h, 0); overlayActive = true;
+	}
+	override void olClearMasks() {
+		size_t kept;
+		foreach(op; olOps) {
+			if(op.kind != OlKind.maskrect) olOps[kept++] = op;
+		}
+		if(kept != olOps.length) isDirty = true;
+		olOps.length = kept;
+		overlayActive = kept != 0;
+	}
+
+	// Read-only diagnostics for the headless driver's overlay lifetime checks.
+	final size_t overlayOperationCount() const { return olOps.length; }
+	final size_t overlayMaskCount() const {
+		size_t count;
+		foreach(op; olOps) if(op.kind == OlKind.maskrect) count++;
+		return count;
 	}
 
 	// Render one text cell exactly as renderGrid does. Kept as a helper so a mask op

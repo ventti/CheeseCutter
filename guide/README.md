@@ -98,6 +98,9 @@ The menus are generated from the same shortcut registry that drives the
 <kbd>F12</kbd> help and `doc/KEYBOARD.md`, so a command, its label and its shortcut
 are defined in exactly one place and can never disagree between them.
 
+Menus and their tooltips can stay open without progressively slowing the editor.
+The Sound Editor's graphs remain visible around them and are uncovered on close.
+
 ## Command Palette
 
 Press <kbd>Ctrl</kbd>-<kbd>P</kbd> (or <kbd>Esc</kbd> then just start typing) to

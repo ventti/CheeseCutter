@@ -164,6 +164,8 @@ private void usage(File f) {
 "  frames:<n>       render n UI frames\n" ~
 "  tick:[n]         drive the 50Hz timerEvent n times (default 2) for\n" ~
 "                   timerEvent-only rendering (e.g. SID regs while playing)\n" ~
+"  idle:[n]         drive n UI timer passes without audio ticks (default 1)\n" ~
+"  overlaystats     print retained drawing-command and foreground-mask counts\n" ~
 "  shot:<file.png>  write a screenshot (PNG) of the current screen\n" ~
 "  sleep:<ms>       sleep this many milliseconds\n" ~
 "  state            print editor state to stderr (title/seqs/playing/SID regs)\n" ~
@@ -452,6 +454,15 @@ private bool processCommand(string arg) {
 			mainui.update(); video.updateFrame();
 			video.saveScreenshot(val);
 			stderr.writefln("shot %s", val);
+			break;
+		case "idle":
+			foreach(i; 0 .. (val.length ? to!int(val) : 1)) mainui.timerEvent(0);
+			video.updateFrame();
+			break;
+		case "overlaystats":
+			auto standardVideo = cast(VideoStandard)video;
+			stderr.writefln("overlay: ops=%d masks=%d",
+				standardVideo.overlayOperationCount(), standardVideo.overlayMaskCount());
 			break;
 		case "vice":
 			audio.vice.configure(val, 0, false);

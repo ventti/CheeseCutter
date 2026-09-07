@@ -303,6 +303,7 @@ final class UI {
 		// Draw the oscilloscope overlay last, so it sits on top of everything
 		// repainted this tick. Redrawn every frame -> it animates live.
 		drawScope();
+		updateOverlayMasks();
 	}
 
 	void update() {
@@ -315,9 +316,9 @@ final class UI {
 		drawMenu();
 		if(dialog) {
 			dialog.update();
-			maskDialogOverlay();
 		}
 		drawScope();
+		updateOverlayMasks();
 	}
 
 	private void drawRegisterStatus() {
@@ -374,11 +375,19 @@ final class UI {
 		if(menubar is null) return;
 		menubar.drawBar();
 		menubar.drawDropdown();
-		menubar.maskOverlay();
 		if(palette !is null) {
 			palette.draw();
-			palette.maskOverlay();
 		}
+	}
+
+	private void updateOverlayMasks() {
+		// Only retain masks for the current foreground windows. The idle timer
+		// does not redraw the Sound Editor, so clearing the whole overlay here
+		// would lose its graphs; appending masks would grow the list forever.
+		video.olClearMasks();
+		if(menubar !is null) menubar.maskOverlay();
+		if(palette !is null) palette.maskOverlay();
+		maskDialogOverlay();
 	}
 
 	package void F1orF2(Keyinfo key, bool fromStart) {
