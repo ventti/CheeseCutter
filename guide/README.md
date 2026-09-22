@@ -386,10 +386,10 @@ that session. The file lives in the per-OS config directory:
 ## Colors (palette)
 
 Colors are configurable through a JSON palette. The editor renders from a
-32-entry color table (16 base C64 colors, plus a fixed brightness gradient used
-for the ADSR/playback fade); the palette file lets you redefine the base colors
-and re-map the UI's semantic **roles** onto them. With no palette file the
-built-in defaults reproduce the classic C64 colors exactly.
+color table containing the 16 base C64 colors, a playback brightness gradient,
+and a custom muted navy selection fill (`#17243B`). Selection keeps data hues
+and brightens dim grey labels for readability. Palette files can redefine base
+colors and assign semantic **roles** to named colors or independent hex RGB values.
 
 The file is loaded at startup, in this order:
 
@@ -407,7 +407,7 @@ The schema has two tiers (both optional; anything omitted keeps its default):
 ```json
 {
   "colors": { "green": "#55ac4d", "blue": "#2d2b9a" },
-  "roles":  { "frame": "green", "playbackBar": "blue" }
+  "roles":  { "frame": "green", "playbackBar": "blue", "selectionBar": "#17243b" }
 }
 ```
 
@@ -415,8 +415,8 @@ The schema has two tiers (both optional; anything omitted keeps its default):
   value. Names: `black`, `white`, `red`, `cyan`, `purple`, `green`, `blue`,
   `yellow`, `orange`, `brown`, `lightred`, `darkgray`, `gray`, `lightgreen`,
   `lightblue`, `lightgray`.
-- **`roles`** points a semantic UI role at one of those base color names, so you
-  choose colors by *purpose* rather than by hue:
+- **`roles`** assigns a semantic UI role either a base color name or an
+  independent `#rrggbb` value, so colors can be chosen by *purpose*:
 
   | Role | Used for |
   | --- | --- |

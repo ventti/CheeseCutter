@@ -152,7 +152,7 @@ private class HexTable : Table, Undoable {
 			int width = selectionKind() == ClipKind.instrument ? 27
 				: selectionKind() == ClipKind.command ? 10 : 2 + columns * 3;
 			foreach(x; area.x .. area.x + width)
-				screen.setbg(x, area.y + 1 + i, idx(Role.selectionBar));
+				screen.highlightSelection(x, area.y + 1 + i);
 		}
 	}
 

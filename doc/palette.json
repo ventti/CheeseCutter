@@ -24,7 +24,7 @@
     "frame":            "green",
     "playbackBar":      "blue",
     "wrapBar":          "purple",
-    "selectionBar":     "green",
+    "selectionBar":     "#17243b",
     "activeInstrument": "cyan",
     "filterStatic":     "lightgray",
     "filterCalc":       "gray",

@@ -5,6 +5,7 @@ Text-mode framebuffer — Video/Screen abstraction, character-cell rendering and
 */
 
 module com.fb;
+import com.palette : BaseColor;
 import derelict.sdl2.sdl;
 import std.algorithm : max, min;
 import std.string : indexOf;
@@ -870,6 +871,14 @@ class Screen {
 
 	int getbg(int x, int y) {
 		return (getChar(x, y) >> 16) & 0xff;  // Extract 8 bits from position 16
+	}
+
+	void highlightSelection(int x, int y) {
+		int fg = (getChar(x, y) >> 8) & 0xff;
+		// Lift dim labels on the selection fill while preserving data hues.
+		if(fg == BaseColor.darkgray || fg == BaseColor.gray)
+			fg = BaseColor.lightgray;
+		setColor(x, y, fg, idx(Role.selectionBar));
 	}
 
 	void setbg(int x, int y, int bg) {

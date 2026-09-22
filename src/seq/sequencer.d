@@ -1044,7 +1044,7 @@ abstract class VoiceTable : Window {
 				if(absRow == int.min || !sel.contains(i, absRow)) continue;
 				int y = 1 + area.y + rowIdx;
 				for(int x = v.area.x; x < v.area.x + v.area.width; x++)
-					screen.setbg(x, y, selectionBarColor);
+					screen.highlightSelection(x, y);
 			}
 		}
 	}

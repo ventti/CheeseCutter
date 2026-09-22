@@ -3,19 +3,18 @@ CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
 
 Semantic, JSON-configurable color palette — base C64 colors plus UI roles.
 
-The renderer stores fg/bg as small integer indices into a 32-entry RGB table
+The renderer stores fg/bg as small integer indices into an RGB table
 (`PALETTE`): 0..15 are the base C64 colors, 16..31 a fixed brightness gradient
-(mid-blue -> black) used for the ADSR/playback fade. Historically both the RGB
+(mid-blue -> black) used for the ADSR/playback fade, and 32 is the selection fill. Historically both the RGB
 values and the "which index means what" choices were hardcoded all over the UI.
 
 This module makes the palette data-driven without changing that index model:
 
   * `PALETTE` (moved here from com.fb) holds the runtime RGB values. It defaults
-    to the classic C64 colors, so with no config file the editor looks exactly
-    as before.
+    to the classic C64 text colors with a muted navy selection fill.
   * A two-tier JSON config redefines them. Tier 1 `colors` remaps the 16 named
     base colors to arbitrary hex; tier 2 `roles` points each semantic UI role
-    (background, cursor, frame, playbackBar, ...) at a base color. Code refers to
+    (background, cursor, frame, playbackBar, ...) at a base color or a custom hex RGB value. Code refers to
     roles via `idx(Role.x)` instead of magic numbers.
 
 Loading: `initPalette(explicitFile)` resolves the file (an explicit --palette
@@ -30,7 +29,7 @@ import derelict.sdl2.sdl : SDL_Color;
 import std.stdio : stderr;
 
 enum int NUM_BASE = 16;    // C64 base colors, indices 0..15
-enum int NUM_TOTAL = 32;   // + brightness gradient, indices 16..31
+enum int NUM_TOTAL = 33;   // + gradient 16..31 and custom selection fill 32
 
 // The 16 base C64 colors, named neutrally by hue rather than by any UI purpose.
 // The integer value is the palette index the name resolves to by default.
@@ -82,8 +81,7 @@ enum Role : int {
 // JSON key <-> Role. Same rationale as baseColorByName.
 private immutable Role[string] roleByName;
 
-// Default role -> base color index. This reproduces the historical hardcoded
-// choices exactly, so the built-in palette renders identically to before.
+// Default role -> palette index. Selection has its own RGB slot.
 private immutable int[Role.max + 1] defaultRoleBase = [
 	Role.background:       BaseColor.black,
 	Role.text:             BaseColor.lightgray,
@@ -91,7 +89,7 @@ private immutable int[Role.max + 1] defaultRoleBase = [
 	Role.frame:            BaseColor.green,
 	Role.playbackBar:      BaseColor.blue,
 	Role.wrapBar:          BaseColor.purple,
-	Role.selectionBar:     BaseColor.green,
+	Role.selectionBar:     32, // muted navy, independent of green data text
 	Role.activeInstrument: BaseColor.cyan,
 	Role.filterStatic:     BaseColor.lightgray,
 	Role.filterCalc:       BaseColor.gray,
@@ -140,6 +138,7 @@ private immutable ubyte[3][NUM_TOTAL] defaultRgb = [
 	[0x10, 0x10, 0x30], [0x0E, 0x0E, 0x2A], [0x0C, 0x0C, 0x24], [0x0A, 0x0A, 0x1E],
 	[0x08, 0x08, 0x18], [0x06, 0x06, 0x12], [0x04, 0x04, 0x0C], [0x03, 0x03, 0x09],
 	[0x02, 0x02, 0x06], [0x01, 0x01, 0x04], [0x01, 0x01, 0x03], [0x00, 0x00, 0x00],
+	[0x17, 0x24, 0x3b], // 32 selection: green text contrast 5.47:1
 ];
 
 // Runtime RGB table the renderer reads. Populated by resetToDefaults() at
@@ -271,12 +270,22 @@ void initPalette(string explicitFile = null) {
 			}
 		}
 
-		// Tier 2: point roles at a base color name.
+		// Tier 2: use a base color name or an independent #rrggbb value.
 		if(auto roles = "roles" in root.object) {
 			foreach(string name, JSONValue v; roles.object) {
 				auto role = name in roleByName;
 				if(role is null) {
 					stderr.writefln("palette: unknown role '%s' ignored", name);
+					continue;
+				}
+				if(v.str.length && v.str[0] == '#') {
+					try {
+						auto color = parseHexColor(v.str);
+						roleToIndex[cast(int)*role] = cast(int)PALETTE.length;
+						PALETTE ~= color;
+					} catch(Exception e) {
+						stderr.writefln("palette: bad RGB for role '%s': %s", name, e.msg);
+					}
 					continue;
 				}
 				auto bc = v.str in baseColorByName;

@@ -112,7 +112,8 @@ class TableSelectionTests(unittest.TestCase):
                 session.run(f'press:{x+3},{y+2}')
                 session.run(f'move:{x+3},{y+4}')
                 selected = cells(session, x, y+3, width)
-                self.assertEqual([cell[:2] for cell in selected], [cell[:2] for cell in before])
+                self.assertEqual([cell[:2] for cell in selected],
+                                 [(ch, 15 if fg in (11, 12) else fg) for ch, fg, _ in before])
                 self.assertTrue(all(cell[2] != original[2] for cell, original in zip(selected, before)))
                 session.run(f'move:{x+3},{y+2}')  # shrink back past the sampled row
                 self.assertEqual(cells(session, x, y+3, width), before)
