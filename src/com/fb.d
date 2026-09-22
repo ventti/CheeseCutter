@@ -874,7 +874,7 @@ class Screen {
 
 	void setbg(int x, int y, int bg) {
 		Uint32* s = &data[x + y * width];
-		*s &= 0xff00ff;  // Clear bg bits (16-23)
+		*s &= 0xff00ffff;  // Clear bg bits (16-23), preserve glyph and foreground
 		*s |= (bg << 16);
 		isDirty = true;
 	}
@@ -940,11 +940,11 @@ class Screen {
 				continue;
 			}
 		if(bg >= 0) {
-			outb[0] &= 0xff00ff;  // Clear bg bits (16-23)
+			outb[0] &= 0xff00ffff;  // Clear bg bits (16-23)
 			outb[0] |= bg << 16;
 		}
 		if(fg >= 0) {
-			outb[0] &= 0xff00ff;  // Clear fg bits (8-15)
+			outb[0] &= 0xffff00ff;  // Clear fg bits (8-15)
 			outb[0] |= fg << 8;
 		}
 		outb[0] &= 0xffffff00;  // Clear character bits

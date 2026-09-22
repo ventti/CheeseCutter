@@ -95,3 +95,28 @@ class TableSelectionTests(unittest.TestCase):
             expected = original.copy()
             expected[-1] = original[0]
             self.assertEqual(table(s, 'wave')[1], expected)
+
+    def test_selection_preserves_text_colours_and_clears_on_shrink_and_click(self):
+        def cells(session, x, y, width):
+            result = []
+            for offset in range(width):
+                output = session.run(f'cellstate:{x+offset},{y}')
+                result.append(tuple(map(int, re.search(r'ch=(\d+) fg=(\d+) bg=(\d+)', output).groups())))
+            return result
+
+        for kind in KINDS:
+            with self.subTest(kind=kind), CCDriverSession('key:ESC') as session:
+                (x, y, _, cols), _ = table(session, kind)
+                width = 27 if kind == 'instrument' else 10 if kind == 'command' else 2 + cols * 3
+                before = cells(session, x, y+3, width)
+                session.run(f'press:{x+3},{y+2}')
+                session.run(f'move:{x+3},{y+4}')
+                selected = cells(session, x, y+3, width)
+                self.assertEqual([cell[:2] for cell in selected], [cell[:2] for cell in before])
+                self.assertTrue(all(cell[2] != original[2] for cell, original in zip(selected, before)))
+                session.run(f'move:{x+3},{y+2}')  # shrink back past the sampled row
+                self.assertEqual(cells(session, x, y+3, width), before)
+                session.run(f'move:{x+3},{y+4}')
+                session.run(f'release:{x+3},{y+4}')
+                session.run(f'click:{x+3},{y+8}')
+                self.assertEqual(cells(session, x, y+3, width), before)
