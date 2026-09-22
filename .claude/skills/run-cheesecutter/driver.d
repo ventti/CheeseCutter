@@ -176,6 +176,7 @@ private void usage(File f) {
 "  seqdump:<n>      dump sequence n's rows as hex (read-only edit oracle)\n" ~
 "  tracks           dump each voice's tracklist entries (trans,number)\n" ~
 "  voices           per-voice visualizer: instrument, brightness, recording len\n" ~
+"  tablebytes:<kind> dump instrument/wave/pulse/filter/command/chord rows and geometry\n" ~
 "  wavedump:<row>   dump 24 wave-table rows (w1/w2) from row (Sound Editor oracle)\n" ~
 "  wavepreview:<n>  independently evaluate the active instrument's wave rows for n\n" ~
 "                   player ticks, including wave-speed, delay and loop semantics\n" ~
@@ -243,6 +244,29 @@ private bool processCommand(string arg) {
 			song.save(val);
 			stderr.writefln("saved %s", val);
 			break;
+		case "tablebytes": {
+			// Read-only table geometry and row-major bytes for selection regressions.
+			ubyte[] bytes;
+			Window win;
+			int rows, cols;
+			bool interleaved;
+			switch(val) {
+			case "instrument": bytes = song.instrumentTable; win = mainui.toplevel.instable; rows = 48; cols = 8; break;
+			case "wave": bytes = song.waveTable; win = mainui.toplevel.wavetable; rows = 256; cols = 2; break;
+			case "pulse": bytes = song.pulseTable; win = mainui.toplevel.pulsetable; rows = 64; cols = 4; interleaved = true; break;
+			case "filter": bytes = song.filterTable; win = mainui.toplevel.filtertable; rows = 64; cols = 4; interleaved = true; break;
+			case "command": bytes = song.superTable; win = mainui.toplevel.cmdtable; rows = 64; cols = 3; break;
+			case "chord": bytes = song.chordTable; win = mainui.toplevel.chordtable; rows = 128; cols = 1; break;
+			default: throw new Exception("unknown table kind");
+			}
+			stderr.writefln("table %s x=%d y=%d rows=%d cols=%d", val, win.area.x, win.area.y, rows, cols);
+			foreach(r; 0 .. rows) {
+				stderr.writef("row %d:", r);
+				foreach(col; 0 .. cols) stderr.writef(" %02x", bytes[interleaved ? r * cols + col : col * rows + r]);
+				stderr.writeln();
+			}
+			break;
+		}
 		case "dumptables":
 			// dumptables — print chord table + command table + speed (import test).
 			stderr.writef("chord: ");

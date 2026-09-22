@@ -25,6 +25,7 @@ import audio.visualizer;
 import audio.player;
 import seq.sequencer : playbackBarColor, wrapBarColor;
 import com.shortcuts : Ctx;
+import com.selection : Selection, ClipKind, rowClip;
 import std.algorithm : sort;
 
 abstract class Table : Window {
@@ -92,6 +93,88 @@ private string sweepPointerDescription(int value, string tableName) {
 }
 
 private class HexTable : Table, Undoable {
+	private Selection selection;
+	private bool draggingSelection, selectionMoved, hasSelectionAnchor;
+	private int pressX, pressY;
+
+	protected ClipKind selectionKind() { return ClipKind.none; }
+	protected int rowBytes() { return columns; }
+	protected int byteOffset(int r, int c) { return c * rows + r; }
+
+	private void copyRows() {
+		rowClip.reset(selectionKind(), 1, selection.rows, rowBytes());
+		foreach(r; 0 .. selection.rows)
+			foreach(c; 0 .. rowBytes())
+				rowClip.cell(0, r)[c] = data[byteOffset(selection.loRow + r, c)];
+		UI.statusline.display(format("Copied %d table row(s).", selection.rows));
+	}
+
+	protected bool handleTableSelection(Keyinfo key) {
+		if(!(key.mods & KMOD_CTRL) || (key.mods & (KMOD_ALT | KMOD_GUI | KMOD_SHIFT)))
+			return false;
+		if(key.raw == SDLK_c || key.raw == SDLK_x) {
+			if(!selection.active) return false;
+			copyRows();
+			if(key.raw == SDLK_x) {
+				saveState(false);
+				foreach(r; selection.loRow .. selection.hiRow + 1)
+					foreach(c; 0 .. rowBytes()) data[byteOffset(r, c)] = 0;
+				initializeInput();
+				UI.statusline.display("Cut table rows (blanked; row positions unchanged).");
+			}
+			return true;
+		}
+		if(key.raw == SDLK_v) {
+			if(rowClip.empty) return false;
+			if(rowClip.kind != selectionKind()) {
+				UI.statusline.display("Clipboard belongs to a different table type.");
+				return true;
+			}
+			int first = selection.active ? selection.loRow : row;
+			int count = clamp(rowClip.rows, 0, selection.active ? selection.rows : rows - first);
+			saveState(false);
+			foreach(r; 0 .. count)
+				foreach(c; 0 .. rowBytes())
+					data[byteOffset(first + r, c)] = rowClip.cell(0, r)[c];
+			initializeInput();
+			UI.statusline.display(format("Pasted %d table row(s) (overwrite).", count));
+			return true;
+		}
+		return false;
+	}
+
+	protected void renderTableSelection() {
+		if(!selection.active) return;
+		foreach(i; 0 .. visibleRows) {
+			int r = (viewOffset + i) % rows;
+			if(!selection.contains(0, r)) continue;
+			// Instruments select their eight data bytes, not description text.
+			int width = selectionKind() == ClipKind.instrument ? 27
+				: selectionKind() == ClipKind.command ? 10 : 2 + columns * 3;
+			foreach(x; area.x .. area.x + width)
+				screen.setbg(x, area.y + 1 + i, idx(Role.selectionBar));
+		}
+	}
+
+	override void draggedTo(int x, int y) {
+		if(!draggingSelection) return;
+		if(x != pressX || y != pressY) selectionMoved = true;
+		int visible = clamp(y - area.y - 1, 0, visibleRows - 1);
+		int target = (viewOffset + visible) % rows;
+		// A drag stops at the table boundary instead of wrapping its selection.
+		if(viewOffset + visible >= rows) target = rows - 1;
+		selection.setEnd(0, target);
+	}
+
+	override void releasedAt(int x, int y) {
+		if(!draggingSelection) return;
+		draggedTo(x, y);
+		draggingSelection = false;
+		if(!selectionMoved) selection.clear();
+	}
+
+	override void deactivate() { draggingSelection = false; }
+
 	this(Rectangle a, ubyte[] tbl, int c, int r) {
 		super(a,tbl,c,r);
 		(cast(InputValue)input).setValueChangedCallback(&valueChangedCallback);
@@ -222,6 +305,7 @@ private class HexTable : Table, Undoable {
 	}
 
 	override int keypress(Keyinfo key) {
+		if(handleTableSelection(key)) return OK;
         /+
 		if(key.mods & KMOD_CTRL || key.mods & KMOD_ALT ||
 		   key.mods & KMOD_META) return OK;
@@ -293,6 +377,20 @@ private class HexTable : Table, Undoable {
 		if(c < 0) c = 0;
 		if(c >= columns) c = columns - 1;
 		setColumn(c);
+		if(button == 1 && clicks == 1) {
+			if((SDL_GetModState() & KMOD_SHIFT) && hasSelectionAnchor) {
+				selection.setEnd(0, row);
+				selection.active = true;
+				draggingSelection = false;
+			} else {
+				selection.setBegin(0, row);
+				selection.active = true;
+				hasSelectionAnchor = true;
+				draggingSelection = true;
+				selectionMoved = false;
+				pressX = x; pressY = y;
+			}
+		}
 	}
 
 
@@ -358,6 +456,8 @@ private:
 }
 
 class InsValueTable : HexTable {
+	override protected ClipKind selectionKind() { return ClipKind.instrument; }
+
 	private {
 		static ubyte[8] instrBuffer;
 		static char[32] instrName = 0x20;
@@ -379,10 +479,12 @@ class InsValueTable : HexTable {
 	}
 
 	override int keypress(Keyinfo key) {
+		if(handleTableSelection(key)) return OK;
 		if(key.mods & KMOD_ALT) return OK;
 		if(key.mods & KMOD_CTRL) {
 			switch(key.raw)  {
 			case SDLK_c:
+				rowClip.kind = ClipKind.none;
 				foreach(i, ref buf; instrBuffer) {
 					buf = data[row + i * 48];
 				}
@@ -583,6 +685,7 @@ class InsValueTable : HexTable {
 								  isActiveInstrument ? activeInstrumentColor : 15, 0, label);
 			}
 		}
+		renderTableSelection();
 	}
 
 	override void initializeInput() {
@@ -741,10 +844,18 @@ private:
 
 public:
 
+	override void draggedTo(int x, int y) {
+		if(active == insinput) insinput.draggedTo(x, y);
+	}
+	override void releasedAt(int x, int y) {
+		if(active == insinput) insinput.releasedAt(x, y);
+	}
+
 	override void clickedAt(int x, int y, int button, int clicks = 1) {
 		if(active == insdesc) {
 			commitDescInput();
 		}
+		activateInsValueTable();
 		insinput.clickedAt(x,y,button,clicks);
 		if((x - area.x) > 3 + 8 * 3)
 			activateDescInput();
@@ -753,6 +864,10 @@ public:
 
 
 class CmdTable : HexTable {
+	override protected int rowBytes() { return 3; }
+
+	override protected ClipKind selectionKind() { return ClipKind.command; }
+
 	alias row position;
 
 	this(Rectangle a) {
@@ -779,9 +894,11 @@ class CmdTable : HexTable {
 			screen.fprint(area.x,area.y + i + 1,
 						  format("`0c%02X:`0d%01X-`05%s %s", ofs, cmd, v1, v2));
 		}
+		renderTableSelection();
 	}
 
 	override int keypress(Keyinfo key) {
+		if(handleTableSelection(key)) return OK;
 		if(key.mods & KMOD_ALT) return OK;
 		switch(key.raw) {
 		case SDLK_LEFT:
@@ -872,6 +989,8 @@ private:
 }
 
 class ChordTable : HexTable {
+	override protected ClipKind selectionKind() { return ClipKind.chord; }
+
 	this(Rectangle a) {
 		super(a, song.chordTable, 1, 128);
 	}
@@ -985,6 +1104,7 @@ class ChordTable : HexTable {
 				}
 			}
 		}
+		renderTableSelection();
 	}
 
 	override void initializeInput() {
@@ -1644,6 +1764,8 @@ private:
 }
 
 class WaveTable : HexTable {
+	override protected ClipKind selectionKind() { return ClipKind.wave; }
+
 	this(Rectangle a) {
 		super(a, song.waveTable, 2, 256);
 	}
@@ -1754,6 +1876,7 @@ class WaveTable : HexTable {
 													indexColor, row, col, val1, val2));
 
 		}
+		renderTableSelection();
 	}
 
 	override void initializeInput() {
@@ -1837,6 +1960,8 @@ private:
 }
 
 class SweepTable : HexTable {
+	override protected int byteOffset(int r, int c) { return r * 4 + c; }
+
 	this(Rectangle a, ubyte[] d) {
 		super(a, d, 4, 64);
 	}
@@ -1887,6 +2012,7 @@ class SweepTable : HexTable {
 							 indexColor, curRow, col2,
 							 val0, val1, val2, col, val3));
 		}
+		renderTableSelection();
 	}
 
 	override void initializeInput() {
@@ -1959,6 +2085,8 @@ class SweepTable : HexTable {
 }
 
 class PulseTable : SweepTable {
+	override protected ClipKind selectionKind() { return ClipKind.pulse; }
+
 	this(Rectangle a) {
 		super(a, song.pulseTable);
 	}
@@ -2042,6 +2170,8 @@ private:
 }
 
 class FilterTable : SweepTable {
+	override protected ClipKind selectionKind() { return ClipKind.filter; }
+
 	this(Rectangle a) {
 		super(a, song.filterTable);
 		refresh();

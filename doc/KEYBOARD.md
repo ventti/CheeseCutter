@@ -264,6 +264,12 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Cmd-Up` | Move to beginning |
 | `Cmd-Down` | Move to end |
 
+### Selection
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl-X` | Cut selected instrument data rows (blank bytes; keep descriptions) |
+
 ## Wave / pulse / filter tables
 
 ### Navigation
@@ -272,6 +278,14 @@ _Generated from the shortcut registry (com.shortcuts)._
 |---|---|
 | `Cmd-Up` | Move to beginning |
 | `Cmd-Down` | Move to end |
+
+### Selection
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl-C` | Copy selected table rows |
+| `Ctrl-X` | Cut selected table rows (blank without shifting) |
+| `Ctrl-V` | Paste table rows (overwrite selection or from cursor; same table type) |
 
 ### Tables
 

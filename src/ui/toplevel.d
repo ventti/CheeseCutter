@@ -249,7 +249,11 @@ final package class Toplevel : WindowSwitcher, Undoable {
 		if(soundEditorActive) return;
 		foreach(idx, win; bottomTabSwitcher.windows) {
 			if(win.area.overlaps(x, y)) {
+				// The compact layout's chord table lies outside the switcher's
+				// rectangle. It must still own subsequent keys and drag events.
+				if(activeWindow != bottomTabSwitcher) activateWindow(2);
 				bottomTabSwitcher.activateWindow(idx);
+				input = bottomTabSwitcher.input;
 				bottomTabSwitcher.activeWindow.clickedAt(x, y, b, clicks);
 				if(win == trackstable && b == 1 && clicks >= 2) {
 					int offset;

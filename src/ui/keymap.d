@@ -852,6 +852,19 @@ void registerContextShortcuts(UI ui) {
 				"Paste instrument from clipboard", SDLK_v, KMOD_CTRL,
 				{ invokeKey(SDLK_v, KMOD_CTRL); });
 
+	sm.register("ins_cut_selection", C.instrumentTable, "Selection",
+				"Cut selected instrument data rows (blank bytes; keep descriptions)", SDLK_x, KMOD_CTRL,
+				{ invokeKey(SDLK_x, KMOD_CTRL); }, "Cut selected rows");
+
+	foreach(verb; ["cut", "copy", "paste"]) {
+		int key = verb == "cut" ? SDLK_x : verb == "copy" ? SDLK_c : SDLK_v;
+		string description = verb == "cut" ? "Cut selected table rows (blank without shifting)"
+			: verb == "copy" ? "Copy selected table rows"
+			: "Paste table rows (overwrite selection or from cursor; same table type)";
+		sm.register("table_" ~ verb, C.subtable, "Selection", description,
+				key, KMOD_CTRL, invokeKeyAction(ui, key, KMOD_CTRL));
+	}
+
 	// --- Sub-tables (wave / pulse / filter) ---
 	// Reachable via the Navigate menu and the G key on the instrument and player
 	// tables (the tables handle G directly; this entry gives it a menu home).

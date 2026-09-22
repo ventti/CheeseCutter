@@ -15,7 +15,7 @@ import std.algorithm : min, max;
 
 /// What kind of cells a clipboard holds, so a note block is never pasted onto
 /// the track column or vice versa.
-enum ClipKind { none, note, track }
+enum ClipKind { none, note, track, instrument, wave, pulse, filter, command, chord }
 
 /**
  * A rectangular selection: an anchor cell plus the current end cell. The

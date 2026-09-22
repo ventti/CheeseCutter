@@ -501,12 +501,23 @@ volume / song speed). When the command selects a chord, the chord's transpose
 offsets and derived chord name (rooted on the row's note) are shown, e.g.
 `Chord 0 [+0 +3 +7] (Gmin)`.
 
+### Table row selection
+
+In the Instrument, Wave, Pulse, Filter, Command and Chord tables, **left-drag**
+to select whole rows. **Shift-click** extends from the last clicked row; a plain
+click clears the selection. Use **Ctrl-C / Ctrl-X / Ctrl-V** to copy, cut or paste.
+Cut blanks the selected bytes without shifting rows. Paste overwrites from the
+cursor, or clips to the selected rows, and stops at the end of the table.
+The clipboard can only be pasted into the same table type. Instrument row
+selection copies data bytes, leaving descriptions unchanged; without a selection,
+the existing whole-instrument copy remains available. Cut and paste support undo/redo.
+
 ### Block Selection (copy / cut / paste / merge)
 
 Select a rectangular block — a range of rows across one or more voice columns —
 and move it around. It works in both the <kbd>F6</kbd> note column (the block is
-note data) and the <kbd>F5</kbd> track column (the block is track-list entries),
-and is designed to extend to the player tables later.
+note data) and the <kbd>F5</kbd> track column (the block is track-list entries).
+Table row selection is described above.
 
 Make a selection by **left-dragging** with the mouse, by **left-clicking one
 corner and then <kbd>Shift</kbd>-left-clicking the opposite corner**, or with the

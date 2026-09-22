@@ -229,6 +229,14 @@ class WindowSwitcher : Window {
 		//	activateAt(scrx - activeWindow.area.x, scry - activeWindow.area.y);
 	}
 
+	override void draggedTo(int scrx, int scry) {
+		if(activeWindow !is null) activeWindow.draggedTo(scrx, scry);
+	}
+
+	override void releasedAt(int scrx, int scry) {
+		if(activeWindow !is null) activeWindow.releasedAt(scrx, scry);
+	}
+
 	// Forward a plain hover to the active child window (e.g. the Sound Editor's
 	// probe). Base Window.hoverAt is a no-op, so this is harmless for windows that
 	// do not use it.
