@@ -54,9 +54,12 @@ private string mdShortcuts(Shortcut[] scs) {
 string[] platformNotes() {
 	return [
 		"macOS outside Sound Editor: legacy Cmd translation acts as Ctrl+Shift.",
-		"macOS outside Sound Editor: Cmd+1..9 act as numeric keypad 1..9.",
+		"macOS: Cmd+1/2/3 toggle voices; Ctrl+Shift+1..9 set sequencer step size. Cmd+4..9 retain keypad emulation.",
 		"macOS outside Sound Editor: Cmd+Up / Cmd+Down act as Shift+Home / Shift+End.",
-		"Sound Editor uses physical Ctrl/Shift primaries; Cmd variants are inert.",
+		"Sound Editor uses physical Ctrl/Shift primaries; global Cmd+1/2/3 toggle voices.",
+		"macOS: Option+Return inserts; Shift+Option+Return inserts with sequence expansion.",
+		"macOS: Ctrl+Return replaces Ctrl+Insert; Ctrl+Shift+Return replaces Ctrl+Shift+Insert in tracks.",
+		"macOS: Ctrl+Cmd+F toggles fullscreen; Shift+Return still quick-expands sequences.",
 		"macOS: F11 may be intercepted by the system (Show Desktop).",
 	];
 }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sys
 import unittest
 
 from tests.ccdriver_session import ROOT
@@ -111,6 +112,8 @@ class SoundEditorKeyboardPortabilityTests(unittest.TestCase):
                     state = session.run(f"shortcutstate:{action}")
                     self.assertRegex(state, rf"keys={re.escape(primary)}(?: / |\n)")
                     expected = primary + (f" / {ALIASES[action]}" if action in ALIASES else "")
+                    if sys.platform == "darwin" and action == "se_add":
+                        expected = primary + " / Alt-Return / Insert"
                     self.assertIn(f"keys={expected}\n", state)
 
         source = (ROOT / "src/ui/keymap.d").read_text()

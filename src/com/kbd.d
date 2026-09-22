@@ -20,6 +20,18 @@ void translate(ref Keyinfo key) {
 }
 
 void translate_super(ref Keyinfo key) {
+	version(OSX) {
+		// Preserve only the explicit Mac registry chords before legacy keypad /
+		// Ctrl+Shift emulation. Other Command combinations keep their behavior.
+		int mods = key.mods & (KMOD_CTRL | KMOD_SHIFT | KMOD_ALT | KMOD_GUI);
+		bool cmdOnly = (mods & KMOD_GUI) != 0
+			&& !(mods & (KMOD_CTRL | KMOD_SHIFT | KMOD_ALT));
+		bool ctrlCmdOnly = (mods & KMOD_GUI) != 0 && (mods & KMOD_CTRL) != 0
+			&& !(mods & (KMOD_SHIFT | KMOD_ALT));
+		if((cmdOnly && key.key >= SDLK_1 && key.key <= SDLK_3)
+			|| (ctrlCmdOnly && key.key == SDLK_f)) return;
+	}
+
 	if(key.mods & KMOD_GUI) {
 		key.fromGui = true;
         switch(key.key) {

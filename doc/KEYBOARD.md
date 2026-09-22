@@ -18,7 +18,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Alt-Up` | Oscilloscope: zoom in on the recorded keyjam note (shorter window) |
 | `Alt-Down` | Oscilloscope: zoom out toward the whole recorded keyjam note |
 | `Ctrl-F12` | Save screenshot |
-| `Alt-Return` | Toggle fullscreen |
+| `Ctrl-Cmd-F` | Toggle fullscreen |
 | `Alt-H` | Toggle help texts |
 | `Shift-F12` | Toggle the oscilloscope overlay (combined synthesized audio waveform, live during playback and keyjam) |
 | `Ctrl-Shift-F` | Toggle the read-only filter track column |
@@ -109,9 +109,9 @@ _Generated from the shortcut registry (com.shortcuts)._
 
 | Shortcut | Action |
 |---|---|
-| `Ctrl-1` | Toggle voice 1 on/off |
-| `Ctrl-2` | Toggle voice 2 on/off |
-| `Ctrl-3` | Toggle voice 3 on/off |
+| `Cmd-1` / `Ctrl-1` | Toggle voice 1 on/off |
+| `Cmd-2` / `Ctrl-2` | Toggle voice 2 on/off |
+| `Cmd-3` / `Ctrl-3` | Toggle voice 3 on/off |
 
 ### Window navigation
 
@@ -198,13 +198,19 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Alt-A` | Transpose semitone down |
 | `Alt-Q` | Transpose semitone up |
 
+### Note column
+
+| Shortcut | Action |
+|---|---|
+| `Alt-Return` / `Insert` | Insert a row without expanding the sequence |
+
 ### Sequence
 
 | Shortcut | Action |
 |---|---|
 | `Shift-Delete` | Delete a row (with sequence shrink) |
-| `Ctrl-Insert` | Expand the sequence |
-| `Shift-Insert` | Insert a row (with sequence expand) |
+| `Ctrl-Return` / `Ctrl-Insert` | Expand the sequence |
+| `Alt-Shift-Return` / `Shift-Insert` | Insert a row (with sequence expand) |
 | `End` | Move cursor to sequence end (or screen bottom) |
 | `Home` | Move cursor to sequence start (or screen top) |
 | `Keypad 0` / `Ctrl-Shift-P` | Play notes for all voices in current row |
@@ -223,9 +229,9 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Delete` | Delete track at cursor |
 | `Ctrl-Delete` | Delete track to end of voice and move there |
 | `Ctrl-F` | Find next unused sequence from current value |
-| `Insert` | Insert a track at cursor |
-| `Ctrl-Shift-Insert` | Insert a track for all voices |
-| `Ctrl-Insert` | Insert a track to end of voice and move there |
+| `Alt-Return` / `Insert` | Insert a track at cursor |
+| `Ctrl-Shift-Return` / `Ctrl-Shift-Insert` | Insert a track for all voices |
+| `Ctrl-Return` / `Ctrl-Insert` | Insert a track to end of voice and move there |
 | `Ctrl-V` | Paste copied tracks (ask insert or overwrite) |
 | `Ctrl-I` / `Alt-B` | Paste copied tracks as insert |
 | `Ctrl-O` | Paste copied tracks as overwrite |
@@ -257,7 +263,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 |---|---|
 | `.` | Clear current wave row |
 | `Delete` | Delete a row |
-| `Insert` | Insert a row |
+| `Alt-Return` / `Insert` | Insert a row |
 | `Shift-Home` | Jump to first row |
 | `Shift-End` | Jump to last used row |
 
@@ -288,7 +294,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Ctrl-Shift-0` | Increase selected sweep duration |
 | `Ctrl-Shift-8` | Increase selected sweep end value |
 | `Ctrl-Shift-6` | Increase selected sweep start value |
-| `Ctrl-Shift-J` / `Insert` | Insert the selected programme row |
+| `Ctrl-Shift-J` / `Alt-Return` / `Insert` | Insert the selected programme row |
 | `Ctrl-PageDown` / `Keypad +` | Select next instrument |
 | `Ctrl-PageUp` / `Keypad -` | Select previous instrument |
 | `Shift-PageDown` | Select the next wave row |
@@ -320,8 +326,11 @@ _Active inside the load / save / import / instrument file dialogs._
 ## Platform notes
 
 - macOS outside Sound Editor: legacy Cmd translation acts as Ctrl+Shift.
-- macOS outside Sound Editor: Cmd+1..9 act as numeric keypad 1..9.
+- macOS: Cmd+1/2/3 toggle voices; Ctrl+Shift+1..9 set sequencer step size. Cmd+4..9 retain keypad emulation.
 - macOS outside Sound Editor: Cmd+Up / Cmd+Down act as Shift+Home / Shift+End.
-- Sound Editor uses physical Ctrl/Shift primaries; Cmd variants are inert.
+- Sound Editor uses physical Ctrl/Shift primaries; global Cmd+1/2/3 toggle voices.
+- macOS: Option+Return inserts; Shift+Option+Return inserts with sequence expansion.
+- macOS: Ctrl+Return replaces Ctrl+Insert; Ctrl+Shift+Return replaces Ctrl+Shift+Insert in tracks.
+- macOS: Ctrl+Cmd+F toggles fullscreen; Shift+Return still quick-expands sequences.
 - macOS: F11 may be intercepted by the system (Show Desktop).
 

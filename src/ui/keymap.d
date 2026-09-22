@@ -34,6 +34,23 @@ import std.file;
 import std.stdio;
 import audio.audio, audio.timer, audio.callback;
 
+// Platform-specific primary keys; callbacks still dispatch the original editor keys.
+version(OSX) {
+	private enum voiceMods = KMOD_GUI;
+	private enum fullscreenKey = SDLK_f;
+	private enum fullscreenMods = KMOD_CTRL | KMOD_GUI;
+	private enum insertKey = SDLK_RETURN;
+	private enum insertMods = KMOD_ALT;
+	private enum expandKey = SDLK_RETURN;
+} else {
+	private enum voiceMods = KMOD_CTRL;
+	private enum fullscreenKey = SDLK_RETURN;
+	private enum fullscreenMods = KMOD_ALT;
+	private enum insertKey = SDLK_INSERT;
+	private enum insertMods = 0;
+	private enum expandKey = SDLK_INSERT;
+}
+
 /**
  * Register all keyboard shortcut actions, their bindings and metadata.
  * This is the single source of truth for global command shortcuts; help
@@ -51,7 +68,7 @@ void registerShortcuts(UI ui) {
 	}, "Quit");
 
 	sm.register("toggle_fullscreen", Ctx.global, "Display",
-				"Toggle fullscreen", SDLK_RETURN, KMOD_ALT, {
+				"Toggle fullscreen", fullscreenKey, fullscreenMods, {
 		video.toggleFullscreen();
 	});
 
@@ -247,17 +264,17 @@ void registerShortcuts(UI ui) {
 
 	// Voice Control
 	sm.register("toggle_voice_1", Ctx.global, "Voice control",
-				"Toggle voice 1 on/off", SDLK_1, KMOD_CTRL, {
+				"Toggle voice 1 on/off", SDLK_1, voiceMods, {
 		audio.player.toggleVoice(0);
 	});
 
 	sm.register("toggle_voice_2", Ctx.global, "Voice control",
-				"Toggle voice 2 on/off", SDLK_2, KMOD_CTRL, {
+				"Toggle voice 2 on/off", SDLK_2, voiceMods, {
 		audio.player.toggleVoice(1);
 	});
 
 	sm.register("toggle_voice_3", Ctx.global, "Voice control",
-				"Toggle voice 3 on/off", SDLK_3, KMOD_CTRL, {
+				"Toggle voice 3 on/off", SDLK_3, voiceMods, {
 		audio.player.toggleVoice(2);
 	});
 
@@ -715,13 +732,13 @@ void registerContextShortcuts(UI ui) {
 				"Quick expand sequence (by highlight value * 4)", SDLK_RETURN, KMOD_SHIFT,
 				{ invokeKey(SDLK_RETURN, KMOD_SHIFT); });
 	sm.register("note_insert_row", C.noteColumn, "Note column",
-				"Insert a row (with sequence expand)", SDLK_INSERT, KMOD_SHIFT,
+				"Insert a row (with sequence expand)", insertKey, insertMods | KMOD_SHIFT,
 				{ invokeKey(SDLK_INSERT, KMOD_SHIFT); });
 	sm.register("note_delete_row", C.noteColumn, "Note column",
 				"Delete a row (with sequence shrink)", SDLK_DELETE, KMOD_SHIFT,
 				{ invokeKey(SDLK_DELETE, KMOD_SHIFT); });
 	sm.register("note_expand", C.noteColumn, "Note column",
-				"Expand the sequence", SDLK_INSERT, KMOD_CTRL,
+				"Expand the sequence", expandKey, KMOD_CTRL,
 				{ invokeKey(SDLK_INSERT, KMOD_CTRL); });
 	sm.register("note_shrink", C.noteColumn, "Note column",
 				"Shrink the sequence", SDLK_DELETE, KMOD_CTRL,
@@ -756,19 +773,19 @@ void registerContextShortcuts(UI ui) {
 
 	// --- Track column (F5) ---
 	sm.register("trk_insert", C.trackColumn, "Track column",
-				"Insert a track at cursor", SDLK_INSERT, 0,
+				"Insert a track at cursor", insertKey, insertMods,
 				{ invokeKey(SDLK_INSERT, 0); });
 	sm.register("trk_delete", C.trackColumn, "Track column",
 				"Delete track at cursor", SDLK_DELETE, 0,
 				{ invokeKey(SDLK_DELETE, 0); });
 	sm.register("trk_insert_end", C.trackColumn, "Track column",
-				"Insert a track to end of voice and move there", SDLK_INSERT, KMOD_CTRL,
+				"Insert a track to end of voice and move there", expandKey, KMOD_CTRL,
 				{ invokeKey(SDLK_INSERT, KMOD_CTRL); });
 	sm.register("trk_delete_end", C.trackColumn, "Track column",
 				"Delete track to end of voice and move there", SDLK_DELETE, KMOD_CTRL,
 				{ invokeKey(SDLK_DELETE, KMOD_CTRL); });
 	sm.register("trk_insert_all", C.trackColumn, "Track column",
-				"Insert a track for all voices", SDLK_INSERT, KMOD_CTRL | KMOD_SHIFT,
+				"Insert a track for all voices", expandKey, KMOD_CTRL | KMOD_SHIFT,
 				{ invokeKey(SDLK_INSERT, KMOD_CTRL | KMOD_SHIFT); });
 	sm.register("trk_delete_all", C.trackColumn, "Track column",
 				"Delete a track for all voices", SDLK_DELETE, KMOD_CTRL | KMOD_SHIFT,
@@ -845,11 +862,28 @@ void registerContextShortcuts(UI ui) {
 				"Jump to last used row", SDLK_END, KMOD_SHIFT,
 				{ invokeKey(SDLK_END, KMOD_SHIFT); });
 	sm.register("table_insert_row", C.subtable, "Tables",
-				"Insert a row", SDLK_INSERT, 0,
+				"Insert a row", insertKey, insertMods,
 				{ invokeKey(SDLK_INSERT, 0); });
 	sm.register("table_delete_row", C.subtable, "Tables",
 				"Delete a row", SDLK_DELETE, 0,
 				{ invokeKey(SDLK_DELETE, 0); });
+
+	version(OSX) {
+		// Plain note-column Insert was previously handled only by the widget.
+		sm.register("note_insert_fixed", C.noteColumn, "Note column",
+				"Insert a row without expanding the sequence", insertKey, insertMods,
+				{ invokeKey(SDLK_INSERT, 0); }, "Insert row (fixed length)");
+		sm.bindAlias("note_insert_fixed", SDLK_INSERT, 0);
+		sm.bindAlias("note_insert_row", SDLK_INSERT, KMOD_SHIFT);
+		sm.bindAlias("note_expand", SDLK_INSERT, KMOD_CTRL);
+		sm.bindAlias("trk_insert", SDLK_INSERT, 0);
+		sm.bindAlias("trk_insert_end", SDLK_INSERT, KMOD_CTRL);
+		sm.bindAlias("trk_insert_all", SDLK_INSERT, KMOD_CTRL | KMOD_SHIFT);
+		sm.bindAlias("table_insert_row", SDLK_INSERT, 0);
+		sm.bindAlias("se_add", insertKey, insertMods);
+		foreach(i; 1 .. 4)
+			sm.bindAlias("toggle_voice_" ~ to!string(i), SDLK_1 + i - 1, KMOD_CTRL);
+	}
 }
 
 /**

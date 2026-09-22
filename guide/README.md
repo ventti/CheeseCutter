@@ -482,6 +482,13 @@ listed in the **Navigate** menu and the command palette:
 | <kbd>Alt</kbd>-<kbd>T</kbd> | Toggle relative notes |
 | <kbd>Ctrl</kbd>-<kbd>Space</kbd> or <kbd>Ctrl</kbd>-<kbd>K</kbd> | Toggle keyjam (use <kbd>Ctrl</kbd>-<kbd>K</kbd> on macOS, which claims Ctrl-Space) |
 
+**Mac builds:** Cmd-1/2/3 toggle voices. Option-Return replaces Insert,
+Shift-Option-Return replaces Shift-Insert, Ctrl-Return replaces Ctrl-Insert,
+and Ctrl-Shift-Return inserts tracks for all voices. Shift-Return keeps quick
+sequence expansion; Ctrl-Cmd-F toggles fullscreen. Original Insert shortcuts
+remain available. Use Ctrl-Shift-1…9 for sequencer step sizes previously reached
+with Cmd-number. Option-Return also inserts the selected Sound Editor programme row.
+
 With context help on (<kbd>Alt</kbd>-<kbd>H</kbd>), moving the cursor in the note
 column shows a statusline explanation of the cell under it: the **instrument**
 column shows that instrument's description, and the **command** column explains
