@@ -482,6 +482,8 @@ listed in the **Navigate** menu and the command palette:
 | <kbd>Alt</kbd>-<kbd>T</kbd> | Toggle relative notes |
 | <kbd>Ctrl</kbd>-<kbd>Space</kbd> or <kbd>Ctrl</kbd>-<kbd>K</kbd> | Toggle keyjam (use <kbd>Ctrl</kbd>-<kbd>K</kbd> on macOS, which claims Ctrl-Space) |
 
+Keyjam mode is indicated by the top bar; the editor background stays unchanged.
+
 **Mac builds:** Cmd-Up/Down replace Home/End in editors; Shift-Cmd-Up/Down
 replace Shift-Home/End, and Ctrl-Cmd-Up replaces Ctrl-Home (playback mark).
 Physical Home/End keys remain available. Cmd-1/2/3 toggle voices. Option-Return replaces Insert,

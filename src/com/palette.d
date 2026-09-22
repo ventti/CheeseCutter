@@ -60,7 +60,7 @@ enum Role : int {
 	filterCalc,        // filter cutoff being swept/calculated
 	filterEmpty,       // in-song filter row with no active value
 	filterHeader,      // filter table header
-	keyjamBg,          // whole-screen background tint while keyjam mode is active
+	keyjamBg,          // legacy palette role retained for configuration compatibility
 	keyjamTag,         // "KEYJAM" mode badge text in the top bar
 	soundeditSelection, // Sound Editor time-range selection overlay (translucent)
 	soundeditValue,       // Sound Editor parameter values (yellow)

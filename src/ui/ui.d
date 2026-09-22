@@ -863,8 +863,7 @@ final class UI {
 /+		doEnable ? com.fb.disableKeyRepeat() :
 			com.fb.enableKeyRepeat();+/
 		state.keyjamStatus = doEnable;
-		com.fb.keyjamBackground = doEnable;   // whole-screen dark-blue keyjam tint
-		refresh();                            // repaint so the tint applies at once
+		refresh(); // update the top-bar keyjam indicator
 	}
 
 	void activateInstrumentTable(int ins) {

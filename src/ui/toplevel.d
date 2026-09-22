@@ -584,14 +584,10 @@ final package class Toplevel : WindowSwitcher, Undoable {
 		// over the previously active sequencer/subtable shortcuts.
 		if(mainui !is null && mainui.sm !is null)
 			mainui.sm.setActiveContext(Ctx.soundEditor);
-		// Force keyjam ON so the piano keys sound the moment the screen opens, but
-		// v2 layout drops the whole-screen dark-blue keyjam tint: keep note routing
-		// (keyjamStatus) while forcing the cosmetic background off. The SoundEditor
-		// also re-asserts keyjamBackground=false every frame (see its update()).
+		// Force keyjam ON so the piano keys sound as soon as the screen opens.
 		state.keyjamStatus = true;
 		ui.enableKeyjamMode(true);
-		com.fb.keyjamBackground = false;   // v2: no keyjam tint in the Sound Editor
-		refresh();                          // repaint without the tint
+		refresh();
 	}
 
 	void stopSoundEditor() {
@@ -609,9 +605,8 @@ final package class Toplevel : WindowSwitcher, Undoable {
 		if(n < 0 || n >= cast(int)windows.length) n = 0;
 		// Restore the caller's prior keyjam state and the classic screen.
 		// enableKeyjamMode refuses user toggles during playback, but leaving this
-		// view must restore routing and tint even while a song/note is playing.
+		// view must restore routing even while a song/note is playing.
 		state.keyjamStatus = prevKeyjamStatus;
-		com.fb.keyjamBackground = prevKeyjamStatus;
 		ui.enableKeyjamMode(prevKeyjamStatus);
 		activateWindow(n);
 	}

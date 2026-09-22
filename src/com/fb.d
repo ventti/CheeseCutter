@@ -58,11 +58,6 @@ immutable string scrollText =
 int mode; // 0 = compact (default), >0 = wide
 immutable int border = 1;
 private bool isDirty = false;
-// When set, renderGrid draws the black (index 0) cell background as dark blue
-// (index 6) instead — a whole-screen "keyjam active" tint. Set by the UI when
-// keyjam mode toggles (com.fb has no com.session dependency, so it's a flag).
-__gshared bool keyjamBackground = false;
-
 // Last mouse position in GRID PIXELS: letterbox-corrected (Video.scalePosition) but NOT
 // yet divided down to a character cell. The UI dispatches mouse events in cells, which is
 // too coarse for a continuous vertical drag — a graph band can be under 5 cells tall, so
@@ -442,7 +437,6 @@ class VideoStandard : Video {
 		Uint8* bp = &font[glyph * 16];
 		Uint8 ufg = (cell >> 8) & 0xff;
 		Uint8 ubg = (cell >> 16) & 0xff;
-		if(keyjamBackground && ubg == 0) ubg = cast(ubyte)idx(Role.keyjamBg);
 		SDL_Rect cellRect = { x * FONT_X, y * FONT_Y, FONT_X, FONT_Y };
 		SDL_SetRenderDrawColor(renderer, PALETTE[ubg].r, PALETTE[ubg].g, PALETTE[ubg].b, 255);
 		SDL_RenderFillRect(renderer, &cellRect);
@@ -665,8 +659,6 @@ class VideoStandard : Video {
 					bp = &font[a * 16];
 					ufg = (*bptr >> 8) & 0xff;  // 8 bits for fg
 					ubg = (*bptr >> 16) & 0xff; // 8 bits for bg
-                    // Keyjam tint: paint the black background with the keyjam role.
-                    if(keyjamBackground && ubg == 0) ubg = cast(ubyte)idx(Role.keyjamBg);
                     rect.x = x * 8;
                     rect.y = y * FONT_Y;
                     rect.h = FONT_Y;

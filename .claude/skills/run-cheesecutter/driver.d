@@ -616,7 +616,7 @@ private bool processCommand(string arg) {
 		case "sessionstate": {
 			auto editor = mainui.toplevel.soundEditor;
 			stderr.writefln("session: keyjam=%s background=%s playing=%s held=%s handles=%s",
-				state.keyjamStatus, keyjamBackground, audio.player.isPlaying(),
+				state.keyjamStatus, false, audio.player.isPlaying(),
 				editor.debugNoteHeld(), editor.debugAdsrHandlesVisible());
 			break;
 		}

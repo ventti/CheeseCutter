@@ -4,8 +4,7 @@ CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
 Visual Sound Editor screen: a live, keyjam-driven view of the selected instrument laid out as a left parameter column, a stack of time-aligned graph bands sharing one zoomable/pannable tick-based X axis (pixel-perfect output waveform, ADSR envelope, a piano-roll pitch band (relative arp + absolute notes on one note axis), pulse, a filter band coloured per frame by filter type with a resonance-over-time overlay, and a stacked SID control-bit-lane wave view) with a restart pre-roll, a note-trigger divider, a single vertical playhead, a tick-snapped drag selection, a subtle zoom-control row, a raw-hex table strip along the bottom, and a context F12 help page.
 
 This is the full-screen alternative sound-editing mode toggled from the classic
-editor (Ctrl-E). It runs keyjam (notes play) but uses the *normal* background,
-not the dark-blue keyjam tint. The layout (design doc §7, §9 v4) stacks every
+editor (Ctrl-E). It runs keyjam (notes play). The layout (design doc §7, §9 v4) stacks every
 time-varying graph on ONE shared horizontal axis = frames since note-on
 (~19.95 ms PAL ticks). The X span AUTO-FITS the note's full duration (§12):
 visFrames is computed once per draw as the max of the ADSR-derived length (SID ms
@@ -46,7 +45,7 @@ import std.string : format, stripRight, leftJustify;
 import std.algorithm : max, min;
 import std.math : lround, log2, floor, ceil, abs;
 import derelict.sdl2.sdl;
-import com.fb : FONT_X, FONT_Y, keyjamBackground, mousePixelY, traceMouseDrag;
+import com.fb : FONT_X, FONT_Y, mousePixelY, traceMouseDrag;
 import com.session : screen, video, state, song, mainui, insertUndo, UndoValue, Undoable;
 import com.shortcuts : Ctx, formatShortcuts;
 import com.palette : idx, Role, BaseColor;
@@ -1490,8 +1489,6 @@ class SoundEditor : Window, Undoable {
 	}
 
 	override void update() {
-		// v2: keep note routing but never the blue keyjam tint on this screen.
-		keyjamBackground = false;
 		if(mainui !is null && (mainui.dialogActive
 				|| (mainui.menubar !is null && mainui.menubar.active)
 				|| (mainui.palette !is null && mainui.palette.active)))
