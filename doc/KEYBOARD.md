@@ -227,6 +227,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 | Shortcut | Action |
 |---|---|
 | `Ctrl-C` / `Alt-Z` | Ask for a number and copy tracks into clipboard |
+| `Ctrl-U` | Copy selected tracks to the first empty sequences (excluding 00) |
 | `Ctrl-Shift-Delete` | Delete a track for all voices |
 | `Delete` | Delete track at cursor |
 | `Ctrl-Delete` | Delete track to end of voice and move there |

@@ -45,6 +45,57 @@ struct UndoValue {
 	bool allVoices;
 }
 
+// A make-unique transaction snapshots only the destination sequences alongside
+// the owning view's tracklists. Keep redo symmetrical with the same destinations.
+void snapshotSequences(ref UndoValue value, Sequence[] sources) {
+	value.seqSources = sources.dup;
+	foreach(source; sources) value.seqData ~= source.data.raw.dup;
+}
+
+void restoreSequences(UndoValue value) {
+	foreach(i, source; value.seqSources) {
+		source.data.raw[] = value.seqData[i][];
+		source.refresh();
+	}
+}
+
+bool makeTracksUnique(Track[] entries, Undoable owner, UndoValue delegate() snapshot) {
+	if(entries.length == 0) return false;
+	auto song = state.song;
+	Sequence[] destinations;
+	int[] numbers;
+	bool[MAX_SEQ_NUM] used;
+	song.trackIterator((Track entry) {
+		if(entry.number < MAX_SEQ_NUM) used[entry.number] = true;
+	});
+	// Plan all copies before changing anything. Unreferenced sequences can still
+	// contain authored music, so require blank rows as well as no references in
+	// any subtune. Slot zero is always reserved.
+	for(int number = 1; destinations.length < entries.length; number++) {
+		if(number == MAX_SEQ_NUM) {
+			UI.statusline.display("Not enough empty sequences to make tracks unique.");
+			return false;
+		}
+		if(used[number]) continue;
+		auto candidate = song.seqs[number];
+		bool empty = true;
+		foreach(r; 0 .. candidate.rows)
+			if(candidate.data.raw[r * 4 .. r * 4 + 4] != CLEAR) empty = false;
+		if(!empty) continue;
+		numbers ~= number;
+		destinations ~= candidate;
+	}
+	auto before = snapshot();
+	snapshotSequences(before, destinations);
+	insertUndo(owner, before);
+	foreach(i, entry; entries) {
+		destinations[i].copyFrom(song.seqs[entry.number]);
+		entry.number = cast(ubyte)numbers[i];
+	}
+	UI.statusline.display("Made selected tracks unique.");
+	return true;
+}
+
 struct UndoState {
 	Undoable func;
 	UndoValue value;

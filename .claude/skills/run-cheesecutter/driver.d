@@ -174,6 +174,8 @@ private void usage(File f) {
 "  capturestate     dump deterministic keyjam PCM/gate signatures + active voice\n" ~
 "  sounddump        dump every instrument and wave/pulse/filter byte (read-only)\n" ~
 "  seqdump:<n>      dump sequence n's rows as hex (read-only edit oracle)\n" ~
+"  trackgeometry    dump bottom Tracks table geometry\n" ~
+"  uniquefixture:<normal|full|loop> seed make-unique allocation edge cases\n" ~
 "  tracks           dump each voice's tracklist entries (trans,number)\n" ~
 "  voices           per-voice visualizer: instrument, brightness, recording len\n" ~
 "  tablebytes:<kind> dump instrument/wave/pulse/filter/command/chord rows and geometry\n" ~
@@ -1049,6 +1051,38 @@ private bool processCommand(string arg) {
 			}
 			break;
 		}
+		case "uniquefixture": {
+			// Allocation edge cases: repeated source, authored but unreferenced
+			// slot 2, and blank slot 1 referenced only by another subtune.
+			song.incSubtune();
+			song.tracks[0][0].setValue(0xa0, 1);
+			song.decSubtune();
+			song.seqs[0].clear();
+			song.seqs[0].expand(0, 3);
+			song.seqs[10].clear();
+			song.seqs[10].expand(0, 1);
+			song.seqs[10].data.raw[0 .. 4] = [0x11, 0x02, 0x60, 0x03];
+			song.seqs[2].copyFrom(song.seqs[10]);
+			song.tracks[0][0].setValue(0xa2, 10);
+			song.tracks[0].expand();
+			song.tracks[0][1].setValue(0xa5, 10);
+			if(val == "loop") {
+				song.seqs[2].clear();
+				song.tracks[0].wrapOffset = 1;
+			}
+			if(val == "full")
+				foreach(n; 4 .. MAX_SEQ_NUM) song.seqs[n].copyFrom(song.seqs[10]);
+			state.undoQueue.clear();
+			state.redoQueue.clear();
+			UI.refresh();
+			break;
+		}
+		case "trackgeometry": {
+			auto a = mainui.toplevel.trackstable.area;
+			stderr.writefln("tracks geometry: x=%d y=%d height=%d", a.x, a.y, a.height);
+			break;
+		}
+
 		case "seqdump": {
 			// seqdump:<n> — dump sequence n's rows as hex (4 bytes/row). A
 			// read-only oracle for verifying block copy/paste/merge/cut edits.

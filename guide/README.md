@@ -553,6 +553,20 @@ sequence).
 In the <kbd>F5</kbd> track column, <kbd>Ctrl</kbd>-<kbd>C</kbd>/<kbd>Ctrl</kbd>-<kbd>V</kbd>
 fall back to the older count-prompt track copy/paste when no block is selected.
 
+### Making tracks unique
+
+In the bottom-right **Tracks** table or the **F5** track column, select entries
+by dragging or Shift-clicking, then choose **Track → Make unique**
+(<kbd>Ctrl</kbd>-<kbd>U</kbd>). Without a selection, this copies the entry at the cursor.
+Each selected occurrence gets its own independent sequence, preserving transpose
+and sequence length. Copies use the lowest empty, unreferenced sequence slots,
+starting at **01**, in row order and then voice order. Sequence **00** is never a
+destination. Sequences used by any subtune or containing music are skipped.
+
+The whole operation is one undo step. If there are too few empty slots, nothing
+changes. In the Tracks table, gaps and LOOP markers are excluded; a plain click
+clears the selection.
+
 ### Track Column
 
 These shortcuts apply in the <kbd>F5</kbd> track column.

@@ -229,6 +229,9 @@ abstract class BaseTrackTable : VoiceTable, Undoable {
 					jump(Jump.toEnd,true);
 				}
 				return OK;
+			case SDLK_u:
+				makeUnique();
+				return OK;
 			case SDLK_c:
 				mainui.activateDialog(queryClip);
 				return OK;
@@ -430,6 +433,21 @@ abstract class BaseTrackTable : VoiceTable, Undoable {
 		clip.length = 0;
 	}
 
+	private void makeUnique() {
+		activeVoice.trackFlush(posTable.pointerOffset);
+		Track[] entries;
+		int firstRow = sel.active ? sel.loRow : activeRowAbs();
+		int lastRow = sel.active ? sel.hiRow : firstRow;
+		int firstVoice = sel.active ? sel.loCol : activeVoiceNum;
+		int lastVoice = sel.active ? sel.hiCol : firstVoice;
+		foreach(r; firstRow .. lastRow + 1)
+			foreach(v; firstVoice .. lastVoice + 1)
+				if(r >= 0 && r < voices[v].tracks.trackLength)
+					entries ~= voices[v].tracks[r];
+		if(makeTracksUnique(entries, this, () => createState(true)))
+			afterMutate();
+	}
+
 	protected void saveState(bool allVoices) {
 		com.session.insertUndo(this, createState(allVoices));
 	}
@@ -469,6 +487,7 @@ abstract class BaseTrackTable : VoiceTable, Undoable {
 			t.source.overwriteFrom(t.store);
 		}
 
+		restoreSequences(v);
 		posTable.copyFrom(v.posTable);
 		refresh();
 		// make sure cursor not past track end
@@ -476,7 +495,9 @@ abstract class BaseTrackTable : VoiceTable, Undoable {
 	}
 
 	override protected UndoValue createRedoState(UndoValue value) {
-		return createState(value.allVoices);
+		auto result = createState(value.allVoices);
+		snapshotSequences(result, value.seqSources);
+		return result;
 	}
 
 	// ----------------------------------------------------------------

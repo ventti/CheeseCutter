@@ -12,7 +12,7 @@ import ui.help;
 import com.session;
 import com.util;
 import ct.purge;
-import ct.base : MAX_SEQ_NUM, NOTES, noteName, commandName, commandParameterDescription;
+import ct.base : Track, MAX_SEQ_NUM, NOTES, noteName, commandName, commandParameterDescription;
 import ct.chordname : chordQualityName;
 import derelict.sdl2.sdl;
 import com.palette : Role, idx;
@@ -1188,6 +1188,9 @@ class TracksTable : Window, Undoable {
 		int editVoice, editTrackIndex;
 		int[] offsets;
 		int row, cursorOffset, viewOffset, column;
+		Selection selection;
+		bool draggingSelection, selectionMoved, hasSelectionAnchor;
+		int pressX, pressY;
 	}
 
 	this(Rectangle a) {
@@ -1211,6 +1214,7 @@ class TracksTable : Window, Undoable {
 	}
 
 	override void deactivate() {
+		draggingSelection = false;
 		flushInput();
 	}
 
@@ -1254,6 +1258,8 @@ class TracksTable : Window, Undoable {
 				else {
 					screen.cprint(x, y, 5, 0, "----");
 				}
+				if(selection.contains(voice, rowIdx) && trackAtOffset(voice, offset, trackIndex))
+					foreach(bgx; x .. x + 4) screen.highlightSelection(bgx, y);
 			}
 		}
 	}
@@ -1314,6 +1320,19 @@ class TracksTable : Window, Undoable {
 				return OK;
 			case SDLK_a:
 				transposeFromCursor(-1);
+				return OK;
+			case SDLK_u:
+				makeUnique();
+				return OK;
+			case SDLK_b:
+				if((key.mods & KMOD_SHIFT) && selection.active)
+					selection.setEnd(column, row);
+				else selection.setBegin(column, row);
+				selection.active = true;
+				hasSelectionAnchor = true;
+				return OK;
+			case SDLK_d:
+				selection.clear();
 				return OK;
 			case SDLK_c:
 				mainui.activateDialog(queryClip);
@@ -1417,6 +1436,35 @@ class TracksTable : Window, Undoable {
 			column = c;
 		}
 		initializeInput();
+		if(button == 1 && clicks == 1) {
+			if((SDL_GetModState() & KMOD_SHIFT) && hasSelectionAnchor) {
+				selection.setEnd(column, row);
+				selection.active = true;
+				draggingSelection = false;
+			} else {
+				selection.setBegin(column, row);
+				selection.active = true;
+				hasSelectionAnchor = true;
+				draggingSelection = true;
+				selectionMoved = false;
+				pressX = x; pressY = y;
+			}
+		}
+	}
+
+	override void draggedTo(int x, int y) {
+		if(!draggingSelection || offsets.length == 0) return;
+		if(x != pressX || y != pressY) selectionMoved = true;
+		int target = clamp(viewOffset + clamp(y - area.y - 1, 0, visibleRows - 1),
+			0, cast(int)offsets.length - 1);
+		selection.setEnd(clamp((x - area.x - 4) / 5, 0, 2), target);
+	}
+
+	override void releasedAt(int x, int y) {
+		if(!draggingSelection) return;
+		draggedTo(x, y);
+		draggingSelection = false;
+		if(!selectionMoved) selection.clear();
 	}
 
 	bool offsetAtCoord(int x, int y, out int offset) {
@@ -1444,6 +1492,25 @@ private:
 		saveState();
 	}
 
+	void makeUnique() {
+		flushInput();
+		rebuildOffsets();
+		Track[] entries;
+		int firstRow = selection.active ? selection.loRow : row;
+		int lastRow = selection.active ? selection.hiRow : row;
+		int firstVoice = selection.active ? selection.loCol : column;
+		int lastVoice = selection.active ? selection.hiCol : column;
+		foreach(r; firstRow .. lastRow + 1) {
+			if(r < 0 || r >= offsets.length) continue;
+			foreach(v; firstVoice .. lastVoice + 1) {
+				int trackIndex;
+				if(trackAtOffset(v, offsets[r], trackIndex))
+					entries ~= song.tracks[v][trackIndex];
+			}
+		}
+		if(makeTracksUnique(entries, this, &createState)) refresh();
+	}
+
 	void saveState() {
 		com.session.insertUndo(this, createState());
 	}
@@ -1466,11 +1533,14 @@ public:
 		foreach(t; v.trackLists) {
 			t.source.overwriteFrom(t.store);
 		}
+		restoreSequences(v);
 		refresh();
 	}
 
 	override UndoValue createRedoState(UndoValue value) {
-		return createState();
+		auto result = createState();
+		snapshotSequences(result, value.seqSources);
+		return result;
 	}
 
 private:

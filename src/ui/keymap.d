@@ -777,7 +777,10 @@ void registerContextShortcuts(UI ui) {
 				"Increase base octave", SDLK_GREATER, 0,
 				{ invokeKey(SDLK_GREATER, 0, '>'); });
 
-	// --- Track column (F5) ---
+	// --- Track column (F5) and bottom Tracks table ---
+	sm.register("trk_make_unique", C.trackColumn, "Track column",
+				"Copy selected tracks to the first empty sequences (excluding 00)", SDLK_u, KMOD_CTRL,
+				{ invokeKey(SDLK_u, KMOD_CTRL); });
 	sm.register("trk_insert", C.trackColumn, "Track column",
 				"Insert a track at cursor", insertKey, insertMods,
 				{ invokeKey(SDLK_INSERT, 0); });
@@ -1027,6 +1030,7 @@ void applyMenuLabels(UI ui) {
 		setMenuLabel("note_octave_dec", "Base octave -");
 		setMenuLabel("note_octave_inc", "Base octave +");
 		// Track column
+		setMenuLabel("trk_make_unique", "Make unique");
 		setMenuLabel("trk_insert", "Insert track");
 		setMenuLabel("trk_delete", "Delete track");
 		setMenuLabel("trk_insert_end", "Insert track at end");
