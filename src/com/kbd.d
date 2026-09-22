@@ -29,7 +29,8 @@ void translate_super(ref Keyinfo key) {
 		bool ctrlCmdOnly = (mods & KMOD_GUI) != 0 && (mods & KMOD_CTRL) != 0
 			&& !(mods & (KMOD_SHIFT | KMOD_ALT));
 		if((cmdOnly && key.key >= SDLK_1 && key.key <= SDLK_3)
-			|| (ctrlCmdOnly && key.key == SDLK_f)) return;
+			|| (ctrlCmdOnly && key.key == SDLK_f)
+			|| ((mods & KMOD_GUI) && (key.key == SDLK_UP || key.key == SDLK_DOWN))) return;
 	}
 
 	if(key.mods & KMOD_GUI) {

@@ -55,7 +55,7 @@ string[] platformNotes() {
 	return [
 		"macOS outside Sound Editor: legacy Cmd translation acts as Ctrl+Shift.",
 		"macOS: Cmd+1/2/3 toggle voices; Ctrl+Shift+1..9 set sequencer step size. Cmd+4..9 retain keypad emulation.",
-		"macOS outside Sound Editor: Cmd+Up / Cmd+Down act as Shift+Home / Shift+End.",
+		"macOS editors: Cmd+Up/Down replace Home/End; keep Shift or Ctrl for modified shortcuts.",
 		"Sound Editor uses physical Ctrl/Shift primaries; global Cmd+1/2/3 toggle voices.",
 		"macOS: Option+Return inserts; Shift+Option+Return inserts with sequence expansion.",
 		"macOS: Ctrl+Return replaces Ctrl+Insert; Ctrl+Shift+Return replaces Ctrl+Shift+Insert in tracks.",

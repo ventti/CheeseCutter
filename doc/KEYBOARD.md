@@ -154,9 +154,11 @@ _Generated from the shortcut registry (com.shortcuts)._
 | Shortcut | Action |
 |---|---|
 | `Ctrl-L` | Center the cursor on screen |
-| `Ctrl-Home` / `Ctrl-H` | Jump to playback mark (realigns the voices) |
-| `Shift-End` | Move cursor to song end |
-| `Shift-Home` | Move cursor to song start |
+| `Ctrl-Cmd-Up` / `Ctrl-H` / `Ctrl-Home` | Jump to playback mark (realigns the voices) |
+| `Shift-Cmd-Down` / `Shift-End` | Move cursor to song end |
+| `Shift-Cmd-Up` / `Shift-Home` | Move cursor to song start |
+| `Cmd-Up` | Move to beginning |
+| `Cmd-Down` | Move to end |
 | `Ctrl-Backspace` | Set loop (wrap) mark to current position |
 | `Backspace` | Set playback start mark to current position |
 
@@ -211,8 +213,8 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Shift-Delete` | Delete a row (with sequence shrink) |
 | `Ctrl-Return` / `Ctrl-Insert` | Expand the sequence |
 | `Alt-Shift-Return` / `Shift-Insert` | Insert a row (with sequence expand) |
-| `End` | Move cursor to sequence end (or screen bottom) |
-| `Home` | Move cursor to sequence start (or screen top) |
+| `Cmd-Down` / `End` | Move cursor to sequence end (or screen bottom) |
+| `Cmd-Up` / `Home` | Move cursor to sequence start (or screen top) |
 | `Keypad 0` / `Ctrl-Shift-P` | Play notes for all voices in current row |
 | `Shift-Return` | Quick expand sequence (by highlight value * 4) |
 | `Ctrl-Delete` | Shrink the sequence |
@@ -255,7 +257,21 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Ctrl-V` | Paste instrument from clipboard |
 | `Ctrl-S` | Save current instrument to disk |
 
+### Navigation
+
+| Shortcut | Action |
+|---|---|
+| `Cmd-Up` | Move to beginning |
+| `Cmd-Down` | Move to end |
+
 ## Wave / pulse / filter tables
+
+### Navigation
+
+| Shortcut | Action |
+|---|---|
+| `Cmd-Up` | Move to beginning |
+| `Cmd-Down` | Move to end |
 
 ### Tables
 
@@ -264,8 +280,8 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `.` | Clear current wave row |
 | `Delete` | Delete a row |
 | `Alt-Return` / `Insert` | Insert a row |
-| `Shift-Home` | Jump to first row |
-| `Shift-End` | Jump to last used row |
+| `Shift-Cmd-Up` / `Shift-Home` | Jump to first row |
+| `Shift-Cmd-Down` / `Shift-End` | Jump to last used row |
 
 ## Sound Editor
 
@@ -288,7 +304,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Ctrl-Shift-7` | Decrease selected sweep end value |
 | `Ctrl-Shift-5` | Decrease selected sweep start value |
 | `Ctrl-Shift-D` / `Delete` | Delete the selected programme row |
-| `Ctrl-Shift-A` / `Home` | Fit the full sound |
+| `Ctrl-Shift-A` / `Cmd-Up` / `Home` | Fit the full sound |
 | `Ctrl-Shift-4` | Increase Filter resonance |
 | `Ctrl-Shift-PageUp` / `Keypad *` | Increase keyjam octave |
 | `Ctrl-Shift-0` | Increase selected sweep duration |
@@ -309,7 +325,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Ctrl-I` | Toggle selected sweep carry value |
 | `Ctrl-Shift-I` | Zoom in |
 | `Ctrl-Shift-O` | Zoom out |
-| `Ctrl-Shift-G` / `End` | Zoom to the time selection |
+| `Ctrl-Shift-G` / `Cmd-Down` / `End` | Zoom to the time selection |
 
 ## File dialogs
 
@@ -327,7 +343,7 @@ _Active inside the load / save / import / instrument file dialogs._
 
 - macOS outside Sound Editor: legacy Cmd translation acts as Ctrl+Shift.
 - macOS: Cmd+1/2/3 toggle voices; Ctrl+Shift+1..9 set sequencer step size. Cmd+4..9 retain keypad emulation.
-- macOS outside Sound Editor: Cmd+Up / Cmd+Down act as Shift+Home / Shift+End.
+- macOS editors: Cmd+Up/Down replace Home/End; keep Shift or Ctrl for modified shortcuts.
 - Sound Editor uses physical Ctrl/Shift primaries; global Cmd+1/2/3 toggle voices.
 - macOS: Option+Return inserts; Shift+Option+Return inserts with sequence expansion.
 - macOS: Ctrl+Return replaces Ctrl+Insert; Ctrl+Shift+Return replaces Ctrl+Shift+Insert in tracks.

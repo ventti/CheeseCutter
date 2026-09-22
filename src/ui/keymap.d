@@ -36,6 +36,9 @@ import audio.audio, audio.timer, audio.callback;
 
 // Platform-specific primary keys; callbacks still dispatch the original editor keys.
 version(OSX) {
+	private enum homeKey = SDLK_UP;
+	private enum endKey = SDLK_DOWN;
+	private enum homeEndMods = KMOD_GUI;
 	private enum voiceMods = KMOD_GUI;
 	private enum fullscreenKey = SDLK_f;
 	private enum fullscreenMods = KMOD_CTRL | KMOD_GUI;
@@ -43,6 +46,9 @@ version(OSX) {
 	private enum insertMods = KMOD_ALT;
 	private enum expandKey = SDLK_RETURN;
 } else {
+	private enum homeKey = SDLK_HOME;
+	private enum endKey = SDLK_END;
+	private enum homeEndMods = 0;
 	private enum voiceMods = KMOD_CTRL;
 	private enum fullscreenKey = SDLK_RETURN;
 	private enum fullscreenMods = KMOD_ALT;
@@ -621,8 +627,8 @@ void registerContextShortcuts(UI ui) {
 	se("se_instrument_prev", "Select previous instrument", SDLK_PAGEUP, KMOD_CTRL);
 	se("se_instrument_next", "Select next instrument", SDLK_PAGEDOWN, KMOD_CTRL);
 	// Allowed legacy aliases follow the portable primary in generated docs.
-	sm.bindAlias("se_fit", SDLK_HOME, 0);
-	sm.bindAlias("se_selection", SDLK_END, 0);
+	sm.bindAlias("se_fit", homeKey, homeEndMods);
+	sm.bindAlias("se_selection", endKey, homeEndMods);
 	sm.bindAlias("se_add", SDLK_INSERT, 0);
 	sm.bindAlias("se_delete", SDLK_DELETE, 0);
 	sm.bindAlias("se_octave_down", SDLK_KP_DIVIDE, 0);
@@ -638,13 +644,13 @@ void registerContextShortcuts(UI ui) {
 
 	// --- Sequencer (common to note/track/overview columns) ---
 	sm.register("seq_song_start", C.sequencer, "Navigation",
-				"Move cursor to song start", SDLK_HOME, KMOD_SHIFT,
+				"Move cursor to song start", homeKey, homeEndMods | KMOD_SHIFT,
 				{ invokeKey(SDLK_HOME, KMOD_SHIFT); });
 	sm.register("seq_song_end", C.sequencer, "Navigation",
-				"Move cursor to song end", SDLK_END, KMOD_SHIFT,
+				"Move cursor to song end", endKey, homeEndMods | KMOD_SHIFT,
 				{ invokeKey(SDLK_END, KMOD_SHIFT); });
 	sm.register("seq_jump_mark", C.sequencer, "Navigation",
-				"Jump to playback mark (realigns the voices)", SDLK_HOME, KMOD_CTRL,
+				"Jump to playback mark (realigns the voices)", homeKey, homeEndMods | KMOD_CTRL,
 				{ invokeKey(SDLK_HOME, KMOD_CTRL); });
 	sm.bindAlias("seq_jump_mark", SDLK_h, KMOD_CTRL);
 	sm.register("seq_centralize", C.sequencer, "Navigation",
@@ -723,10 +729,10 @@ void registerContextShortcuts(UI ui) {
 				"Split current sequence into two from cursor pos", SDLK_p, KMOD_ALT,
 				{ invokeKey(SDLK_p, KMOD_ALT); });
 	sm.register("note_seq_start", C.noteColumn, "Note column",
-				"Move cursor to sequence start (or screen top)", SDLK_HOME, 0,
+				"Move cursor to sequence start (or screen top)", homeKey, homeEndMods,
 				{ invokeKey(SDLK_HOME, 0); });
 	sm.register("note_seq_end", C.noteColumn, "Note column",
-				"Move cursor to sequence end (or screen bottom)", SDLK_END, 0,
+				"Move cursor to sequence end (or screen bottom)", endKey, homeEndMods,
 				{ invokeKey(SDLK_END, 0); });
 	sm.register("note_expand_quick", C.noteColumn, "Note column",
 				"Quick expand sequence (by highlight value * 4)", SDLK_RETURN, KMOD_SHIFT,
@@ -856,10 +862,10 @@ void registerContextShortcuts(UI ui) {
 				"Clear current wave row", SDLK_PERIOD, 0,
 				{ invokeKey(SDLK_PERIOD, 0, '.'); });
 	sm.register("table_row_top", C.subtable, "Tables",
-				"Jump to first row", SDLK_HOME, KMOD_SHIFT,
+				"Jump to first row", homeKey, homeEndMods | KMOD_SHIFT,
 				{ invokeKey(SDLK_HOME, KMOD_SHIFT); });
 	sm.register("table_row_bottom", C.subtable, "Tables",
-				"Jump to last used row", SDLK_END, KMOD_SHIFT,
+				"Jump to last used row", endKey, homeEndMods | KMOD_SHIFT,
 				{ invokeKey(SDLK_END, KMOD_SHIFT); });
 	sm.register("table_insert_row", C.subtable, "Tables",
 				"Insert a row", insertKey, insertMods,
@@ -869,6 +875,23 @@ void registerContextShortcuts(UI ui) {
 				{ invokeKey(SDLK_DELETE, 0); });
 
 	version(OSX) {
+		// Keep physical Home/End keys as aliases to the Mac primary chords.
+		sm.bindAlias("seq_song_start", SDLK_HOME, KMOD_SHIFT);
+		sm.bindAlias("seq_song_end", SDLK_END, KMOD_SHIFT);
+		sm.bindAlias("seq_jump_mark", SDLK_HOME, KMOD_CTRL);
+		sm.bindAlias("note_seq_start", SDLK_HOME, 0);
+		sm.bindAlias("note_seq_end", SDLK_END, 0);
+		sm.bindAlias("table_row_top", SDLK_HOME, KMOD_SHIFT);
+		sm.bindAlias("table_row_bottom", SDLK_END, KMOD_SHIFT);
+		sm.bindAlias("se_fit", SDLK_HOME, 0);
+		sm.bindAlias("se_selection", SDLK_END, 0);
+		// Other editor views previously handled bare Home/End only in widgets.
+		foreach(ctx; [C.sequencer, C.instrumentTable, C.subtable]) {
+			sm.register(ctx ~ "_home", ctx, "Navigation", "Move to beginning",
+					homeKey, homeEndMods, invokeKeyAction(ui, SDLK_HOME, 0));
+			sm.register(ctx ~ "_end", ctx, "Navigation", "Move to end",
+					endKey, homeEndMods, invokeKeyAction(ui, SDLK_END, 0));
+		}
 		// Plain note-column Insert was previously handled only by the widget.
 		sm.register("note_insert_fixed", C.noteColumn, "Note column",
 				"Insert a row without expanding the sequence", insertKey, insertMods,

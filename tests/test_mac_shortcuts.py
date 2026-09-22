@@ -55,3 +55,30 @@ class MacShortcutTests(unittest.TestCase):
             self.assertIn("action=se_add invoked=true", session.run("keyprobe:Alt-RET"))
             session.run("key:Ctrl-z")
             self.assertEqual(session.run("sounddump").split("checkpoint:")[0], before)
+
+    def test_home_end_chords_preserve_modifiers_and_context(self):
+        cases = (
+            ("F6", "Gui-UP", "note_seq_start"),
+            ("F6", "Gui-DOWN", "note_seq_end"),
+            ("F6", "Shift-Gui-UP", "seq_song_start"),
+            ("F6", "Shift-Gui-DOWN", "seq_song_end"),
+            ("F6", "Ctrl-Gui-UP", "seq_jump_mark"),
+            ("F5", "Gui-UP", "sequencer_home"),
+            ("F5", "Gui-DOWN", "sequencer_end"),
+            ("Alt-4", "Gui-UP", "instrument_table_home"),
+            ("Alt-4", "Gui-DOWN", "instrument_table_end"),
+            ("Alt-5", "Gui-UP", "subtable_home"),
+            ("Alt-5", "Gui-DOWN", "subtable_end"),
+            ("Alt-5", "Shift-Gui-UP", "table_row_top"),
+            ("Alt-5", "Shift-Gui-DOWN", "table_row_bottom"),
+            ("F6", "HOME", "note_seq_start"),
+            ("F6", "END", "note_seq_end"),
+        )
+        for focus, chord, action in cases:
+            with self.subTest(focus=focus, chord=chord):
+                with CCDriverSession("key:ESC", f"key:{focus}") as session:
+                    self.assertIn(f"action={action} invoked=true",
+                                  session.run(f"keyprobe:{chord}"))
+        with _master_session() as session:
+            for chord, action in (("Gui-UP", "se_fit"), ("Gui-DOWN", "se_selection")):
+                self.assertIn(f"action={action}", session.run(f"keyprobe:{chord}"))
