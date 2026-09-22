@@ -17,13 +17,25 @@ import std.algorithm : min, max;
 /// the track column or vice versa.
 enum ClipKind { none, note, track, instrument, wave, pulse, filter, command, chord }
 
+// All editor grids share one active selection. A generation avoids retaining
+// pointers to views, which are replaced when loading songs or rebuilding the UI.
+private ulong activeSelectionGeneration;
+
 /**
  * A rectangular selection: an anchor cell plus the current end cell. The
  * rectangle is the inclusive span between them in both axes. `active` marks
  * whether anything is selected; a plain click clears it.
  */
 struct Selection {
-	bool active;
+	private ulong activation;
+
+	@property bool active() const {
+		return activation != 0 && activation == activeSelectionGeneration;
+	}
+
+	@property void active(bool enabled) {
+		activation = enabled ? ++activeSelectionGeneration : 0;
+	}
 	int anchorCol, anchorRow;
 	int endCol, endRow;
 

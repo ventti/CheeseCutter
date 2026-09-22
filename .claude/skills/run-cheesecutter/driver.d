@@ -244,6 +244,9 @@ private bool processCommand(string arg) {
 			song.save(val);
 			stderr.writefln("saved %s", val);
 			break;
+		case "selectionstate":
+			stderr.writefln("pattern selection: %s", mainui.toplevel.sequencer.hasSelection());
+			break;
 		case "tablebytes": {
 			// Read-only table geometry and row-major bytes for selection regressions.
 			ubyte[] bytes;

@@ -120,3 +120,38 @@ class TableSelectionTests(unittest.TestCase):
                 session.run(f'release:{x+3},{y+4}')
                 session.run(f'click:{x+3},{y+8}')
                 self.assertEqual(cells(session, x, y+3, width), before)
+
+    def test_only_one_editor_selection_can_be_active(self):
+        with CCDriverSession('key:ESC') as s:
+            def bg(x, y):
+                return int(re.search(r'bg=(\d+)', s.run(f'cellstate:{x},{y}')).group(1))
+
+            previous = None
+            for kind in KINDS:
+                (x, y, _, _), _ = table(s, kind)
+                s.run(f'drag:{x+3},{y+1},{x+3},{y+3}')
+                self.assertNotEqual(bg(x+1, y+2), 0, kind)
+                if previous:
+                    self.assertEqual(bg(*previous), 0, kind)
+                previous = (x+1, y+2)
+            # Keyboard-created pattern/track selections also replace tables.
+            for focus in ('F6', 'F5'):
+                s.run(f'key:{focus}')
+                s.run('key:Ctrl-b')
+                self.assertIn('pattern selection: true', s.run('selectionstate'))
+                self.assertEqual(bg(*previous), 0)
+                (x, y, _, _), _ = table(s, 'wave')
+                s.run(f'drag:{x+3},{y+1},{x+3},{y+3}')
+                self.assertIn('pattern selection: false', s.run('selectionstate'))
+                previous = (x+1, y+2)
+                # Clearing the new selection must not resurrect the old one.
+                s.run(f'click:{x+3},{y+5}')
+                s.run(f'key:{focus}')
+                self.assertIn('pattern selection: false', s.run('selectionstate'))
+            # Hidden pattern selections must not reappear when changing views.
+            s.run('key:F6')
+            s.run('key:Ctrl-b')
+            s.run('key:F5')
+            s.run('key:Ctrl-b')
+            s.run('key:F6')
+            self.assertIn('pattern selection: false', s.run('selectionstate'))

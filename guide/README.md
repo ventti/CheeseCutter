@@ -505,7 +505,8 @@ offsets and derived chord name (rooted on the row's note) are shown, e.g.
 
 In the Instrument, Wave, Pulse, Filter, Command and Chord tables, **left-drag**
 to select whole rows. **Shift-click** extends from the last clicked row; a plain
-click clears the selection. Use **Ctrl-C / Ctrl-X / Ctrl-V** to copy, cut or paste.
+click clears the selection. Starting a selection clears the previous selection
+in any pattern, track or other table. Use **Ctrl-C / Ctrl-X / Ctrl-V** to copy, cut or paste.
 Cut blanks the selected bytes without shifting rows. Paste overwrites from the
 cursor, or clips to the selected rows, and stops at the end of the table.
 The clipboard can only be pasted into the same table type. Instrument row
