@@ -10,6 +10,7 @@ from contextlib import contextmanager
 import math
 import re
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -2161,6 +2162,10 @@ class SoundEditorMasterFoundationTests(unittest.TestCase):
         """R59: native Alt-H status help identifies every equivalent control."""
         with _master_session() as session:
             def assert_hover(action: str, expected: str) -> None:
+                if sys.platform == "darwin":
+                    expected = expected.replace(" / Home", " / Cmd-Up / Home")
+                    expected = expected.replace(" / End", " / Cmd-Down / End")
+                    expected = expected.replace(" / Insert", " / Alt-Return / Insert")
                 x0, x1, y, _ = _control_bounds(session, action)
                 session.run(f"hover:{(x0 + x1 - 1) // 2},{y}")
                 row = _screen_row(session.run("screendump"), 2)
