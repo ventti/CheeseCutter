@@ -87,7 +87,7 @@ class SidRoundTrip(unittest.TestCase):
         return out
 
     def trace(self, sid: Path, subtune: int = 1) -> list[str]:
-        out = sid.with_suffix(f".{subtune}.trace")
+        out = self.tmp / f"{sid.stem}.{subtune}.trace"   # never next to a fixture
         r = ct2util("sidtrace", "-q", "-s", str(subtune), "-f", FRAMES, str(sid), "-o", str(out))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         return out.read_text().split()
