@@ -1,7 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
 
-Modal dialogs — query / confirm / string-entry and the help viewer (QueryDialog family).
+Modal dialogs — query / confirm / string-entry / message and the help viewer (QueryDialog family).
 */
 
 module ui.dialogs;
@@ -935,6 +935,42 @@ class ModImportFileDialog : FileSelectorDialog {
 	override protected int returnPressed(CB cb) {
 		super.returnPressed(cb);   // navigate, or fire cb (which opens the options dialog)
 		return OK;                 // never let the dispatcher close the swapped-in dialog
+	}
+}
+
+// The .sid file picker. A failed conversion swaps in a MessageDialog from
+// the callback; returning OK then keeps the dispatcher from closing it.
+class SidImportFileDialog : FileSelectorDialog {
+	this(Rectangle a, CB cb) {
+		super(a, "Import CheeseCutter .sid", cb, [".sid"]);
+	}
+
+	override protected int returnPressed(CB cb) {
+		int r = super.returnPressed(cb);
+		return mainui.isActiveDialog(this) ? r : OK;
+	}
+}
+
+// A one-line notice that any key closes.
+class MessageDialog : QueryDialogBase!int {
+	this(string message) {
+		super(message ~ "  (press any key)", (int) {});
+		input = new InputSingleChar(byt, " ", 0);
+	}
+
+	override int keypress(Keyinfo key) {
+		if(isModifierOnly(key)) return OK;
+		return RETURN;
+	}
+
+	private static bool isModifierOnly(Keyinfo key) {
+		switch(key.raw) {
+		case SDLK_LSHIFT, SDLK_RSHIFT, SDLK_LCTRL, SDLK_RCTRL, SDLK_LALT, SDLK_RALT,
+			SDLK_LGUI, SDLK_RGUI, SDLK_CAPSLOCK:
+			return true;
+		default:
+			return false;
+		}
 	}
 }
 

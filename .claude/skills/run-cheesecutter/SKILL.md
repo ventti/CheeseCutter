@@ -59,6 +59,8 @@ order, repeatable):
   it is applied before the layout is built.
 - `load:<file.ct>` — load a song
 - `modimport:<file.mod>` — import a ProTracker module (File → Import .mod)
+- `sidimport:<file.sid>` — import a CheeseCutter .sid (File → Import .sid); a non-CC SID opens the "not possible" message dialog
+- `open:<file>` — open a file by type, like the command line / command palette (`.sid` imports, anything else loads)
 - `save:<file.ct>` — write the current song as a .ct (round-trip test helper)
 - `key:<spec>` — inject a keypress; `spec = [Ctrl-][Alt-][Shift-]NAME`, where
   NAME is `F1`..`F12`, `ESC`, `RET`, `SPACE`, `TAB`, `UP`/`DOWN`/`LEFT`/`RIGHT`,

@@ -19,6 +19,7 @@ import main;
 import ct.base;
 import ct.build;
 import ct.modimport;
+import ct.sidimport;
 import com.session;
 import ct.purge;
 import ui.help;
@@ -62,7 +63,8 @@ final class UI {
 	package {
 		int vismode = VisMode.Regs;
 		AboutDialog aboutdialog;
-		FileSelectorDialog loaddialog, savedialog, exportsavedialog, modimportdialog;
+		FileSelectorDialog loaddialog, savedialog, exportsavedialog, modimportdialog,
+			sidimportdialog;
 		ModImportOptionsDialog modImportOptionsDialog;
 		ModModule pendingMod;        // parsed module, awaiting the options dialog
 		string pendingModFile;       // its path (for the post-import status/name)
@@ -122,6 +124,8 @@ final class UI {
 												  dialog_width), &saveExportCallback, "Export song");
 		modimportdialog = new ModImportFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
 												  dialog_width), &modImportCallback);
+		sidimportdialog = new SidImportFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
+												  dialog_width), &sidImportCallback);
 		modImportOptionsDialog = new ModImportOptionsDialog(&modImportConfirm);
 		exportDialog = new ExportOptionsDialog(&exportConfirm, false);
 		renderDialog = new ExportOptionsDialog(&exportConfirm, true);
@@ -760,12 +764,66 @@ final class UI {
 		// Don't sync the .ct dialogs to the .mod's directory — the .mod browser
 		// keeps its own last directory, separate from the .ct load/save dialogs.
 		finishLoad(pendingModFile, true, "ProTracker module imported.", false);
+		forgetSourceFilename(pendingModFile);
+	}
 
+	// Import a CheeseCutter-made .sid (ct.sidimport). The song comes back
+	// purged and without instrument names, so like a .mod import it is an
+	// unsaved song; a SID from another tracker gets a "cannot convert" notice.
+	void sidImportCallback(string s) {
+		stop();
+		if(std.file.exists(s) == 0 || std.file.isDir(s)) {
+			statusline.display("File not found or not accessible: " ~ s);
+			return;
+		}
+		SidSong recovered;
+		try {
+			recovered = ct.sidimport.importSid(cast(ubyte[])std.file.read(s));
+			// Build it in a fresh song, then copy it in: importData reinstalls
+			// the bundled player and keeps every view bound to the live song.
+			Song fresh = new Song();
+			fresh.importSidSong(recovered);
+			song.importData(fresh);
+			song.message[] = ' ';   // importData keeps the old song's message
+		}
+		catch(NotCheeseCutterSid e) {
+			statusline.display("Cannot convert " ~ s ~ ": " ~ e.msg);
+			activateDialog(new MessageDialog(
+				"Not a CheeseCutter 2.x SID - conversion is not possible."));
+			return;
+		}
+		catch(Exception e) {
+			statusline.display("Error: " ~ e.msg);
+			return;
+		}
+		string msg = format("SID imported (player %s)", recovered.playerGeneration);
+		if(recovered.warnings.length)
+			msg ~= format(", %d warning(s): %s", recovered.warnings.length, recovered.warnings[0]);
+		finishLoad(s, true, msg ~ ".", false);
+		forgetSourceFilename(s);
+	}
+
+	// Open a file by type: a .sid is imported, anything else loads as a song.
+	void openFile(string s) {
+		import std.path : extension;
+		if(extension(s).toLower == ".sid")
+			sidImportCallback(s);
+		else
+			loadCallback(s);
+	}
+
+	// After an import the song matches no .ct on disk: clear the save name so
+	// a later save never clobbers the source file, and suggest <source>.ct.
+	private void forgetSourceFilename(string source) {
 		import std.path : baseName, stripExtension;
 		state.filename = "";
-		string suggest = stripExtension(baseName(pendingModFile.strip())) ~ ".ct";
+		string suggest = stripExtension(baseName(source.strip())) ~ ".ct";
 		foreach(d; [loaddialog, savedialog, exportsavedialog])
 			d.setFilename(suggest);
+	}
+
+	bool isActiveDialog(Window w) {
+		return dialog is w;
 	}
 
 	// Shared tail of a load/import: refresh every view and dialog, resync the

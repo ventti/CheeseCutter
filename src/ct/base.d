@@ -8,6 +8,7 @@ import com.cpu;
 import com.util;
 import ct.purge;
 import ct.modimport;
+import ct.sidimport;
 import std.string;
 import std.file;
 import std.zlib;
@@ -1911,6 +1912,64 @@ class Song {
 	  // TODO highlight, highlightoffset
 	  generateChordIndex();
 	  subtunes.activate(0);
+	}
+
+	// Replace this song's data with a song recovered from a CheeseCutter .sid
+	// (ct.sidimport). The player stays the bundled one; instrument names and
+	// table descriptions are not in a .sid and are left blank.
+	void importSidSong(SidSong s) {
+		tables["wave"].data[] = s.wave[];
+		tables["instr"].data[0 .. s.instr.length] = s.instr[];
+		tables["cmd"].data[] = s.cmd[];
+		tables["pulse"].data[] = s.pulse[];
+		if(s.filter[] != (ubyte[256]).init[])   // else keep the default no-op row
+			tables["filter"].data[] = s.filter[];
+		tables["chord"].data[] = s.chord[];
+		foreach(idx, ref seq; seqs) {
+			if(idx < s.sequences.length)
+				seq.data.raw[] = s.sequences[idx][];
+			else
+				seq.clear();
+			seq.refresh();
+		}
+		subtunes.clearAll();
+		foreach(sub, voices; s.orderlists)
+			foreach(v, list; voices)
+				subtunes.subtunes[sub][v][] = list[];
+		subtunes.syncFromBuffer();
+		foreach(ref label; insLabels) label[] = ' ';
+		title[] = s.title[];
+		author[] = s.author[];
+		release[] = s.release[];
+		message[] = ' ';
+		multiplier = s.multiplier;
+		sidModel = s.sidModel;
+		songspeeds[] = 5;
+		foreach(i, spd; s.speeds) songspeeds[i] = spd;
+		generateChordIndex();
+		remapChordCommands(s.chordIndex);
+		subtunes.activate(0);
+		speed = songspeeds[0];
+	}
+
+	// Sequences name chords by index ($80+n). The exported chord index may be
+	// ordered differently from the one generateChordIndex() derives, so point
+	// each chord command at the regenerated entry with the same table offset.
+	private void remapChordCommands(const ubyte[] exportedIndex) {
+		ubyte[32] map;
+		foreach(k; 0 .. 32) {
+			map[k] = cast(ubyte)k;
+			foreach(j; 0 .. 32) {
+				if(chordIndexTable[j] == exportedIndex[k]) { map[k] = cast(ubyte)j; break; }
+			}
+		}
+		foreach(seq; seqs) {
+			for(int r = 0; r < seq.rows; r++) {
+				ubyte[] row = seq.data.raw[r * 4 .. r * 4 + 4];
+				if(row[3] >= 0x80 && row[3] <= 0x9f)
+					row[3] = cast(ubyte)(0x80 | map[row[3] & 0x1f]);
+			}
+		}
 	}
 
 	// Import a parsed ProTracker module (ct.modimport) into this song. Replaces

@@ -53,6 +53,7 @@ Export or transform songs with `ct2util`:
 ct2util sid mytune.ct -o mytune.sid
 ct2util prg mytune.ct -o mytune.prg
 ct2util dump mytune.ct -o mytune.asm
+ct2util sid2ct oldtune.sid -o oldtune.ct
 ct2util import base.ct other.ct -o merged.ct
 ct2util init player.bin -o new.ct
 ```
@@ -138,6 +139,7 @@ bar it flips the highlighted on/off item), but it works fine inside a query
 | <kbd>Alt</kbd>-<kbd>Return</kbd> | Toggle fullscreen |
 | <kbd>F9</kbd> | Load song |
 | <kbd>Shift</kbd>-<kbd>F9</kbd> | Import ProTracker module (`.mod`) |
+| <kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>F9</kbd> | Import a CheeseCutter `.sid` back into a song |
 | <kbd>F10</kbd> | Save song |
 | <kbd>Shift</kbd>-<kbd>F10</kbd> | Export song (Full player `.prg` / Optimized `.prg` / PSID; options dialog) |
 | <kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>F10</kbd> | Render audio (`.wav` / `.flac`; duration, normalize, bit depth, rate) |
@@ -173,7 +175,7 @@ In the load (<kbd>F9</kbd>), save (<kbd>F10</kbd>) and `.prg` export dialogs:
   (starred, in yellow) and selecting one jumps straight to it. Repeat to remove.
   Up to 10 are kept and they persist across sessions.
 - **Separate directories**: the load/save (`.ct`) browsers share one remembered
-  directory; the `.mod` import, the song export, and the instrument load/save
+  directory; the `.mod` and `.sid` imports, the song export, and the instrument load/save
   browsers each remember their own.
 
 ## Importing ProTracker modules (.mod)
@@ -237,6 +239,45 @@ Importing does not touch the file on disk and leaves the song unnamed (with a
 `.ct` name suggested), so a later save never overwrites the source `.mod`. A
 module with more unique patterns than fit CheeseCutter's 128 sequence slots
 (roughly 21) is rejected with a message rather than importing partially.
+
+## Importing CheeseCutter .sid files
+
+**File → Import .sid...** (<kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>F9</kbd>) turns a
+`.sid` made with CheeseCutter 2.x back into an editable song, for when the `.ct` is
+gone. The picker lists folders and `.sid` files only. You can also give a `.sid`
+on the command line (`ccutter tune.sid`) or pick one in the command palette.
+
+It works on SIDs from CheeseCutter's 4.x player family (4.00 to today's 4.07),
+wherever they were relocated, including multispeed songs. A SID from any other
+tracker gets a **"Not a CheeseCutter 2.x SID - conversion is not possible."**
+notice (any key closes it); the status line says why. SIDs from the 2011-era 3.x
+player are out of scope and untested.
+
+The conversion is best effort. An exported SID only holds what the player needs,
+so:
+
+- **Instrument names and table descriptions are gone.** Instruments show as
+  "No description".
+- **The song comes back purged.** Unused instruments, sequences and table rows
+  were dropped at export, and what's left is renumbered. Identical instruments
+  may have been merged.
+- **Rows are normalised.** The player stores a note plus a duration, so an
+  instrument number only appears where it changes, and a rest row that held
+  nothing but a tie flag comes back as a plain empty row.
+- **The song plays the same.** Title, author, release, SID model, multiplier,
+  subtunes and their speeds are restored, and re-exporting the song gives the
+  same SID register output as the original export. Songs from players before
+  4.01 keep their hard-restart release: the old global value is copied into each
+  instrument's hard-restart SR byte.
+- **Very old players may sound slightly different.** A few 2012-era player
+  builds behave differently from today's player. Their songs convert, but they
+  play the way the editor's own old-`.ct` upgrade would.
+
+Like a `.mod` import, the result is an unsaved song with a `.ct` name suggested,
+so saving never touches the `.sid`.
+
+From the shell, `ct2util sid2ct tune.sid -o tune.ct` does the same conversion
+and prints the detected player generation.
 
 ## Playback
 

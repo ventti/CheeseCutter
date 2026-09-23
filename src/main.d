@@ -631,7 +631,7 @@ void loadFile(string filename){
 			dir = filename[0 .. sep];
 		else dir = ".";
 		chdir(dir);
-		mainui.loadCallback(fn);
+		mainui.openFile(fn);
 		mainui.update();
 	}
 }

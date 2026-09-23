@@ -25,6 +25,15 @@ Copy data from another song without overwriting the player
 .TP
 init
 Create a fresh .ct from player binary
+.TP
+sid2ct
+Convert a CheeseCutter 4.x .sid back to a .ct song (best effort: the song comes
+back purged, without instrument names). Prints the detected player generation;
+exits non\-zero for a SID that was not made with CheeseCutter.
+.TP
+sidtrace
+Print the 25 SID registers (hex) after each play call of a .sid, one line per
+call. Two traces are equal when the songs drive the SID identically.
 .SS "General options:"
 .TP
 \fB\-o\fR <outfile>
@@ -45,6 +54,13 @@ Relocate zero page (valid range 2\-)
 .TP
 \fB\-q\fR
 Don't output information
+.SS "sidtrace options:"
+.TP
+\fB\-s\fR <num>
+Subtune to trace (1\-32, default 1)
+.TP
+\fB\-f\fR <num>
+Number of play calls to trace (default 3000)
 .PP
 Prefix value options with '0x' or '$' to indicate a hexadecimal value.
 .SH "SEE ALSO"

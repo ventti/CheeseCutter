@@ -146,6 +146,11 @@ void registerShortcuts(UI ui) {
 		activateDialog(modimportdialog);   // keeps its own last directory (separate from .ct)
 	}, "Import .mod...");
 
+	sm.register("import_sid", Ctx.global, "File",
+				"Import a CheeseCutter .sid back into an editable song (best effort: purged data, no instrument names)", SDLK_F9, KMOD_CTRL | KMOD_SHIFT, {
+		activateDialog(sidimportdialog);   // keeps its own last directory (separate from .ct)
+	}, "Import .sid...");
+
 	sm.register("export_song", Ctx.global, "File",
 				"Export song: Full player .prg / Optimized .prg / PSID (options dialog)", SDLK_F10, KMOD_SHIFT, {
 		activateDialog(exportDialog);

@@ -63,7 +63,7 @@ ccdriver: $(DRIVER) $(C64OBJS) $(filter-out src/main.o,$(OBJS)) $(CXX_OBJS) $(C_
 	$(CC) $(DLINK) -Wl,$(LDFLAGS) -o $@ $(filter-out src/main.o,$(OBJS)) $(DRIVER:.d=.o) $(CXX_OBJS) $(C_OBJS) $(LIBS) $(FRAMEWORKS)
 
 .PHONY: test-sound-editor
-test-sound-editor: ccdriver
+test-sound-editor: ccdriver ct2util
 	$(PYTHON) -m unittest discover -v -s tests
 
 # --- Layer-5 sanitizer build (see .claude/skills/sdl2-ui-debug-qa) ------------

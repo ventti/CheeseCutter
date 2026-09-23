@@ -255,6 +255,16 @@ private bool processCommand(string arg) {
 			mainui.modImportCallback(val);
 			stderr.writefln("modimport %s", val);
 			break;
+		case "open":
+			// open:<file> — open by type like the command line / palette (.sid imports).
+			mainui.openFile(val);
+			stderr.writefln("open %s", val);
+			break;
+		case "sidimport":
+			// sidimport:<file.sid> — import a CheeseCutter .sid (File-menu action).
+			mainui.sidImportCallback(val);
+			stderr.writefln("sidimport %s", val);
+			break;
 		case "save":
 			// save:<file.ct> — write the current song as a .ct (round-trip test).
 			song.save(val);

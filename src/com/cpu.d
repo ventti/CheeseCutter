@@ -187,6 +187,12 @@ public:
 	Regs regs;
 
 	this(ubyte[] m) { reset(); memory = m; }
+
+	// Byte length (opcode + operand) of the instruction starting with `opcode`.
+	// Undocumented opcodes decode as 1-byte BRKs, as in execution.
+	static int instructionLength(ubyte opcode) {
+		return 1 + OPSIZE[OPTAB[opcode].am];
+	}
 	void reset() {
 		regs.a = regs.x = regs.y = 0;
 		regs.sp = 255;

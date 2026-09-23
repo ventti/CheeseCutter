@@ -2,7 +2,7 @@
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
 
 Command palette: a VS-Code-style "> " prompt that searches every command
-reachable from the current focus plus the .ct/.ct2 songs in the current
+reachable from the current focus plus the .ct/.ct2 songs and .sid files in the current
 directory, case-insensitively, by name/description or keyboard shortcut (typing
 e.g. "ctrl", "F2", "ctrl-p" or "p" surfaces commands by their shortcut).
 
@@ -255,8 +255,8 @@ final class CommandPalette {
 									formatShortcut(def.primary), def.order);
 			}
 		}
-		// The .ct/.ct2 songs in the current directory (= the load/save
-		// dialogs' directory); selecting one loads it.
+		// The .ct/.ct2 songs and .sid files in the current directory (= the
+		// load/save dialogs' directory); selecting one loads (or imports) it.
 		int forder = 0;
 		try {
 			foreach(entry; dirEntries(getcwd(), SpanMode.shallow)) {
@@ -264,7 +264,7 @@ final class CommandPalette {
 				if(name.length == 0 || name[0] == '.' || name[0] == '#')
 					continue;
 				string ext = extension(name).toLower;
-				if(ext != ".ct" && ext != ".ct2")
+				if(ext != ".ct" && ext != ".ct2" && ext != ".sid")
 					continue;
 				try {
 					if(entry.name.isDir()) continue;
@@ -354,7 +354,7 @@ final class CommandPalette {
 		// and the save-under must be restored first (same as the menu).
 		close();
 		if(e.isFile) {
-			mainUi.loadCallback(e.label);                // file is in getcwd()
+			mainUi.openFile(e.label);                    // file is in getcwd(); .sid imports
 		}
 		else {
 			auto def = sm.getAction(e.actionId);

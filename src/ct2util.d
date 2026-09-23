@@ -1,7 +1,7 @@
 /*
 CheeseCutter v2 (C) Abaddon. Licensed under GNU GPL.
 
-ct2util CLI — compiles/optimizes a .ct song into .prg or .sid, sharing ct.build/ct.purge with the editor.
+ct2util CLI — compiles/optimizes a .ct song into .prg or .sid (sharing ct.build/ct.purge with the editor) and converts CheeseCutter .sid files back to .ct.
 */
 
 import com.cpu;
@@ -10,13 +10,15 @@ import ct.base;
 import ct.purge;
 import ct.dump;
 import ct.build;
+import ct.sidimport;
 import std.stdio;
 import std.string;
 import std.conv;
 import std.file;
+import std.array : appender;
 
-enum Command { None, ExportPRG, ExportSID, Dump, Import, Init }
-const string[] exts = [ "", "prg", "sid", "s", "ct", "ct" ];
+enum Command { None, ExportPRG, ExportSID, Dump, Import, Init, SidToCt, SidTrace }
+const string[] exts = [ "", "prg", "sid", "s", "ct", "ct", "ct", "trace" ];
 
 bool verbose = true;
 bool noPurge;
@@ -56,6 +58,7 @@ int main(string[] args) {
 
 	// these two use PSID ranges (1..32)
 	int defaultTune = 1, singleSubtune = -1;
+	int traceFrames = 3000;
 	
 	bool outfnDefined = false, infnDefined = false;
 	int command;
@@ -78,6 +81,8 @@ int main(string[] args) {
 		writefln("  dump          Dump song data to assembler source (BETA)");
 		writefln("  import        Copy data from another song without overwriting the player");
 		writefln("  init          Create a fresh .ct from player binary");
+		writefln("  sid2ct        Convert a CheeseCutter 4.x .sid back to a .ct song (best effort)");
+		writefln("  sidtrace      Print the SID registers after each play call of a .sid");
 		writefln("\nGeneral options:");
 		writefln("  -o <outfile>  Set output filename (by default gathered from input filename)");
 		writefln("\nExport options:");
@@ -89,6 +94,9 @@ int main(string[] args) {
 		writefln("  -s <num>      Export single subtune (1-" ~ to!string(ct.base.SUBTUNE_MAX) ~ ") (disables -d)");
 		writefln("  -zp <num>     Relocate zero page (valid range 2-$fe)");
 		writefln("  -q            Don't output information");
+		writefln("\nsidtrace options:");
+		writefln("  -s <num>      Subtune to trace (1-" ~ to!string(ct.base.SUBTUNE_MAX) ~ ", default 1)");
+		writefln("  -f <num>      Number of play calls to trace (default 3000)");
 		writefln("\nPrefix value options with '0x' or '$' to indicate a hexadecimal value.");
 	}
 
@@ -113,6 +121,12 @@ int main(string[] args) {
 			break;
 		case "init":
 			command = Command.Init;
+			break;
+		case "sid2ct":
+			command = Command.SidToCt;
+			break;
+		case "sidtrace":
+			command = Command.SidTrace;
 			break;
 		default:
 			throw new UserException(format("command '%s' not recognized.",args[1]));
@@ -142,13 +156,21 @@ int main(string[] args) {
 					break;
 				case "-s":
 					if(command != Command.ExportSID &&
-					   command != Command.ExportPRG)
+					   command != Command.ExportPRG &&
+					   command != Command.SidTrace)
 						throw new UserException("Option available only with exporting commands.");
 					//parseList(speeds, nextArg());
 					int value = str2Value2(nextArg());
 					if(value < 1 || value > ct.base.SUBTUNE_MAX)
 						throw new UserException(format("Valid range for subtunes is 1 - %d.", ct.base.SUBTUNE_MAX));
 					singleSubtune = value;
+					break;
+				case "-f":
+					if(command != Command.SidTrace)
+						throw new UserException("Option available only with sidtrace.");
+					traceFrames = str2Value2(nextArg());
+					if(traceFrames < 1)
+						throw new UserException("-f: frame count must be positive");
 					break;
 				case "-c":
 					if(command != Command.ExportSID &&
@@ -278,6 +300,26 @@ int main(string[] args) {
 			insong = new Song(cast(ubyte[])std.file.read(infn));
 			insong.save(outfn);
 			break;
+		case Command.SidToCt:
+			SidSong recovered;
+			try {
+				recovered = importSid(cast(ubyte[])std.file.read(infn));
+			}
+			catch(NotCheeseCutterSid e) {
+				writeln("error: not a CheeseCutter 4.x SID, cannot convert (", e.msg, ")");
+				return -1;
+			}
+			explain("Player: CheeseCutter " ~ recovered.playerGeneration);
+			foreach(w; recovered.warnings)
+				explain("warning: " ~ w);
+			insong = new Song;
+			insong.importSidSong(recovered);
+			insong.save(outfn);
+			break;
+		case Command.SidTrace:
+			std.file.write(outfn, traceSid(cast(ubyte[])std.file.read(infn),
+										   singleSubtune < 0 ? 1 : singleSubtune, traceFrames));
+			break;
 		default:
 			assert(0);
 		}
@@ -297,4 +339,24 @@ int main(string[] args) {
 		explain("Done.");
 	}
 	return 0;
+}
+
+// One line per play call: the 25 SID registers as hex, after that call. A .sid
+// is compared against another by diffing these, so the player that produced
+// the file does not matter, only what it writes.
+string traceSid(ubyte[] file, int subtune, int frames) {
+	PsidFile p = parsePsid(file);
+	ubyte[] mem = p.image.dup;
+	CPU cpu = new CPU(mem);
+	cpu.regs.a = cast(ubyte)(subtune - 1);
+	cpu.execute(cast(ushort)p.initAddress);
+	auto app = appender!string();
+	foreach(frame; 0 .. frames) {
+		cpu.reset();
+		cpu.execute(cast(ushort)p.playAddress);
+		foreach(b; mem[0xd400 .. 0xd419])
+			app.put(format("%02x", b));
+		app.put("\n");
+	}
+	return app.data;
 }

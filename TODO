@@ -35,3 +35,5 @@ Sound Editor regressions (verified by tests/test_sound_editor_pending_bugs.py):
 (g) Keep every ADSR handle reachable when zooming out, including high multispeed.
 Status: DONE
 ---
+Import .sid: support SIDs made with the CheeseCutter 3.x player (CC03.x, e.g. the player of tunes.old/abaddon-kalmankone.ct). Untested today (no reference file); needs 3.x reference SIDs and anchors for its table-reading code (doc/adr/0012).
+Status: Draft

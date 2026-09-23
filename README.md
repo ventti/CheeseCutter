@@ -35,6 +35,11 @@ CheeseCutter 2.9 by Abaddon.
   SID instruments from there. Sampled audio, volume, panning and Amiga-filter
   effects can't map to the SID and are not imported; the pitch effects are
   approximate.
+- Import a CheeseCutter-made `.sid` back into an editable song (**File → Import
+  .sid...**, `Ctrl-Shift-F9`, or `ccutter tune.sid`; also `ct2util sid2ct`). This
+  works on SIDs from the 4.x players (4.00 to 4.07), relocated or multispeed.
+  Best effort: the song comes back purged and without instrument names, but it
+  plays back the same. Other SIDs get a "conversion is not possible" notice.
 - Instrument color tags (`$X` / `$XY`) in instrument descriptions.
 - Read-only **filter track** column in the pattern view (between voice 3 and the
   instrument table): per-row SID filter registers (cutoff, resonance, mode and a

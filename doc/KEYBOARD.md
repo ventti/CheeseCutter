@@ -37,6 +37,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 |---|---|
 | `Ctrl-N` | Clear the song and start a new project |
 | `Shift-F10` | Export song: Full player .prg / Optimized .prg / PSID (options dialog) |
+| `Ctrl-Shift-F9` | Import a CheeseCutter .sid back into an editable song (best effort: purged data, no instrument names) |
 | `Shift-F9` | Import a ProTracker module (.mod): pick the file, then choose channels and which effects to translate |
 | `F9` / `Ctrl-O` | Open the Load song dialog |
 | `F10` | Open the Save song dialog |

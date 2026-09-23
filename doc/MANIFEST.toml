@@ -215,6 +215,10 @@ category = "decision"
 path = "doc/adr/0011-replace-foreground-masks-on-every-ui-pass.md"
 category = "decision"
 
+[[doc]]
+path = "doc/adr/0012-sid-import-by-player-code-anchors.md"
+category = "decision"
+
 # ---- agent: instructions consumed by AI coding agents ----
 
 [[doc]]
