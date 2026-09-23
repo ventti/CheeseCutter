@@ -60,6 +60,8 @@ order, repeatable):
 - `load:<file.ct>` — load a song
 - `modimport:<file.mod>` — import a ProTracker module (File → Import .mod)
 - `sidimport:<file.sid>` — import a CheeseCutter .sid (File → Import .sid); a non-CC SID opens the "not possible" message dialog
+- `winsize:<W>,<H>` — re-lay the UI out as if the window became W×H pixels (the fullscreen-toggle path); prints the new grid size
+- `seqpos` — print voice 1's cursor position (track/sequence offset, on-screen pointer) and the grid size
 - `open:<file>` — open a file by type, like the command line / command palette (`.sid` imports, anything else loads)
 - `save:<file.ct>` — write the current song as a .ct (round-trip test helper)
 - `key:<spec>` — inject a keypress; `spec = [Ctrl-][Alt-][Shift-]NAME`, where
@@ -86,8 +88,9 @@ order, repeatable):
   is **drawn** at, the mouse pixel, and their `delta`. `delta` within half a semitone
   step means the dragged block is tracking the cursor.
 - `screen:<COLS>x<ROWS>` — startup flag: build the grid at this size instead of the
-  160x50 **minimum**. The real app autoscales to ~90% of the desktop (a 1440p display
-  gets ~92 rows), which makes graph bands ~3.6x taller. Use it whenever a bug could
+  160x50 **minimum**. The real app autoscales to ~90% of the usable screen area (no
+  menu bar/Dock; capped at 200x74 cells), and fullscreen re-lays out to fill the screen
+  (see `winsize:`), which makes graph bands up to ~3.6x taller. Use it whenever a bug could
   depend on band height rather than on the layout minimum — most of the suite's
   hardcoded cell rows (`CONTROL_ROW`, `FREQ_GRAPH_ROW`, `PLOT_WIDTH`, …) assume the
   minimum and will not line up at other sizes.

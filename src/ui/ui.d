@@ -101,7 +101,8 @@ final class UI {
 	// `dialog` field. Non-virtual method on a final class -> no vtable change.
 	@property bool dialogActive() const { return dialog !is null; }
 
-	this() {
+	// `showSplash` is false when fitToWindow() rebuilds the UI at a new size.
+	this(bool showSplash = true) {
 		sm = new ShortcutManager();
 		statusline = new Statusline(Rectangle(0, 2, 1));
 		toplevel = new Toplevel(this);
@@ -174,8 +175,10 @@ final class UI {
 
 		// Pop the splash on startup; it auto-dismisses after SPLASH_DURATION_MS
 		// (see timerEvent) and any key also clears it.
-		activateDialog(aboutdialog);
-		splashDeadlineMs = SDL_GetTicks() + SPLASH_DURATION_MS;
+		if(showSplash) {
+			activateDialog(aboutdialog);
+			splashDeadlineMs = SDL_GetTicks() + SPLASH_DURATION_MS;
+		}
 
 		update();
 	}
@@ -826,6 +829,46 @@ final class UI {
 		return dialog is w;
 	}
 
+	// What a size-change rebuild (fitToWindow) carries from the old UI to the
+	// new one. Song, undo history, cursor position (state.seqPos) and the other
+	// com.session state live outside the UI and survive on their own.
+	private static struct ViewState {
+		int activeWindow, vismode;
+		bool scopeVisible, soundEditor;
+	}
+
+	// Leaves the Sound Editor (noting that it was open) so the active window
+	// recorded is the tracker window underneath it.
+	private ViewState takeViewState() {
+		ViewState v;
+		v.soundEditor = toplevel.soundEditorActive;
+		if(v.soundEditor) toplevel.stopSoundEditor();
+		v.activeWindow = toplevel.activeWindowNum;
+		v.vismode = vismode;
+		v.scopeVisible = scopeVisible;
+		return v;
+	}
+
+	private FileSelectorDialog[] fileDialogs() {
+		return [loaddialog, savedialog, exportsavedialog, modimportdialog, sidimportdialog];
+	}
+
+	private void restoreViewState(ViewState v, UI old) {
+		foreach(i, d; fileDialogs()) {
+			auto from = old.fileDialogs()[i];
+			d.setDirectory(from.directory);
+			d.setFilename(from.filename);
+		}
+		// The dialogs repaint themselves when their directory is set, although
+		// they are not open: wipe the grid before the editor draws itself.
+		screen.clrscr();
+		toplevel.activateWindow(v.activeWindow);
+		vismode = v.vismode;
+		scopeVisible = v.scopeVisible;
+		refresh();
+		if(v.soundEditor) toplevel.startSoundEditor();
+	}
+
 	// Shared tail of a load/import: refresh every view and dialog, resync the
 	// audio backend and player variables, reset undo history and force a
 	// filter-track recompute. `doneMsg` (if non-empty) is shown on the status
@@ -956,4 +999,51 @@ final class UI {
 	static void activateInstrument(int ins) {
 		toplevel.activateInstrument(ins);
 	}
+}
+
+// Fit the character grid to a window of `pxW` x `pxH` pixels (a fullscreen
+// toggle or any other window-size change). The layout is computed once, in the
+// constructors, so a different grid size rebuilds the UI; the grid is drawn
+// 1:1 and centred when the window is larger than the largest layout.
+void fitToWindow(int pxW, int pxH) {
+	int cols, rows;
+	com.fb.gridForWindow(pxW, pxH, cols, rows);
+	if(cols == screen.width && rows == screen.height) {
+		video.placeGrid();
+		return;
+	}
+	import std.stdio : stderr;
+	stderr.writefln("fb: window %dx%d -> %dx%d cells (was %dx%d); re-laying out the UI.",
+		pxW, pxH, cols, rows, screen.width, screen.height);
+	UI old = mainui;
+	old.closeDialog();
+	auto view = old.takeViewState();
+	// Cursor rows are stored relative to an anchor that moves with the
+	// sequencer height, so carry them across as plain offsets.
+	int[3] seqRow, fplayRow;
+	foreach(v; 0 .. 3) {
+		seqRow[v] = state.seqPos[v].pointerOffset;
+		fplayRow[v] = state.fplayPos[v].pointerOffset;
+	}
+
+	// Re-anchor them for the new height before the sequencer is built, so it
+	// starts from a consistent position (the Sequencer ctor sets the same values).
+	int seqHeight = rows - 10;
+	seq.sequencer.anchor = seq.sequencer.tableTop = seqHeight / 2;
+	seq.sequencer.tableBot = -seqHeight / 2;
+	int inView(int row) {
+		import std.algorithm : clamp;
+		return clamp(row, seq.sequencer.tableBot, seq.sequencer.tableTop - 1);
+	}
+	foreach(v; 0 .. 3) {
+		state.seqPos[v].pointerOffset = inView(seqRow[v]);
+		state.fplayPos[v].pointerOffset = inView(fplayRow[v]);
+	}
+
+	screen = new Screen(cols, rows);
+	video.setScreen(screen);
+	seq.sequencer.initialHeight = seqHeight;
+	mainui = new UI(false);
+	mainui.restoreViewState(view, old);
+	mainui.update();
 }

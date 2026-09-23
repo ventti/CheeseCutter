@@ -48,8 +48,8 @@ version(Windows) {
 // Minimum / fixed-size-mode dimensions in characters. This is also the floor
 // applied to autoscale, so the window is never smaller than 160x50 chars
 // (1280x700 px at the 8x14 font).
-enum DEFAULT_COLUMNS = 160;  // minimum UI width in characters
-enum DEFAULT_ROWS = 50;      // minimum UI height in characters (40 seq + 10 overhead)
+enum DEFAULT_COLUMNS = com.fb.MIN_COLUMNS;  // minimum UI width in characters
+enum DEFAULT_ROWS = com.fb.MIN_ROWS;        // minimum UI height in characters (40 seq + 10 overhead)
 
 void initVideo(bool useFullscreen, bool useyuv, int seqHeight = 0, int uiWidthCols = 0, bool useAutoscale = false, out int actualSeqHeight) {
     int mx, my;
@@ -59,11 +59,16 @@ void initVideo(bool useFullscreen, bool useyuv, int seqHeight = 0, int uiWidthCo
 		throw new DisplayError("Couldn't initialize framebuffer.");
 	}
 
-    // Autoscale mode (the default): size to ~90% of the screen.
+    // Autoscale mode (the default): size to ~90% of the usable screen area —
+    // the part not covered by the macOS menu bar and Dock (or the Windows
+    // taskbar), minus the window's own title bar — so the whole editor is visible.
     if(useAutoscale) {
+        SDL_Rect usable;
         SDL_DisplayMode dm;
-        if(SDL_GetDesktopDisplayMode(0, &dm) == 0) {
-            // Use 90% of screen dimensions for comfortable windowed mode
+        if(SDL_GetDisplayUsableBounds(0, &usable) == 0) {
+            logicalCols = cast(int)(usable.w * 0.9) / FONT_X;
+            logicalRows = cast(int)((usable.h - com.fb.TITLE_BAR_ALLOWANCE) * 0.9) / FONT_Y;
+        } else if(SDL_GetDesktopDisplayMode(0, &dm) == 0) {
             logicalCols = cast(int)(dm.w * 0.9) / FONT_X;
             logicalRows = cast(int)(dm.h * 0.9) / FONT_Y;
         } else {
@@ -260,11 +265,14 @@ void mainloop(bool verbose) {
 					}
 				}
 				break;
-        //			case SDL_ACTIVEEVENT:
-				//break;
-        //case SDL_VIDEORESIZE:
-				//video.resizeEvent(evt.resize.w, evt.resize.h);
-				//break;
+			case SDL_WINDOWEVENT:
+				// Fullscreen on/off (async on macOS) arrives as a size change:
+				// re-lay the UI out for the new window (see ui.ui.fitToWindow).
+				if(evt.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+					ui.ui.fitToWindow(evt.window.data1, evt.window.data2);
+					mainui.update();
+				}
+				break;
         //case SDL_VIDEOEXPOSE:
 				//mainui.update();
 				//break;

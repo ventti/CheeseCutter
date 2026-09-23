@@ -43,9 +43,17 @@ Useful startup options:
 | `-b <size>` | Audio buffer size |
 | `-fpr <n>` | SID filter preset |
 | `-y` | Use YUV video overlay |
-| `--height <rows>` | Sequencer height, 32-64 |
-| `--width <cols>` | UI width in columns, up to 200 |
-| `--autoscale` | Auto-scale UI to the screen |
+| `--height <rows>` | Fixed sequencer height, 40-64 rows (turns off auto-sizing) |
+| `--width <cols>` | Fixed UI width, 160-200 columns (turns off auto-sizing) |
+
+By default the window takes about 90% of the usable screen area, meaning the part
+not covered by the macOS menu bar and Dock (or the Windows taskbar), and opens
+centred in it. Fullscreen (<kbd>Alt</kbd>-<kbd>Return</kbd> or `-f`) re-lays the
+editor out to fill the whole screen: more columns and a taller sequencer (up to
+64 rows), with text at the same size. Leaving fullscreen brings the window
+layout back. The song, undo history and cursor row are kept; any open dialog
+closes. The layout never gets smaller than 160×50 cells or bigger than 200×74;
+a larger screen shows the grid centred.
 
 Export or transform songs with `ct2util`:
 

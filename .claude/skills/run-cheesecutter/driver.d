@@ -255,6 +255,22 @@ private bool processCommand(string arg) {
 			mainui.modImportCallback(val);
 			stderr.writefln("modimport %s", val);
 			break;
+		case "winsize": {
+			// winsize:W,H — act as if the window became W x H pixels (what a
+			// fullscreen toggle does): the UI re-lays out for the new grid.
+			auto wh = val.split(",");
+			video.setWindowSize(to!int(wh[0]), to!int(wh[1]));
+			ui.ui.fitToWindow(to!int(wh[0]), to!int(wh[1]));
+			stderr.writefln("winsize %dx%d cells", screen.width, screen.height);
+			break;
+		}
+		case "seqpos": {
+			// seqpos — voice 1's cursor: track/sequence position and on-screen offset.
+			auto p = state.seqPos[0];
+			stderr.writefln("seqpos: trk=%d seq=%d pointer=%d grid=%dx%d",
+				p.trkOffset, p.seqOffset, p.pointerOffset, screen.width, screen.height);
+			break;
+		}
 		case "open":
 			// open:<file> — open by type like the command line / palette (.sid imports).
 			mainui.openFile(val);
@@ -1158,7 +1174,7 @@ int main(string[] args) {
 		return 1;
 	}
 	// Grid size. Default is the 160x50 MINIMUM; the real app autoscales to ~90% of the
-	// desktop, so band heights (and anything derived from them) are much larger there.
+	// usable screen area (and fullscreen fills the screen), so band heights (and anything derived from them) are much larger there.
 	// `screen:COLSxROWS` reproduces a real window's geometry — pass it when a bug might
 	// depend on band height rather than on the layout's minimum.
 	int cols = 160, rows = 50;

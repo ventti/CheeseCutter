@@ -57,6 +57,21 @@ immutable string scrollText =
 	"               \x0fPRESS ANY KEY TO RETURN TO CUT SOME CHEESE ...        ";
 
 int mode; // 0 = compact (default), >0 = wide
+
+// Character-grid limits. The layout needs at least 160x50 cells; the sequencer
+// shows at most 64 rows (+10 rows of bars and tables), and 200 columns is the
+// widest the UI lays out.
+enum MIN_COLUMNS = 160, MIN_ROWS = 50, MAX_COLUMNS = 200, MAX_ROWS = 64 + 10;
+// Room left for a window title bar when sizing/placing a new window.
+enum TITLE_BAR_ALLOWANCE = 32;
+
+// The grid that fills a window of `pxW` x `pxH` pixels at 1:1, clamped to the
+// limits above (a smaller window shows part of the grid; a larger one centres it).
+void gridForWindow(int pxW, int pxH, out int cols, out int rows) {
+	import std.algorithm : clamp;
+	cols = clamp(pxW / FONT_X, MIN_COLUMNS, MAX_COLUMNS);
+	rows = clamp(pxH / FONT_Y, MIN_ROWS, MAX_ROWS);
+}
 immutable int border = 1;
 private bool isDirty = false;
 // Last mouse position in GRID PIXELS: letterbox-corrected (Video.scalePosition) but NOT
@@ -101,7 +116,7 @@ abstract class Video {
     SDL_Texture* texture;
 		bool useFullscreen;
 		Screen screen;
-		const int requestedWidth, requestedHeight;
+		int requestedWidth, requestedHeight;   // grid size in pixels
 		int height, width; // resolution of window
 		//int displayHeight, displayWidth; // resolution of the monitor
 		SDL_Rect rect;
@@ -145,6 +160,34 @@ abstract class Video {
 	void toggleFullscreen() {
 		useFullscreen ^= 1;
 		enableFullscreen(useFullscreen);
+	}
+
+	// Adopt a new character grid after the window changed size (see
+	// ui.ui.fitToWindow). The grid is drawn 1:1 and centred in the window.
+	void setScreen(Screen scr) {
+		screen = scr;
+		width = requestedWidth = scr.width * FONT_X;
+		height = requestedHeight = scr.height * FONT_Y;
+		placeGrid();
+		scr.refresh();
+	}
+
+	// Resize the window itself (headless tests stand in for a fullscreen toggle).
+	void setWindowSize(int w, int h) {
+		if(window !is null) SDL_SetWindowSize(window, w, h);
+	}
+
+	// Centre the grid in the renderer output via the viewport; `rect` keeps the
+	// offset so scalePosition() maps the mouse into grid pixels.
+	void placeGrid() {
+		if(renderer is null) return;
+		int outW, outH;
+		SDL_GetRendererOutputSize(renderer, &outW, &outH);
+		rect.x = outW > width ? (outW - width) / 2 : 0;
+		rect.y = outH > height ? (outH - height) / 2 : 0;
+		rect.w = width;
+		rect.h = height;
+		SDL_RenderSetViewport(renderer, &rect);
 	}
 
 	bool isFullscreen() { return useFullscreen; }
@@ -275,6 +318,7 @@ class VideoStandard : Video {
 			}
 			SDL_SetWindowTitle(window, com.util.APP_NAME);
 			setWindowIcon();
+			if(!fs) placeInUsableArea();
 			SDL_StartTextInput();
 			reportSurfaceScale();
 		} else {
@@ -285,7 +329,33 @@ class VideoStandard : Video {
 		}
 
 		SDL_RaiseWindow(window);
+		placeGrid();
 		screen.refresh();
+	}
+
+	// Centre the window, title bar included, inside the display's usable area
+	// (which excludes the macOS menu bar and Dock), so no part of the editor
+	// starts out hidden behind them.
+	private void placeInUsableArea() {
+		SDL_Rect usable;
+		int display = SDL_GetWindowDisplayIndex(window);
+		if(SDL_GetDisplayUsableBounds(display < 0 ? 0 : display, &usable) != 0) return;
+		int top, left, bottom, right;
+		if(SDL_GetWindowBordersSize(window, &top, &left, &bottom, &right) != 0) {
+			top = TITLE_BAR_ALLOWANCE;   // not reported before the window is shown
+			left = bottom = right = 0;
+		}
+		int w, h;
+		SDL_GetWindowSize(window, &w, &h);
+		int x = usable.x + left + (usable.w - left - right - w) / 2;
+		int y = usable.y + top + (usable.h - top - bottom - h) / 2;
+		if(x < usable.x + left) x = usable.x + left;
+		if(y < usable.y + top) y = usable.y + top;
+		SDL_SetWindowPosition(window, x, y);
+		import std.stdio : stderr;
+		stderr.writefln("fb: usable area %d,%d %dx%d; window content at %d,%d "
+			~ "(title bar %d) — bottom edge %d of %d.", usable.x, usable.y, usable.w,
+			usable.h, x, y, top, y + h + bottom, usable.y + usable.h);
 	}
 
 	// Set the window icon from the embedded 96x96 RGBA blob. SDL copies the

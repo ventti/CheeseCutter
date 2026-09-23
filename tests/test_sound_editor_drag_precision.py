@@ -115,8 +115,8 @@ def _grab_a_pitch_block(session: CCDriverSession, probe: dict[str, float]) -> tu
 class SoundEditorPitchTrackingTests(unittest.TestCase):
     """The dragged block must stay under the cursor -- the user-visible contract."""
 
-    # 160x50 is the layout minimum; the real app autoscales to ~90% of the desktop, so
-    # a 170x63 grid is what this project's reference display produces. Band height (and
+    # 160x50 is the layout minimum; the real app autoscales to ~90% of the usable screen
+    # area (and fullscreen fills it), so 170x63 stands in for a larger real window. Band height (and
     # therefore pixels per semitone) differs by ~3.6x between them.
     GEOMETRIES = (("minimum", ["screen:160x50"]), ("autoscale", ["wide", "screen:170x63"]))
 

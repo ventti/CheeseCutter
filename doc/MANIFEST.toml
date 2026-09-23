@@ -219,6 +219,10 @@ category = "decision"
 path = "doc/adr/0012-sid-import-by-player-code-anchors.md"
 category = "decision"
 
+[[doc]]
+path = "doc/adr/0013-fullscreen-relays-out-the-ui.md"
+category = "decision"
+
 # ---- agent: instructions consumed by AI coding agents ----
 
 [[doc]]
