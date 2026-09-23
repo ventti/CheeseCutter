@@ -24,6 +24,7 @@ import ui.input;
 import std.algorithm;
 import std.string;
 import std.file;
+import std.path : extension;
 import std.utf;
 import std.array;
 import std.stdio;
@@ -301,6 +302,7 @@ class FileSelector : Window {
 	
 	FileSelPos fpos;
 	private File[] filelist;
+	private string[] extensions; // Empty = all files; directories always remain visible.
 	string directory;
 	alias area filearea;
 	private int lastClickNum = -1;
@@ -311,8 +313,9 @@ class FileSelector : Window {
 	private string typeahead;
 	private uint typeaheadDeadline;
 	
-	this(Rectangle a) {
+	this(Rectangle a, string[] extensions = null) {
 		super(a);
+		this.extensions = extensions;
 		directory = getcwd();
 		refresh();
 	}
@@ -544,7 +547,8 @@ class FileSelector : Window {
 			try {
 				if(d.isDir()) {
 					dirs[idxd++] = d;
-				} else {
+				} else if(extensions.length == 0 ||
+					canFind(extensions, extension(cast(string)d).toLower())) {
 					files[idxf++] = d;
 				}
 			}
@@ -682,7 +686,7 @@ class FileSelectorDialog : WindowSwitcher {
 	private ModInfo previewModInfo;
 	bool modPreview;
 
-	this(Rectangle a, string h, CB cb) {
+	this(Rectangle a, string h, CB cb, string[] extensions = null) {
 		header = h;
 		if(a == Rectangle.init) {
 			int dialog_width = screen.width - 32;
@@ -693,7 +697,7 @@ class FileSelectorDialog : WindowSwitcher {
 		}
 		filearea = Rectangle(a.x + 5, a.y + 2, a.height - 6, a.width - 10);
 		fsel = new FileSelector(Rectangle(a.x + 5, a.y + 2, a.height - 6, 
-								a.width - 18));
+								a.width - 18), extensions);
 		sfile = new DialogString(Rectangle(a.x+3+11, a.y+a.height-2), 50);
 		sdir = new DialogString(Rectangle(a.x+3+11, a.y+a.height-3), 50);
 		sdir.setString(getcwd());
@@ -874,10 +878,12 @@ class FileSelectorDialog : WindowSwitcher {
 }
 
 class LoadFileDialog : FileSelectorDialog {
+	// Add ".ctx" here when that song format is supported.
+	private enum SONG_EXTENSIONS = [".ct"];
 	CB cbimport;
 	
 	this(Rectangle a, CB cbload, CB cbimp) {
-		super(a, "Load Song", cbload);
+		super(a, "Load Song", cbload, SONG_EXTENSIONS);
 		cbimport = cbimp;
 	}
 

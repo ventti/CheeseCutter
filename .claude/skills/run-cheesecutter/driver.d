@@ -216,6 +216,20 @@ private bool processCommand(string arg) {
 	auto c = arg.findSplit(":");
 	string cmd = c[0], val = c[2];
 	switch(cmd) {
+		case "audioloss":
+			// Simulate a device disappearing without changing the logical player.
+			SDL_CloseAudio();
+			stderr.writeln("audio device closed");
+			break;
+		case "audiostate": {
+			// Real callback progress, independent of the driver's manual ff/tick.
+			static import audio.timer;
+			audio.timer.readTick();
+			SDL_Delay(250);
+			stderr.writefln("audio: playing=%s status=%d ticks=%d",
+				audio.player.isPlaying(), SDL_GetAudioStatus(), audio.timer.readTick());
+			break;
+		}
 		case "keyprobe": {
 			press(val);
 			stderr.writefln("shortcut probe: consumed=%s action=%s invoked=%s",
@@ -381,7 +395,9 @@ private bool processCommand(string arg) {
 			// move:CX,CY — motion with the left button already held by `press`.
 			auto parts = val.split(",");
 			int cx = to!int(parts[0]), cy = to!int(parts[1]);
-			mainui.draggedTo(cx, cy); mainui.update();
+			mainui.draggedTo(cx, cy);
+			if(mainui.menubar.active) mainui.updateMenu();
+			else mainui.update();
 			stderr.writefln("move %d,%d", cx, cy);
 			break;
 		}
@@ -389,7 +405,10 @@ private bool processCommand(string arg) {
 			// hover:CX,CY — mouse motion with no button held (drives ui.hoverAt).
 			auto parts = val.split(",");
 			int cx = to!int(parts[0]), cy = to!int(parts[1]);
-			mainui.hoverAt(cx, cy); mainui.update();
+			if(mainui.hoverAt(cx, cy)) {
+				if(mainui.menubar.active) mainui.updateMenu();
+				else mainui.update();
+			}
 			stderr.writefln("hover %d,%d", cx, cy);
 			break;
 		}

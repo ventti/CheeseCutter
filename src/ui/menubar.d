@@ -53,6 +53,9 @@ final class MenuBar {
 		Item[] items;
 	}
 	DMenu[] menus;
+	string builtContext;
+	ulong builtRevision;
+	bool layoutBuilt;
 	int[] titleX;                  // x of each top-level title, set by drawBar
 
 	// Geometry of the currently drawn dropdown box (for mouse hit-testing).
@@ -101,8 +104,8 @@ final class MenuBar {
 
 	/// Esc entry point: focus the bar, restoring the last menu + item.
 	void openMenu() {
-		rebuild();
 		_active = true;
+		rebuild();
 		pressed = -1;
 		clampIndices();
 		resetTip();
@@ -392,6 +395,7 @@ final class MenuBar {
 			if(t >= 0) {
 				menuIndex = t;
 				_active = true;
+				rebuild();
 				pressed = -1;
 				itemIndex = firstSelectable(menuIndex);
 				resetTip();
@@ -463,7 +467,26 @@ final class MenuBar {
 
 	private:
 
+	// Cache grouping/order until the context or registry metadata changes.
+	// Enabled predicates and checkboxes remain live; never cache their values.
 	void rebuild() {
+		string context = sm.getActiveContext();
+		if(layoutBuilt && builtContext == context && builtRevision == sm.menuGeneration) {
+			if(_active) {
+				foreach(ref menu; menus)
+					foreach(ref item; menu.items) {
+						if(item.sep) continue;
+						auto def = sm.getAction(item.actionId);
+						item.enabled = actionEnabled(*def);
+						item.on = item.toggle && def.checked();
+					}
+				clampIndices();
+			}
+			return;
+		}
+		builtContext = context;
+		builtRevision = sm.menuGeneration;
+		layoutBuilt = true;
 		menus.length = 0;
 		bool soundEditor = sm.getActiveContext() == Ctx.soundEditor;
 		addGlobalMenu("File", ["File", "Properties", "Application"]);   // Application = Quit (last group)
@@ -477,10 +500,15 @@ final class MenuBar {
 		clampIndices();
 	}
 
-	Item makeItem(ActionDef def) {
+	bool actionEnabled(const ref ActionDef def) {
 		bool en = sm.isActionEnabled(def.actionId);
 		if(en && def.context == Ctx.soundEditor && mainui.toplevel.soundEditorActive)
 			en = mainui.toplevel.soundEditor.commandEnabled(def.actionId);
+		return en;
+	}
+
+	Item makeItem(ActionDef def) {
+		bool en = actionEnabled(def);
 		bool tog = def.checked !is null;
 		bool on = tog && def.checked();
 		return Item(def.actionId, false, def.label(), def.primary, en, tog, on,

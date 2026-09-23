@@ -1600,12 +1600,11 @@ private:
 	}
 
 	bool isActiveTrack(int voice, int trackIndex) {
-		if(seqPos !is null && seqPos[voice].trkOffset == trackIndex)
-			return true;
-		if(audio.player.isPlaying && fplayPos !is null &&
-		   fplayPos[voice].trkOffset == trackIndex)
-			return true;
-		return false;
+		// During song playback green belongs exclusively to the playhead.
+		// The stationary edit cursor must not look like a second playing track.
+		if(audio.player.isPlaying && !audio.player.keyjamEnabled)
+			return fplayPos !is null && fplayPos[voice].trkOffset == trackIndex;
+		return seqPos !is null && seqPos[voice].trkOffset == trackIndex;
 	}
 
 	void flushInput() {

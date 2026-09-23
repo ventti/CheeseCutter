@@ -118,9 +118,17 @@ void mainloop(bool verbose) {
 	int mods, key, unicode;
 	bool quit = false;
 	SDL_Event evt;
+	uint lastTimer = SDL_GetTicks() - 40;
 	while(!quit) {
-		int ticks = audio.timer.readTick();
-		mainui.timerEvent(ticks);
+		uint frameStart = SDL_GetTicks();
+		// Preserve the legacy timer cadence: status timeouts and cursor blink
+		// count ticks. Input/presentation can run faster without shortening them.
+		bool timerDue = frameStart - lastTimer >= 40;
+		if(timerDue) {
+			lastTimer += ((frameStart - lastTimer) / 40) * 40;
+			int ticks = audio.timer.readTick();
+			mainui.timerEvent(ticks);
+		}
 		while(SDL_PollEvent(&evt)) {
 			switch(evt.type) {
 			case SDL_QUIT:
@@ -240,12 +248,16 @@ void mainloop(bool verbose) {
 					publishMousePixel(x, y);
 					if(evt.motion.state & SDL_BUTTON_LMASK) {
 						// Drag = motion with the left button held.
+						bool menuDrag = mainui.menubar.active;
 						mainui.draggedTo(x / FONT_X, y / FONT_Y);
-						mainui.update();
+						if(menuDrag) mainui.updateMenu();
+						else mainui.update();
 					}
 					// Plain hover: only the focused menu bar reacts; redraw on change.
-					else if(mainui.hoverAt(x / FONT_X, y / FONT_Y))
-						mainui.update();
+					else if(mainui.hoverAt(x / FONT_X, y / FONT_Y)) {
+						if(mainui.menubar.active) mainui.updateMenu();
+						else mainui.update();
+					}
 				}
 				break;
         //			case SDL_ACTIVEEVENT:
@@ -264,9 +276,8 @@ void mainloop(bool verbose) {
 		if(mainui.activeInput !is null) {
 			mainui.activeInput.update();
 			Cursor cursor = mainui.activeInput.cursor;
-			if(cursor !is null) cursor.blink();
+			if(cursor !is null && timerDue) cursor.blink();
 		}
-		SDL_Delay(40);
 		video.updateFrame();
 
 		// Mirror any edited song data to the remote backend (no-op when
@@ -275,6 +286,10 @@ void mainloop(bool verbose) {
 			audio.remote.ensureLoaded(song);   // also drives the post-inject SID readback
 			audio.remote.syncDeltas(song);
 		}
+		// Present input feedback immediately, then pace the whole frame (~60 Hz).
+		// Rendering/backend work counts toward the budget instead of adding to it.
+		uint elapsed = SDL_GetTicks() - frameStart;
+		if(elapsed < 16) SDL_Delay(16 - elapsed);
 	}
 }
 

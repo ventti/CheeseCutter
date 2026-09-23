@@ -150,12 +150,15 @@ class ShortcutManager {
 		// Incrementing counter stamped onto each action as it is registered, so
 		// menus can present commands in deliberate registration order.
 		int orderCounter;
+		ulong menuRevision;
 
 		// Read-only regression trace for the headless usage driver. It records the
 		// real UI dispatch result without changing dispatch or invoking anything twice.
 		bool lastConsumed, lastInvoked;
 		string lastActionId;
 	}
+
+	@property ulong menuGeneration() const { return menuRevision; }
 
 	this() {
 		// The sequencer's note/track/overview columns share the common
@@ -182,6 +185,7 @@ class ShortcutManager {
 	void register(string actionId, string context, string category,
 				  string description, int key, int mods, ActionCallback cb,
 				  string menuLabel = "", EnabledPredicate enabled = null) {
+		++menuRevision;
 		auto sc = Shortcut(key, mods);
 		actions[actionId] = ActionDef(actionId, context, category, description,
 									  menuLabel, cb, enabled, null, orderCounter++, sc);
@@ -202,6 +206,7 @@ class ShortcutManager {
 	void registerMenuOnly(string actionId, string context, string category,
 						   string description, ActionCallback cb,
 						   string menuLabel = "", EnabledPredicate enabled = null) {
+		++menuRevision;
 		actions[actionId] = ActionDef(actionId, context, category, description,
 									  menuLabel, cb, enabled, null, orderCounter++,
 									  Shortcut(0, 0));
@@ -217,6 +222,7 @@ class ShortcutManager {
 	 */
 	void setChecked(string actionId, CheckedPredicate p) {
 		assert(actionId in actions, "setChecked: unknown action " ~ actionId);
+		++menuRevision;
 		actions[actionId].checked = p;
 	}
 
@@ -227,6 +233,7 @@ class ShortcutManager {
 	 */
 	void setMenuLabel(string actionId, string label) {
 		assert(actionId in actions, "setMenuLabel: unknown action " ~ actionId);
+		++menuRevision;
 		actions[actionId].menuLabel = label;
 	}
 
@@ -237,6 +244,7 @@ class ShortcutManager {
 	 */
 	void setCategory(string actionId, string category) {
 		assert(actionId in actions, "setCategory: unknown action " ~ actionId);
+		++menuRevision;
 		actions[actionId].category = category;
 	}
 
@@ -253,6 +261,7 @@ class ShortcutManager {
 	// --- Backward-compatible thin shims (kept for incremental migration) ---
 
 	void registerAction(string actionId, ActionCallback callback) {
+		++menuRevision;
 		if(auto def = actionId in actions)
 			def.callback = callback;
 		else

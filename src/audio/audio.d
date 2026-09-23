@@ -333,6 +333,19 @@ private int openDevice() {
 	return 0;
 }
 
+// Explicit song-play commands reopen even an apparently healthy device: after
+// sleep some backends report PLAYING while callbacks have stopped. Keep reSID,
+// the selected driver and playback position intact (Shift-F3 can resume tracking).
+// Called on the UI thread only, never for note entry or automatic loop restarts.
+bool resetPlaybackDevice() {
+	bool resume = audio.player.isPlaying();
+	// Closing joins the callback; do not hold its audio lock across teardown.
+	SDL_CloseAudio();
+	if(openDevice() < 0) return false;
+	SDL_PauseAudio(resume ? 0 : 1);
+	return true;
+}
+
 // SDL audio drivers compiled into this build (e.g. "coreaudio", "dummy"), for
 // the Properties dialog to choose from.
 string[] availableAudioDrivers() {

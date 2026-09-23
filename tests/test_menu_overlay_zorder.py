@@ -47,6 +47,42 @@ def _row_of(rows: dict[int, str], needle: str) -> int:
 
 
 class MenuOverlayZOrderTests(unittest.TestCase):
+    def test_cached_menu_checkbox_updates_and_survives_reopen(self):
+        with CCDriverSession("key:ESC", "key:ESC") as session:
+            for _ in range(3):
+                session.run("key:RIGHT")  # Playback
+            rows = _rows(session.run("screendump"))
+            row = _row_of(rows, "Voice 1")
+            self.assertIn("[x]", rows[row])
+            x = rows[row].index("Voice 1")
+            session.run(f"hover:{x},{row}")
+            session.run("key:SPACE")
+            self.assertIn("[ ]", _rows(session.run("screendump"))[row])
+            session.run("key:ESC")
+            session.run("key:ESC")
+            self.assertIn("[ ]", _rows(session.run("screendump"))[row])
+            session.run("key:SPACE")
+            self.assertIn("[x]", _rows(session.run("screendump"))[row])
+
+    def test_menu_hover_preserves_sound_graphs_and_replaces_masks(self):
+        from tests.test_overlay_lifetime import overlay_counts
+
+        with CCDriverSession(f"load:{SONG}", "key:ESC", "key:Ctrl-e") as session:
+            graph_ops, masks = overlay_counts(session)
+            self.assertGreater(graph_ops, 0)
+            self.assertEqual(masks, 0)
+            session.run("press:3,0")  # File
+            session.run("release:3,0")
+            for x in (9, 15, 21, 3):  # switch menus using the lightweight path
+                session.run(f"hover:{x},0")
+                ops, masks = overlay_counts(session)
+                self.assertEqual(ops - masks, graph_ops)
+                self.assertEqual(masks, 1)
+                if x == 3:
+                    self.assertIn("Load song", session.run("screendump"))
+            session.run("key:ESC")
+            self.assertEqual(overlay_counts(session)[1], 0)
+
     def test_dropdown_survives_the_oscilloscope_it_hangs_into(self):
         session = CCDriverSession(f"load:{SONG}")
         try:

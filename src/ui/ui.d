@@ -262,17 +262,6 @@ final class UI {
 			statusline.display(e.toString());
 		}
 		statusline.timerEvent();
-		// Draw the menu bar on EVERY timer event, not inside the tick-gated
-		// block below: tickcounter1 only advances from player frame ticks
-		// (audio.timer.readTick()), so while the editor sits idle the gated
-		// block never runs. Gated, the dropdown was painted exactly once (by
-		// the keypress update); when the statusline timeout then cleared row 2
-		// it blacked out the dropdown's focused first row until the next
-		// keypress, and the hover tooltip could never appear while idle.
-		// Drawing here — right after statusline.timerEvent() and before the
-		// frame is presented — repaints any statusline clear in the same
-		// cycle and lets the tooltip dwell timer fire on wall clock.
-		drawMenu();
 		tickcounter1 += n;
 		if(tickcounter1 >= UPDATE_RATE) {
 			infobar.update();
@@ -377,6 +366,13 @@ final class UI {
 		else refresh();
 	}
 
+	// Menu pointer navigation changes only the foreground. Keep the editor and
+	// graph draw lists intact, and replace their masks after the menu moves.
+	void updateMenu() {
+		drawMenu();
+		updateOverlayMasks();
+	}
+
 	// Draws the top-bar menu (row 0) and, when focused, its dropdown. Called
 	// after every header/content repaint so the periodic infobar refresh never
 	// erases the bar. The dropdown is drawn last so it overlays the tables.
@@ -397,6 +393,14 @@ final class UI {
 		if(menubar !is null) menubar.maskOverlay();
 		if(palette !is null) palette.maskOverlay();
 		maskDialogOverlay();
+	}
+
+	package bool preparePlaybackAudio() {
+		if(audio.audio.resetPlaybackDevice()) return true;
+		string error = to!string(SDL_GetError());
+		audio.player.stop();
+		statusline.display("Could not reopen audio: " ~ error);
+		return false;
 	}
 
 	package void F1orF2(Keyinfo key, bool fromStart) {
