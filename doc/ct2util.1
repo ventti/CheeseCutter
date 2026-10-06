@@ -31,6 +31,12 @@ Convert a CheeseCutter 4.x .sid back to a .ct song (best effort: the song comes
 back purged, without instrument names). Prints the detected player generation;
 exits non\-zero for a SID that was not made with CheeseCutter.
 .TP
+sng2ct
+Convert a standard three-voice GoatTracker 2 GTS5 .sng to an editable .ct.
+Maps instruments, tables, pitch effects and tempo; prints approximation/omission
+notices even with \fB\-q\fR. Unsupported formats or capacity failures exit
+non-zero without writing the output.
+.TP
 sidtrace
 Print the 25 SID registers (hex) after each play call of a .sid, one line per
 call. Two traces are equal when the songs drive the SID identically.

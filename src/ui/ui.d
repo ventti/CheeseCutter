@@ -64,7 +64,8 @@ final class UI {
 		int vismode = VisMode.Regs;
 		AboutDialog aboutdialog;
 		FileSelectorDialog loaddialog, savedialog, exportsavedialog, modimportdialog,
-			sidimportdialog;
+			sidimportdialog, goatimportdialog;
+		ImportFormatDialog importDialog;
 		ModImportOptionsDialog modImportOptionsDialog;
 		ModModule pendingMod;        // parsed module, awaiting the options dialog
 		string pendingModFile;       // its path (for the post-import status/name)
@@ -118,7 +119,7 @@ final class UI {
 		int dialog_y = screen.height / 2 - dialog_height / 2;
 
 		loaddialog = new LoadFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
-												  dialog_width), &loadCallback, &importCallback);
+												  dialog_width), &openFile, &importCallback);
 		savedialog = new SaveFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
 												  dialog_width), &saveCallback);
 		exportsavedialog = new SaveFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
@@ -127,6 +128,16 @@ final class UI {
 												  dialog_width), &modImportCallback);
 		sidimportdialog = new SidImportFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
 												  dialog_width), &sidImportCallback);
+		goatimportdialog = new GoatImportFileDialog(Rectangle(dialog_x, dialog_y, dialog_height,
+												  dialog_width), &goatImportCallback);
+		importDialog = new ImportFormatDialog((int formatIndex) {
+			switch(formatIndex) {
+			case 0: activateDialog(modimportdialog); break;
+			case 1: activateDialog(goatimportdialog); break;
+			case 2: activateDialog(sidimportdialog); break;
+			default: break;
+			}
+		});
 		modImportOptionsDialog = new ModImportOptionsDialog(&modImportConfirm);
 		exportDialog = new ExportOptionsDialog(&exportConfirm, false);
 		renderDialog = new ExportOptionsDialog(&exportConfirm, true);
@@ -806,10 +817,29 @@ final class UI {
 		forgetSourceFilename(s);
 	}
 
-	// Open a file by type: a .sid is imported, anything else loads as a song.
+	void goatImportCallback(string path) {
+		stop();
+		try {
+			Song fresh = new Song();
+			auto warnings = fresh.importGoatSong(cast(ubyte[])std.file.read(path), path);
+			song.importData(fresh);
+			song.message[] = ' ';
+			finishLoad(path, true, format("GoatTracker song imported (%d mapping notice(s)).", warnings.length), false);
+			forgetSourceFilename(path);
+			if(warnings.length) activateDialog(new GoatImportReportDialog(warnings));
+		}
+		catch(Exception e) {
+			statusline.display("Error: " ~ e.msg);
+			activateDialog(new MessageDialog(e.msg));
+		}
+	}
+
+	// Open native songs or import supported foreign song files.
 	void openFile(string s) {
 		import std.path : extension;
-		if(extension(s).toLower == ".sid")
+		if(extension(s).toLower == ".sng")
+			goatImportCallback(s);
+		else if(extension(s).toLower == ".sid")
 			sidImportCallback(s);
 		else
 			loadCallback(s);

@@ -14,6 +14,7 @@ OBJS= \
 	src/ct/purge.o \
 	src/ct/base.o \
 	src/ct/modimport.o \
+	src/ct/goatimport.o \
 	src/ct/sidimport.o \
 	src/ct/dump.o \
 	src/ct/build.o \
@@ -101,6 +102,7 @@ C_OBJS	= $(C_SRCS:.c=.o)
 UTILOBJS = src/ct2util.o \
 	src/ct/base.o \
 	src/ct/modimport.o \
+	src/ct/goatimport.o \
 	src/ct/sidimport.o \
 	src/com/cpu.o \
 	src/com/util.o \

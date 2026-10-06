@@ -248,6 +248,56 @@ Importing does not touch the file on disk and leaves the song unnamed (with a
 module with more unique patterns than fit CheeseCutter's 128 sequence slots
 (roughly 21) is rejected with a message rather than importing partially.
 
+## Importing GoatTracker 2 songs (.sng)
+
+Use **File → Import song… → GoatTracker**, the normal Open dialog, or
+`ccutter tune.sng`. For batch conversion:
+
+```sh
+ct2util sng2ct tune.sng -o tune.ct
+```
+
+The importer accepts standard three-voice **GTS5** files. Save older songs in
+GoatTracker 2 first. Metadata, subtunes, order repeats/transposition/restart,
+notes, gate events, instruments and reachable table programs are converted.
+Patterns are split and deduplicated as necessary. The result is an unnamed,
+modified song with a `.ct` save suggestion; the `.sng` remains untouched.
+
+| Source feature | Conversion |
+|---|---|
+| Fixed pitch slides/tone portamento | Speed-table values become command parameters; `300` is a tied pitch change. |
+| Fixed vibrato | Lo-fi vibrato; depth rounded to four SID frequency units. |
+| Note-relative vibrato | Hi-fi vibrato; closest supported period/depth. Phase and onset differ. |
+| Note-relative slides | Speed calculated from the note pitch; changing wavetable pitches may differ. |
+| Instrument vibrato | Delayed effect events; delay rounded down to the song's timing step. |
+| Global/local tempo and funktempo | Shared timeline with per-voice events; the common timing step becomes song speed. |
+| Signed wave arpeggios | Instrument-specific pitch bias and compensated notes. |
+| Pulse/filter tables | Relocated sweep programs and loops; pulse presets round down to 16 units and filter onset differs by one tick. |
+| AD/SR, waveform, volume | Row commands; AD/SR updates preserve the other register. |
+| Pulse/filter pointer commands | Inline table pointers where representable. |
+| Wavetable pointer commands and commands inside wavetable | Omitted with source locations in the report. |
+
+The paged report lists approximations and omissions. Space/Right/Page Down
+advance pages; Left/Page Up go back; Enter/Escape close it. The CLI prints the
+same notices, including with `-q`.
+
+GTS5 does not store the SID model, clock, speed multiplier or global hard-restart
+ADSR. An adjacent recovery `.json` report supplies hard-restart ADSR and the SID
+model when available; otherwise conversion uses PAL 1x and GoatTracker's default
+hard-restart ADSR (`0F00`). Other source playback preferences need manual adjustment. Gate/hard-restart modes, vibrato phase, simultaneous
+effects and events less than three ticks apart may sound different. Direct filter
+control/cutoff commands become one-shot programs and may interrupt a sweep.
+
+CheeseCutter has 47 usable instruments, 63 effect commands, 256 wave rows,
+63 usable rows in each sweep table and 127 playable sequences. The importer
+compacts shared programs and identical instruments/sequences. When exact conversion
+exceeds effect/sequence capacity or needs rows faster than three ticks, it retries
+with simplified envelopes and, if necessary, a three-tick timing grid (events may
+start up to two ticks early). Empty editor rows remain explicit so saved/exported
+playback keeps the same timing. The report lists the approximations. If conversion
+still exceeds capacity, its timing cycle is too large, or a pitch/table representation
+cannot fit, it fails explicitly without changing the current song.
+
 ## Importing CheeseCutter .sid files
 
 **File → Import .sid...** (<kbd>Ctrl</kbd>-<kbd>Shift</kbd>-<kbd>F9</kbd>) turns a

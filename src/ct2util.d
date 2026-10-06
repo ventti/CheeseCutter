@@ -17,8 +17,8 @@ import std.conv;
 import std.file;
 import std.array : appender;
 
-enum Command { None, ExportPRG, ExportSID, Dump, Import, Init, SidToCt, SidTrace }
-const string[] exts = [ "", "prg", "sid", "s", "ct", "ct", "ct", "trace" ];
+enum Command { None, ExportPRG, ExportSID, Dump, Import, Init, SidToCt, SidTrace, SngToCt }
+const string[] exts = [ "", "prg", "sid", "s", "ct", "ct", "ct", "trace", "ct" ];
 
 bool verbose = true;
 bool noPurge;
@@ -82,6 +82,7 @@ int main(string[] args) {
 		writefln("  import        Copy data from another song without overwriting the player");
 		writefln("  init          Create a fresh .ct from player binary");
 		writefln("  sid2ct        Convert a CheeseCutter 4.x .sid back to a .ct song (best effort)");
+		writefln("  sng2ct        Import a GoatTracker 2 GTS5 song as an editable .ct (best effort)");
 		writefln("  sidtrace      Print the SID registers after each play call of a .sid");
 		writefln("\nGeneral options:");
 		writefln("  -o <outfile>  Set output filename (by default gathered from input filename)");
@@ -124,6 +125,9 @@ int main(string[] args) {
 			break;
 		case "sid2ct":
 			command = Command.SidToCt;
+			break;
+		case "sng2ct":
+			command = Command.SngToCt;
 			break;
 		case "sidtrace":
 			command = Command.SidTrace;
@@ -314,6 +318,12 @@ int main(string[] args) {
 				explain("warning: " ~ w);
 			insong = new Song;
 			insong.importSidSong(recovered);
+			insong.save(outfn);
+			break;
+		case Command.SngToCt:
+			insong = new Song;
+			foreach(w; insong.importGoatSong(cast(ubyte[])std.file.read(infn), infn))
+				writeln("warning: ", w);
 			insong.save(outfn);
 			break;
 		case Command.SidTrace:

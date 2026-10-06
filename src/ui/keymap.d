@@ -141,15 +141,11 @@ void registerShortcuts(UI ui) {
 	});
 	sm.bindAlias("quick_save", SDLK_s, KMOD_CTRL);   // standard Save
 
-	sm.register("import_mod", Ctx.global, "File",
-				"Import a ProTracker module (.mod): pick the file, then choose channels and which effects to translate", SDLK_F9, KMOD_SHIFT, {
-		activateDialog(modimportdialog);   // keeps its own last directory (separate from .ct)
-	}, "Import .mod...");
-
-	sm.register("import_sid", Ctx.global, "File",
-				"Import a CheeseCutter .sid back into an editable song (best effort: purged data, no instrument names)", SDLK_F9, KMOD_CTRL | KMOD_SHIFT, {
-		activateDialog(sidimportdialog);   // keeps its own last directory (separate from .ct)
-	}, "Import .sid...");
+	sm.register("import_song", Ctx.global, "File",
+				"Import song: ProTracker .mod / GoatTracker .sng / CheeseCutter .sid", SDLK_F9, KMOD_SHIFT, {
+		activateDialog(importDialog);
+	}, "Import song...");
+	sm.bindAlias("import_song", SDLK_F9, KMOD_CTRL | KMOD_SHIFT);
 
 	sm.register("export_song", Ctx.global, "File",
 				"Export song: Full player .prg / Optimized .prg / PSID (options dialog)", SDLK_F10, KMOD_SHIFT, {

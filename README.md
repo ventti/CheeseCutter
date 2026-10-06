@@ -40,6 +40,11 @@ CheeseCutter 2.9 by Abaddon.
   works on SIDs from the 4.x players (4.00 to 4.07), relocated or multispeed.
   Best effort: the song comes back purged and without instrument names, but it
   plays back the same. Other SIDs get a "conversion is not possible" notice.
+- Import GoatTracker 2 `.sng` songs (**File → Import song… → GoatTracker**, Open,
+  or `ct2util sng2ct tune.sng -o tune.ct`). Standard three-voice `GTS5` files
+  become editable songs with translated instruments, tables, effects and tempo.
+  A conversion report identifies approximations and unsupported commands;
+  capacity-limited songs retry with reported envelope and timing approximations.
 - Instrument color tags (`$X` / `$XY`) in instrument descriptions.
 - Read-only **filter track** column in the pattern view (between voice 3 and the
   instrument table): per-row SID filter registers (cutoff, resonance, mode and a

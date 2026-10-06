@@ -8,6 +8,7 @@ import com.cpu;
 import com.util;
 import ct.purge;
 import ct.modimport;
+import ct.goatimport;
 import ct.sidimport;
 import std.string;
 import std.file;
@@ -1950,6 +1951,77 @@ class Song {
 		remapChordCommands(s.chordIndex);
 		subtunes.activate(0);
 		speed = songspeeds[0];
+	}
+
+	// Convert completely before installing: callers can use a fresh Song and
+	// importData only after success, keeping failed imports transactional.
+	string[] importGoatSong(const(ubyte)[] bytes, string sourcePath = "") {
+		auto parsed = parseGoatSong(bytes);
+		ushort[96] frequencies;
+		int f = offsets[Offsets.FREQTABLE];
+		foreach(i; 0 .. 96) frequencies[i] = cast(ushort)(buffer[f + i] | (buffer[f + 96 + i] << 8));
+		auto converted = convertGoatSong(parsed, frequencies[]);
+		// SID-to-GTS recovery stores player settings in an adjacent JSON report.
+		// Native GTS5 cannot store HR ADSR or the SID model itself.
+		int importedSidModel = 0;
+		if(sourcePath.length) {
+			import std.path : setExtension;
+			import std.json : parseJSON;
+			import std.conv : to;
+			string report = setExtension(sourcePath, ".json");
+			if(exists(report)) try {
+				auto json = parseJSON(readText(report));
+				if(auto settings = "playback_settings" in json.object) {
+					if(auto hr = "hard_restart_adsr" in settings.object) {
+						uint adsr = to!uint(hr.str, 16);
+						if(adsr > 0xffff) throw new UserException("Hard-restart ADSR is outside 0000..FFFF.");
+						converted.commands[64] = cast(ubyte)(adsr >> 8);
+						foreach(i; 1 .. 48) converted.instruments[i + 6 * 48] = cast(ubyte)adsr;
+					}
+					if(auto model = "sid_model" in settings.object)
+						importedSidModel = model.str == "8580" ? 1 : 0;
+					converted.warnings ~= "Playback settings: applied hard-restart ADSR and SID model from " ~ report ~ ".";
+				}
+			} catch(Exception e) {
+				converted.warnings ~= "Playback settings report could not be fully applied: " ~ e.msg;
+			}
+		}
+		waveTable[] = converted.wave[];
+		instrumentTable[] = 0;
+		instrumentTable[0 .. 384] = converted.instruments[];
+		pulseTable[] = converted.pulse[];
+		filterTable[] = converted.filter[];
+		superTable[] = converted.commands[];
+		chordTable[] = converted.chord[];
+		foreach(i, ref seq; seqs) {
+			if(i < converted.sequences.length) seq.data.raw[] = converted.sequences[i][];
+			else seq.clear();
+			seq.refresh();
+		}
+		subtunes.clearAll();
+		foreach(sub, voices; converted.orders) foreach(v, order; voices)
+			subtunes.subtunes[sub][v][] = order[];
+		foreach(i, ref label; insLabels) {
+			label[] = ' ';
+			if(i < converted.names.length) {
+				auto name = converted.names[i];
+				label[0 .. name.length] = name[];
+			}
+		}
+		void metadata(ref char[32] field, string value) {
+			field[] = ' '; field[0 .. value.length] = value[];
+		}
+		metadata(title, converted.title); metadata(author, converted.author);
+		metadata(release, converted.copyright); message[] = ' ';
+		songspeeds[] = 5;
+		foreach(i, value; converted.speeds) songspeeds[i] = value;
+		multiplier = 1;
+		sidModel = importedSidModel;
+		generateChordIndex();
+		subtune = 0;
+		subtunes.activate(0, false);
+		speed = songspeeds[0];
+		return converted.warnings;
 	}
 
 	// Sequences name chords by index ($80+n). The exported chord index may be

@@ -12,6 +12,7 @@ import com.util;
 import com.session;
 private import ct.base;
 import ct.build : ExportOptions, ExportFormat, isAudioFormat;
+import ct.goatimport : readGoatInfo;
 import ct.modimport : ModImportOptions, ModInfo, readModInfo;
 import audio.render : flacAvailable;
 import com.config : Prefs;
@@ -778,7 +779,14 @@ class FileSelectorDialog : WindowSwitcher {
 			try {
 				if(sel != "." && sel != ".." && std.file.exists(sel)
 				   && !std.file.isDir(sel)) {
-					if(modPreview)
+					if(extension(sel).toLower == ".sng") {
+						auto info = readGoatInfo(cast(ubyte[])std.file.read(sel, 101));
+						previewInfo.valid = info.valid;
+						previewInfo.title = info.title;
+						previewInfo.author = info.author;
+						previewInfo.release = info.copyright;
+					}
+					else if(modPreview)
 						previewModInfo = readModInfo(cast(ubyte[])std.file.read(sel, 1084));
 					else
 						previewInfo = readSongInfo(sel);
@@ -879,7 +887,7 @@ class FileSelectorDialog : WindowSwitcher {
 
 class LoadFileDialog : FileSelectorDialog {
 	// Add ".ctx" here when that song format is supported.
-	private enum SONG_EXTENSIONS = [".ct"];
+	private enum SONG_EXTENSIONS = [".ct", ".sng"];
 	CB cbimport;
 	
 	this(Rectangle a, CB cbload, CB cbimp) {
@@ -897,7 +905,10 @@ class LoadFileDialog : FileSelectorDialog {
 														 &confirmCallback, "yn", 0));
 			return OK;
 		}
-		else return super.returnPressed(cb);
+		else {
+			int r = super.returnPressed(cb);
+			return mainui.isActiveDialog(this) ? r : OK;
+		}
 	}
 
 	private bool shouldUpgrade(string fn) {
@@ -919,6 +930,51 @@ class LoadFileDialog : FileSelectorDialog {
 			string filename = getcwd() ~ DIR_SEPARATOR ~ sfile.toString();
 			cb(filename);
 		}
+	}
+}
+
+// Match Export's format selection before opening the format-specific browser.
+class ImportFormatDialog : Window {
+	private {
+		void delegate(int) onConfirm;
+		int selected;
+		static immutable string[] formats = [
+			"ProTracker (.mod)", "GoatTracker (.sng)", "CheeseCutter (.sid)"];
+	}
+
+	this(void delegate(int) cb) {
+		super(Rectangle(0, 0, 1));
+		onConfirm = cb;
+	}
+
+	override void update() {
+		int w = 50, h = 7;
+		int x = (screen.width - w) / 2, y = (screen.height - h) / 2;
+		area = Rectangle(x, y, h, w);
+		drawFrame(area);
+		screen.cprint(x + 2, y, 1, 0, " Import song ");
+		screen.cprint(x + 2, y + 2, 1, 4,
+			format(" %s%s", "Format".leftJustify(12), formats[selected]).leftJustify(w - 4));
+		screen.cprint(x + 2, y + h - 2, 12, 0, "Return: OK   Esc: Cancel");
+	}
+
+	override int keypress(Keyinfo key) {
+		if(key.mods & KMOD_ALT) return OK;
+		switch(key.raw) {
+		case SDLK_ESCAPE: return CANCEL;
+		case SDLK_RETURN:
+			onConfirm(selected);
+			return OK; // Keep the newly opened file browser active.
+		case SDLK_LEFT:
+			selected = (selected + cast(int)formats.length - 1) % cast(int)formats.length;
+			break;
+		case SDLK_RIGHT:
+		case SDLK_SPACE:
+			selected = (selected + 1) % cast(int)formats.length;
+			break;
+		default: break;
+		}
+		return OK;
 	}
 }
 
@@ -948,6 +1004,57 @@ class SidImportFileDialog : FileSelectorDialog {
 	override protected int returnPressed(CB cb) {
 		int r = super.returnPressed(cb);
 		return mainui.isActiveDialog(this) ? r : OK;
+	}
+}
+
+// Keep an error/report dialog opened by the callback visible.
+class GoatImportFileDialog : FileSelectorDialog {
+	this(Rectangle a, CB cb) {
+		super(a, "Import GoatTracker .sng", cb, [".sng"]);
+	}
+	override protected int returnPressed(CB cb) {
+		int r = super.returnPressed(cb);
+		return mainui.isActiveDialog(this) ? r : OK;
+	}
+}
+
+// A paged conversion report: all mappings remain readable even for a song
+// with many source locations. Text is wrapped to the current dialog width.
+class GoatImportReportDialog : Window {
+	private string[] lines;
+	private int page, perPage;
+	this(string[] warnings) {
+		int width = min(screen.width - 6, 88), height = min(screen.height - 4, 26);
+		super(Rectangle((screen.width - width) / 2, (screen.height - height) / 2, height, width));
+		perPage = height - 4;
+		int limit = width - 4;
+		foreach(warning; warnings) {
+			while(warning.length > limit) {
+				int cut = limit;
+				while(cut > limit / 2 && warning[cut] != ' ') cut--;
+				if(cut <= limit / 2) cut = limit;
+				lines ~= warning[0 .. cut]; warning = warning[cut .. $].strip();
+			}
+			lines ~= warning; lines ~= "";
+		}
+	}
+	override void update() {
+		drawFrame(area);
+		int pages = (cast(int)lines.length + perPage - 1) / perPage;
+		screen.cprint(area.x + 2, area.y, 1, 0, format(" GoatTracker import mappings %d/%d ", page + 1, pages));
+		foreach(r; 0 .. perPage) {
+			screen.cprint(area.x + 2, area.y + 2 + r, 15, 0, std.array.replicate(" ", area.width - 4));
+			int index = page * perPage + r;
+			if(index < lines.length) screen.cprint(area.x + 2, area.y + 2 + r, 15, 0, lines[index]);
+		}
+	}
+	override int keypress(Keyinfo key) {
+		int pages = (cast(int)lines.length + perPage - 1) / perPage;
+		if(key.raw == SDLK_ESCAPE || key.raw == SDLK_RETURN) return RETURN;
+		if(key.raw == SDLK_SPACE || key.raw == SDLK_PAGEDOWN || key.raw == SDLK_RIGHT)
+			page = (page + 1) % pages;
+		if(key.raw == SDLK_PAGEUP || key.raw == SDLK_LEFT) page = (page + pages - 1) % pages;
+		return OK;
 	}
 }
 
