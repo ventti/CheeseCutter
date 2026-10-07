@@ -20,9 +20,7 @@
 # - libcurl   macOS: bundled | Linux: libcurl*-dev | Windows: mingw-w64-x86_64-curl
 # - make/gcc/g++  macOS: xcode-select --install
 
-# Default task catalog is deliberately local/offline. Release tasks are remote and
-# opt-in via `MISE_CONFIG_FILE=config/mise-release.toml mise run release:<task>`, so ordinary
-# builds and tests never require a GitHub OAuth token merely to parse this file.
+# Local tasks and shared release toolkit.
 [task_config]
 includes = [
   "mise-tasks",
@@ -30,6 +28,7 @@ includes = [
   ".mise/tasks",
   ".config/mise/tasks",
   "mise/tasks",
+  "git::https://github.com/superteppo/release-scripts.git//mise-tasks?ref=main",
 ]
 
 [env]
