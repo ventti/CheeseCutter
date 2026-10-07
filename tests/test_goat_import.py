@@ -83,7 +83,7 @@ def rows(data, number):
         if data[i] == 0xBF:
             return result
         result.append(tuple(data[i:i + 4]))
-    raise AssertionError("unterminated sequence")
+    return result  # Full 64-row sequences have no room for an end marker.
 
 
 def timeline(data, voice=0):
@@ -182,9 +182,31 @@ class GoatImport(unittest.TestCase):
         pattern = [(0x90, 1, 0, 0)] + [REST] * 126 + [(0x94, 0, 0, 0)]
         data = self.convert(song(patterns=[pattern]))
         order, _ = tracks(data)
-        self.assertTrue(all(len(rows(data, n)) <= 63 for n in order))
+        self.assertTrue(all(len(rows(data, n)) == 64 for n in order))
         sequence = timeline(data)
         self.assertEqual(sequence[127][2], 0x94)
+
+    def test_source_pattern_lengths_preserved_with_empty_last_row(self):
+        for length in (4, 32, 63, 64):
+            with self.subTest(length=length):
+                pattern = [(0x90, 1, 0, 0)] + [REST] * (length - 1)
+                data = self.convert(song(patterns=[pattern]))
+                order, restart = tracks(data)
+                self.assertTrue(all(len(rows(data, n)) == length for n in order))
+                self.assertLess(restart, len(order))
+                for n in order:
+                    self.assertEqual(rows(data, n)[-1][2], 0x60)
+
+    def test_full_pattern_last_row_and_wrap_play_at_original_times(self):
+        pattern = [(0x90, 1, 0, 0)] + [REST] * 62 + [(0x94, 1, 0, 0)]
+        trace = self.trace(song(patterns=[pattern]), 800)
+        pitches = [r[0] | r[1] << 8 for r in trace]
+        changes = [(i, pitch) for i, pitch in enumerate(pitches)
+                   if pitch in (0x1168, 0x15EB) and (i == 0 or pitch != pitches[i - 1])]
+        self.assertEqual([pitch for _, pitch in changes[:5]],
+                         [0x1168, 0x15EB, 0x1168, 0x15EB, 0x1168])
+        self.assertEqual([b[0] - a[0] for a, b in zip(changes, changes[1:])],
+                         [63 * 6, 6, 63 * 6, 6])
 
     def test_rest_gate_off_gate_on_and_tie(self):
         pattern = [(0x90, 1, 0, 0), REST, (0xBE, 0, 0, 0), (0xBF, 0, 0, 0), (0x92, 0, 3, 0)]
@@ -367,7 +389,7 @@ class GoatImport(unittest.TestCase):
         self.assertIn("Envelope", proc.stdout)
         self.assertIn("approximated as", proc.stdout)
         self.assertTrue(all(row[1] in (0xF0, 0x5F) for row in timeline(data)))
-        self.assertTrue(all(len(rows(data, n)) <= 63 for n in tracks(data)[0]))
+        self.assertTrue(all(len(rows(data, n)) <= 64 for n in tracks(data)[0]))
         first_target = next(i for i, row in enumerate(timeline(data)) if row[2] == 0x94)
         self.assertEqual(first_target * (data[65536 + 5] + 1), (81 + 127) * 6)
         trace = self.trace(fixture, 1300)

@@ -499,7 +499,9 @@ private class Converter {
         }
         for(tick = 0; tick < 1000000; tick++) {
             bool relevant;
-            foreach(ref voice; voices) if(voice.countdown == 0 || voice.vibratoDelay == 1) relevant = true;
+            // Detect loops at source pattern boundaries so startup state does
+            // not introduce a restart in the middle of an otherwise intact pattern.
+            foreach(ref voice; voices) if(voice.countdown == 0 && voice.row == 0) relevant = true;
             if(relevant) {
                 // Avoid struct padding in keys. Incoming musical state is part
                 // of the key, so context changes get their own pattern variants.
@@ -697,11 +699,13 @@ private class Converter {
         order[] = 0;
         while(offset < rows) {
             if(offset == loopRow) restartTrack = track;
-            int end = min(rows, offset + 63);
+            int end = min(rows, offset + 64);
             for(int r = offset + 1; r < end; r++) if(r in boundaries) { end = r; break; }
             ubyte[256] sequence;
             sequence[0 .. (end - offset) * 4] = raw[offset * 4 .. end * 4];
-            sequence[(end - offset) * 4] = 0xbf;
+            // A full 64-row sequence uses all 256 bytes; refresh() infers its
+            // length without an end marker, and the packer adds its own marker.
+            if(end - offset < 64) sequence[(end - offset) * 4] = 0xbf;
             string key = cast(string)sequence[].idup;
             int number, transpose;
             if(auto found = key in sequenceMap) number = *found;
@@ -728,7 +732,7 @@ private class Converter {
                             differences++;
                         }
                     }
-                    if(candidate[(end - offset) * 4] != 0xbf || shift < -31 || shift > 31) compatible = false;
+                    if(end - offset < 64 && candidate[(end - offset) * 4] != 0xbf || shift < -31 || shift > 31) compatible = false;
                     if(!approximateEnvelopes && shift) compatible = false;
                     if(compatible && differences < best) {
                         best = differences; number = cast(int)n; transpose = shift;
