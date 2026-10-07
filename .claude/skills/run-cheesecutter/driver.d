@@ -216,6 +216,17 @@ private bool processCommand(string arg) {
 	auto c = arg.findSplit(":");
 	string cmd = c[0], val = c[2];
 	switch(cmd) {
+		case "inputframe": {
+			// The production loop's late input/cursor pass (after UI drawing).
+			auto input = mainui.activeInput;
+			if(input !is null) {
+				input.update();
+				if(input.cursor !is null) input.cursor.blink();
+			}
+			video.updateFrame();
+			stderr.writefln("inputframe: active=%s", input !is null);
+			break;
+		}
 		case "audioloss":
 			// Simulate a device disappearing without changing the logical player.
 			SDL_CloseAudio();

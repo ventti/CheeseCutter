@@ -244,6 +244,11 @@ final class UI {
 	}
 
 	@property Input activeInput() {
+		// Menus and the palette own focus. The main loop updates this input
+		// after drawing, so exposing the underlying table would repaint its
+		// glyph and blinking cursor over the foreground overlay.
+		if((menubar !is null && menubar.active) ||
+		   (palette !is null && palette.active)) return null;
 		return activeWindow.input;
 	}
 

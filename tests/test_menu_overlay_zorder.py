@@ -47,6 +47,23 @@ def _row_of(rows: dict[int, str], needle: str) -> int:
 
 
 class MenuOverlayZOrderTests(unittest.TestCase):
+    def test_foreground_focus_suspends_late_tracker_input_repaint(self):
+        for overlay in ("menu", "palette"):
+            with self.subTest(overlay=overlay), CCDriverSession(f"load:{SONG}", "key:ESC", "key:F6") as session:
+                self.assertIn("inputframe: active=true", session.run("inputframe"))
+                if overlay == "menu":
+                    session.run("key:ESC")
+                else:
+                    session.run("key:Ctrl-p")
+                    for char in "pla":
+                        session.run(f"key:{char}")
+                before = _rows(session.run("screendump"))
+                for _ in range(20):
+                    self.assertIn("inputframe: active=false", session.run("inputframe"))
+                self.assertEqual(_rows(session.run("screendump")), before)
+                session.run("key:ESC")
+                self.assertIn("inputframe: active=true", session.run("inputframe"))
+
     def test_cached_menu_checkbox_updates_and_survives_reopen(self):
         with CCDriverSession("key:ESC", "key:ESC") as session:
             for _ in range(3):
