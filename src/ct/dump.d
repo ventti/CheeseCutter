@@ -57,9 +57,9 @@ string dumpData(Song sng) {
 	append( "arp2 = *\n");
 	hexdump(sng.wave2Table[0 .. tablen], 16);
 	append( "filttab = *\n");
-	hexdump(sng.filterTable[0 .. getHighestUsed(sng.filterTable) + 4], 4);
+	hexdump(sng.filterTable[0 .. (getHighestUsed(sng.filterTable) / 4 + 1) * 4], 4);
 	append( "pulstab = *\n");
-	hexdump(sng.pulseTable[0 .. getHighestUsed(sng.pulseTable) + 4], 4);
+	hexdump(sng.pulseTable[0 .. (getHighestUsed(sng.pulseTable) / 4 + 1) * 4], 4);
 	append( "inst = *\n");
 	ubyte[512] instab = 0;
 

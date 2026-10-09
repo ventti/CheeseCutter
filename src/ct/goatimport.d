@@ -754,9 +754,10 @@ private class Converter {
             track++; offset = end;
         }
         if(restartTrack < 0) throw new UserException("Internal GoatTracker conversion error: missing loop boundary.");
-        // Editor track wrap is an entry index. The runtime packer converts it
-        // into the byte offset used by the C64 player.
+        // Unpacked editor tracks store a byte offset (two bytes per entry).
+        // TrackList.compact() later maps it to a packed runtime offset.
         if(restartTrack > 255) throw new UserException("Converted GoatTracker restart position exceeds 255 entries.");
-        order[track * 2 .. track * 2 + 2] = [cast(ubyte)0xf0, cast(ubyte)restartTrack];
+        const int wrap = 0xf000 | (restartTrack * 2);
+        order[track * 2 .. track * 2 + 2] = [cast(ubyte)(wrap >> 8), cast(ubyte)wrap];
     }
 }

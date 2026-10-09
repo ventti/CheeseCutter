@@ -16,6 +16,8 @@ import std.string;
 import std.conv;
 import std.file;
 import std.array : appender;
+import std.digest.sha : sha256Of;
+import std.json : JSONValue, toJSON;
 
 enum Command { None, ExportPRG, ExportSID, Dump, Import, Init, SidToCt, SidTrace, SngToCt }
 const string[] exts = [ "", "prg", "sid", "s", "ct", "ct", "ct", "trace", "ct" ];
@@ -59,6 +61,7 @@ int main(string[] args) {
 	// these two use PSID ranges (1..32)
 	int defaultTune = 1, singleSubtune = -1;
 	int traceFrames = 3000;
+	string loopInfo;
 	
 	bool outfnDefined = false, infnDefined = false;
 	int command;
@@ -168,6 +171,10 @@ int main(string[] args) {
 					if(value < 1 || value > ct.base.SUBTUNE_MAX)
 						throw new UserException(format("Valid range for subtunes is 1 - %d.", ct.base.SUBTUNE_MAX));
 					singleSubtune = value;
+					break;
+				case "--loop-info":
+					if(command != Command.SidTrace) throw new UserException("Option available only with sidtrace.");
+					loopInfo = nextArg();
 					break;
 				case "-f":
 					if(command != Command.SidTrace)
@@ -328,7 +335,7 @@ int main(string[] args) {
 			break;
 		case Command.SidTrace:
 			std.file.write(outfn, traceSid(cast(ubyte[])std.file.read(infn),
-										   singleSubtune < 0 ? 1 : singleSubtune, traceFrames));
+										   singleSubtune < 0 ? 1 : singleSubtune, traceFrames, loopInfo));
 			break;
 		default:
 			assert(0);
@@ -354,19 +361,59 @@ int main(string[] args) {
 // One line per play call: the 25 SID registers as hex, after that call. A .sid
 // is compared against another by diffing these, so the player that produced
 // the file does not matter, only what it writes.
-string traceSid(ubyte[] file, int subtune, int frames) {
+string traceSid(ubyte[] file, int subtune, int frames, string loopInfo = "") {
 	PsidFile p = parsePsid(file);
 	ubyte[] mem = p.image.dup;
 	CPU cpu = new CPU(mem);
 	cpu.regs.a = cast(ubyte)(subtune - 1);
 	cpu.execute(cast(ushort)p.initAddress);
+	// Read initialized timer data from the generic CPU trace, rather than
+	// matching a tune name, player fingerprint, or a fixed code address.
+	const int initTimerA = mem[0xdc04] | (cast(int)mem[0xdc05] << 8);
+	int observedTimerA = initTimerA;
+	bool variableTimerA;
+	int[] timerLatches;
 	auto app = appender!string();
+	int[string] seen;
+	int loopStart = -1, loopEnd = -1, traced;
+	if(loopInfo.length) {
+		// Include all 64 KiB, including zero page, self-modified code, SID
+		// registers and stack. Only CPU registers reset between calls.
+		auto digest = sha256Of(mem);
+		seen[cast(string)digest[].idup] = 0;
+	}
 	foreach(frame; 0 .. frames) {
 		cpu.reset();
 		cpu.execute(cast(ushort)p.playAddress);
+		const int timerA = mem[0xdc04] | (cast(int)mem[0xdc05] << 8);
+		if(observedTimerA == 0) observedTimerA = timerA;
+		else if(timerA != observedTimerA) variableTimerA = true;
+		timerLatches ~= timerA;
 		foreach(b; mem[0xd400 .. 0xd419])
 			app.put(format("%02x", b));
 		app.put("\n");
+		traced = frame+1;
+		if(loopInfo.length) {
+			auto digest = sha256Of(mem);
+			string key = cast(string)digest[].idup;
+			if(auto prior = key in seen) {
+				loopStart = *prior; loopEnd = traced; break;
+			}
+			seen[key] = traced;
+		}
 	}
+	if(loopInfo.length) {
+		JSONValue metadata = JSONValue([
+			"detected": JSONValue(loopStart >= 0),
+			"start_call": JSONValue(loopStart), "end_call": JSONValue(loopEnd),
+			"trace_calls": JSONValue(traced),
+			"timer_latches": JSONValue(timerLatches),
+			"cia_timer": JSONValue(observedTimerA), "variable_timer": JSONValue(variableTimerA),
+			"method": JSONValue("SHA256 recurrence of all emulated RAM at play-call boundaries")]);
+		std.file.write(loopInfo, toJSON(metadata) ~ "\n");
+		if(loopStart >= 0) explain(format("Trace loop: %d -> %d calls", loopStart, loopEnd));
+	}
+	explain(format("Trace CIA1 timerA: %d; variable: %s", observedTimerA,
+		variableTimerA ? "yes" : "no"));
 	return app.data;
 }

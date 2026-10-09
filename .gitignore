@@ -31,3 +31,7 @@ teppo/
 screenshot_*.png
 screenshot_*.bmp
 tunes/screenshot_*.bmp
+
+# SID reconstruction helper and Python bytecode
+tools/sid_render
+__pycache__/

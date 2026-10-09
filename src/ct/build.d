@@ -489,6 +489,31 @@ ubyte[] buildResidentImage(Song song, bool ntsc, bool autoPlay,
 string dumpOptimized(Song song, int address, int zpAddress,
 					 bool genPSID, bool verbose) {
 	string input = playerSource;
+	// Preserve custom song tuning when assembling an optimized player.
+	auto bundled = new Song;
+	int sourceFreq = song.offsets[Offsets.FREQTABLE];
+	int bundledFreq = bundled.offsets[Offsets.FREQTABLE];
+	// Legacy images point both slots at the dummy preceding freqtable_lo.
+	if(sourceFreq == song.offsets[Offsets.FINETUNE]) sourceFreq++;
+	if(bundledFreq == bundled.offsets[Offsets.FINETUNE]) bundledFreq++;
+	if(song.memspace[sourceFreq .. sourceFreq + 192] !=
+	   bundled.memspace[bundledFreq .. bundledFreq + 192]) {
+		int begin = cast(int)input.indexOf("\nfreqtable_lo\n") + 1;
+		int finish = cast(int)input.indexOf(";---------------------------------------", begin);
+		if(begin <= 0 || finish < begin)
+			throw new UserException("Could not locate player frequency-table labels.");
+		string replacement;
+		foreach(col; 0 .. 2) {
+			replacement ~= col ? "freqtable_hi\n" : "freqtable_lo\n";
+			foreach(row; 0 .. 8) {
+				replacement ~= "\t\t!8 ";
+				foreach(i; 0 .. 12) replacement ~= format("%s$%02x",
+					i ? "," : "", song.memspace[sourceFreq + col * 96 + row * 12 + i]);
+				replacement ~= "\n";
+			}
+		}
+		input = input[0 .. begin] ~ replacement ~ input[finish .. $];
+	}
 	input ~= dumpData(song);
 	input = setArgumentValue("INSNO", format("%d", song.numInstr+1), input);
 	char[] linkedPlayerID = (new Song()).playerID;

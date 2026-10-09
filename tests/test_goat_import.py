@@ -69,7 +69,7 @@ def tracks(data, voice=0):
     for i in range(0, len(raw), 2):
         trans, number = raw[i:i + 2]
         if trans >= 0xF0:
-            return entries, number
+            return entries, (((trans & 15) << 8) | number) // 2
         entries.append(number)
     raise AssertionError("unterminated orderlist")
 
