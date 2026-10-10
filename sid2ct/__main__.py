@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 
-from . import compare, convert
+from . import compare, convert, search
 from .audio import compare_wavs
 
 
@@ -13,6 +13,7 @@ def main(argv=None):
     commands = parser.add_subparsers(dest='command', required=True)
     for name, module, help_text in (
         ('convert', convert, 'Convert a SID to editable CT and compare mix, voices and time windows.'),
+        ('search', search, 'Compare bounded optional helper experiments with retained before artifacts.'),
         ('compare', compare, 'Convert or use an existing CT and compare mix, voices and time windows.'),
     ):
         command = commands.add_parser(name, help=help_text, description=module.__doc__)

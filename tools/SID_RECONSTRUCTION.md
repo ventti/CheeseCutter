@@ -547,3 +547,45 @@ frequency ratios, intra-call writes or hardware equivalence.
 Artifacts and measured evaluations are under `/private/tmp/sid-coupling-20261008/`.
 Early candidates and diagnostic reports remain for comparison; `evaluation.json`
 records the final measured candidates and explicitly separates discarded trials.
+
+
+### Optional staged helpers
+
+Default conversion retains the existing allocation, event extraction and fixed
+pattern chunks. Opt in with `--instrument-allocation trajectory` or `budget`,
+`--pattern-mining`, `--change-points`, and `--joint-modeling`. Joint modeling
+requires `--coupled-programs preserve` and trajectory/budget allocation.
+
+Trajectory allocation selects existing weighted medoids, separates hidden
+oscillators from sounding instruments and uses trajectory-aware fallback.
+Budget allocation admits complete programs within 47 instruments, 256 wave
+rows and 64 pulse/filter records including sentinels. Longer waves pack first
+so exact suffix sharing matches the selector's accounting. Mandatory medoids
+that exceed capacity reject the experiment; legacy remains available.
+
+Change points currently provide advisory diagnostics without adding ADSR
+attacks. Joint modeling weights representatives at time-local dependency
+onsets; it does not fit phase. Pattern mining validates exact expansion, keeps
+physical voices and individual intro/loop restart indices, and retains fixed
+chunks if factoring increases dictionary size or exceeds native limits.
+
+Bounded audio experiments are separate from the existing automatic search:
+
+```sh
+python3 -m sid2ct search song.sid -o experiments \
+  --sound-programs dynamic --sound-rate source --tuning default \
+  --pitch-programs full --modulation-programs compact --coupled-programs preserve
+```
+
+Search preserves `before.ct`, each completed helper CT/WAV/report and
+`search.json`. It tests at most five named helper experiments, with caller caps
+`--candidate-cap` (default 12) and `--search-seconds` (default 600). Time is
+checked between operations; one in-flight operation can exceed the ceiling.
+Identical CTs reuse candidate mixed renders with matching source/render settings.
+Unless diagnostics are skipped or time is exhausted, before and up to three
+unique experiments receive mix/physical voice/pair/register/window diagnostics.
+The best scored experiment is copied to `selected.ct`; before wins ties. This
+is a provisional mix ranking and can regress voices or windows. Every completed
+alternative remains for review; combinations wait for regression criteria. `--seconds` means finite sample
+validation; omit it for detected loop duration. Tests establish helper and
+export invariants, not improved audio quality on arbitrary songs.

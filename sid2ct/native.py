@@ -111,7 +111,11 @@ def sound_distance(left, right):
     return envelope*20 + shape*30 + duty + filtering + abs(len(wave)-len(other_wave))/4
 
 
-def native_song(template, frames, multiplier, row_frames, metadata, frequencies=None, output_multiplier=1, loop_start=None, pitch_programs="attack", modulation_programs="legacy", coupled_programs="legacy"):
+def native_song(template, frames, multiplier, row_frames, metadata, frequencies=None, output_multiplier=1, loop_start=None, pitch_programs="attack", modulation_programs="legacy", coupled_programs="legacy", instrument_allocation="legacy", change_points=False, pattern_mining=False, joint_modeling=False):
+    if instrument_allocation not in ("legacy", "trajectory", "budget"):
+        raise ValueError("Instrument allocation must be legacy, trajectory or budget.")
+    if joint_modeling and coupled_programs != "preserve":
+        raise ValueError("Joint modeling requires preserved physical oscillator dependencies.")
     if coupled_programs not in ("legacy", "preserve"):
         raise ValueError("Coupled programmes must be legacy or preserve.")
     if modulation_programs not in ("legacy", "compact"):
@@ -158,6 +162,22 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
     count = (len(frames)+quantum-1)//quantum
     rows = [[[0xF0,0xF0,0x60,0] for _ in range(count)] for _ in range(3)]
     metrics = Counter()
+    helper_report = {}
+    if change_points:
+        from .segmentation import detect_boundaries
+        boundaries = detect_boundaries(frames, sustain=3*multiplier)
+        helper_report['change_points'] = dict(mode='advisory', count=len(boundaries),
+            reasons=dict(Counter(reason for boundary in boundaries for reason in boundary.reasons)),
+            limitations='Boundaries do not retrigger envelopes; behavioral segmentation remains experimental.')
+    groups = ()
+    if joint_modeling:
+        from .joint_voice import temporal_dependency_groups, group_trajectory
+        groups = temporal_dependency_groups(frames)
+        helper_report['joint_modeling'] = dict(groups=len(groups),
+            sampled_ticks=sum(len(group_trajectory(frames[g.start:g.stop],
+                type(g)(0,g.stop-g.start,g.voices,g.roots)).samples) for g in groups),
+            mode='time-local coupled allocation weighting',
+            limitations='Preserves topology and weights joint use; does not fit oscillator phase.')
     instruments = {}
     wave = [0, 0x7E]
     control = [0x11,0]
@@ -339,7 +359,34 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
         # approximation so capacity fallback never turns it into a new voice.
         silent_fallback = (0,0,((0,0xE0),(0x7E,0)),(),())
     allocation = usage.most_common()
-    if silent_fallback is not None and silent_fallback not in usage:
+    if instrument_allocation != 'legacy':
+        from .allocation import select_representatives, select_with_budgets
+        weighted = Counter(usage)
+        if joint_modeling:
+            for v,start,base,signature,coupled in events:
+                # Weight only the local event onset, never retroactive song-wide membership.
+                if any(g.start <= start < g.stop and v in g.voices for g in groups):
+                    weighted[signature] += 1
+        protected = ()
+        if silent_fallback is not None:
+            weighted.setdefault(silent_fallback, 1)
+            protected = (silent_fallback,)
+        coupled_signatures = {e[3] for e in events if e[4]}
+        if instrument_allocation == 'budget':
+            selected = select_with_budgets(weighted, instrument_limit=47,
+                wave_limit=254, pulse_limit=63, filter_limit=63,
+                coupled=coupled_signatures, protected=protected)
+            # Store longer programs first so exact suffix costs match admission.
+            selected.sort(key=lambda signature: (-len(signature[2]), signature))
+            allocation = [(signature,usage[signature]) for signature in selected]
+        else:
+            selected = select_representatives(weighted, limit=47,
+                coupled=coupled_signatures, protected=protected)
+            allocation = [(signature,usage[signature]) for signature in selected]
+            allocation += [(signature,weight) for signature,weight in usage.most_common()
+                           if signature not in selected]
+        helper_report['allocation'] = dict(mode=instrument_allocation, selected=len(selected))
+    if silent_fallback is not None and silent_fallback not in dict(allocation):
         allocation.insert(0,(silent_fallback,0))
     for signature,_ in allocation:
         ad,sr,wp,pp,fp=signature
@@ -390,6 +437,9 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
             if ins is None:
                 # Favor envelope/control likeness before trajectory length.
                 def distance(other):
+                    if instrument_allocation != 'legacy':
+                        from .allocation import trajectory_distance as allocation_distance
+                        return allocation_distance(signature, other, coupled=coupled)
                     if coupled:
                         return sound_distance(signature, other) + trajectory_distance(signature[2], other[2])
                     if pitch_programs == 'full':
@@ -399,7 +449,12 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
                 choices = instruments
                 if coupled and waveform_off(signature):
                     choices = {key:value for key,value in instruments.items() if waveform_off(key)}
-                ins=instruments[min(choices,key=distance)]
+                if instrument_allocation != 'legacy':
+                    choices = {key:value for key,value in choices.items()
+                               if waveform_off(key) == waveform_off(signature)}
+                if not choices:
+                    raise ValueError('No compatible packed instrument for oscillator waveform class.')
+                ins=instruments[min(choices,key=lambda key:(distance(key), instruments[key]))]
                 fallbacks[context] = ins
             if coupled and waveform_off(signature):
                 metrics['waveform_off_modulator_approximations'] += 1
@@ -431,11 +486,33 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
     next_seq=1
     from .loops import pattern_spans
     spans, restart = pattern_spans(count, quantum, loop_start)
+    plans = None
+    if pattern_mining:
+        from .patterns import mine_patterns
+        original = tuple(tuple(tuple(row) for row in voice) for voice in rows)
+        boundary = spans[restart][0]
+        try:
+            plan = mine_patterns(original, loop_start=boundary)
+            if plan.expand() != original:
+                raise ValueError('Pattern expansion changed physical voice rows.')
+            fixed_patterns = {tuple(tuple(row) for row in voice[a:b])
+                              for voice in rows for a,b in spans}
+            if (len(plan.patterns) <= len(fixed_patterns) and
+                all(len(order)*2+2 <= 1024 for order in plan.orders) and
+                all(index <= 255 for index in plan.restarts)):
+                plans = [( [plan.patterns[index] for index in order], restart_index)
+                         for order,restart_index in zip(plan.orders,plan.restarts)]
+            helper_report['patterns'] = dict(lossless=True, applied=plans is not None,
+                mined_patterns=len(plan.patterns), fixed_patterns=len(fixed_patterns),
+                search_rows=plan.search_rows, search_exhausted=plan.search_exhausted)
+        except ValueError as error:
+            helper_report['patterns'] = dict(applied=False, retained='fixed chunks', reason=str(error))
+    if plans is None:
+        plans = [([voice[a:b] for a,b in spans], restart) for voice in rows]
     orders=[]
-    for voice in rows:
+    for chunks, voice_restart in plans:
         order=[]
-        for start, stop in spans:
-            chunk=voice[start:stop]
+        for chunk in chunks:
             raw=bytes(x for r in chunk for x in r)
             if len(chunk)<64: raw+=bytes([0xBF])
             raw=raw.ljust(256,b'\0')
@@ -446,7 +523,7 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
                 data[addr:addr+256]=raw
                 next_seq+=1
             order.extend([0xA0,sequence_map[raw]])
-        order.extend([0xF0 | ((restart*2)>>8), (restart*2)&255])
+        order.extend([0xF0 | ((voice_restart*2)>>8), (voice_restart*2)&255])
         if len(order)>1024: raise ValueError('Native reconstruction exceeds order capacity.')
         orders.append(bytes(order).ljust(1024,b'\0'))
     if restart > 255: raise ValueError("Loop restart exceeds native order capacity.")
@@ -476,6 +553,9 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
                 output_multiplier=output_multiplier,pitch_programs=pitch_programs,modulation_programs=modulation_programs,coupled_programs=coupled_programs,coupled_voices=[v+1 for v in range(3) if participating&(1<<v)],row_frames=row_frames,captured_seconds=len(frames)/(50*multiplier),
                 instruments=len(definitions),observed_instrument_variants=len(usage),patterns=len(sequence_map),wave_rows=len(wave),
                 pulse_rows=len(pulses),filter_rows=len(filters),events=len(events),**metrics)
+    if helper_report:
+        report['helpers'] = helper_report
+        report['instrument_allocation'] = instrument_allocation
     for key in ['row_collisions','quantized_events','approximated_instrument_attacks','shared_wave_programs']:
         report.setdefault(key,0)
     report['warnings']=[

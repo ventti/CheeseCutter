@@ -256,6 +256,10 @@ def add_arguments(parser):
     parser.add_argument('--pitch-programs', choices=('auto','attack','compact','full'), default='auto',
                         help='Compare original, compact attack and full pitch trajectories; without audio use full.')
     parser.add_argument('--auto-row-frames', action='store_true', help='Choose the best WAV score among row grids 3,4,5,6,8,12.')
+    parser.add_argument('--instrument-allocation', choices=('legacy','trajectory','budget'), default='legacy')
+    parser.add_argument('--change-points', action='store_true', help='Report advisory change points without retriggering ADSR.')
+    parser.add_argument('--pattern-mining', action='store_true', help='Factor exact rows with lossless expansion and loop checks.')
+    parser.add_argument('--joint-modeling', action='store_true', help='Weight allocation by time-local physical dependencies; requires preserve and nonlegacy allocation.')
     parser.add_argument('--window-seconds', type=float, default=5, help='Seconds per diagnostic comparison window.')
     parser.add_argument('--skip-diagnostics', action='store_true', help='Skip voice/window diagnostics; retain mixed-WAV validation.')
 
@@ -286,6 +290,8 @@ def run_command(args):
             raise ValueError('Audio seconds must be in (0,600].')
         if not args.skip_audio and not args.renderer.is_file():
             raise ValueError('Build the renderer with python3 tools/build_sid_renderer.py (libsidplayfp 3.x required), or use --skip-audio.')
+        if getattr(args,'joint_modeling',False) and (args.coupled_programs != 'preserve' or getattr(args,'instrument_allocation','legacy') == 'legacy'):
+            raise ValueError('--joint-modeling requires --coupled-programs preserve and trajectory/budget allocation.')
         outputs = [args.output, report_path] + ([] if args.skip_audio else [source_wav, converted_wav])
         if not args.skip_audio and not args.skip_diagnostics:
             if not math.isfinite(args.window_seconds) or not .1 <= args.window_seconds <= 600:
@@ -337,6 +343,17 @@ def run_command(args):
                     raise ValueError('Audio rendering failed: ' + result.stdout + result.stderr)
                 return result.stdout.strip()
             def assess(candidate, subtune):
+                import hashlib
+                cache = getattr(args, '_assessment_cache', None)
+                key = (hashlib.sha256(candidate.read_bytes()).hexdigest(),
+                       hashlib.sha256(raw_sid).hexdigest(), audio_duration,
+                       model, args.subtune, subtune, str(args.renderer.resolve()),
+                       hashlib.sha256(args.renderer.read_bytes()).hexdigest(),
+                       hashlib.sha256(args.tool.read_bytes()).hexdigest())
+                if cache is not None and key in cache and cache[key][1].is_file():
+                    prior, wav = cache[key]
+                    audio_result.write_bytes(wav.read_bytes())
+                    return dict(prior, cache_hit=True)
                 exported = temp/'candidate.sid'
                 result = run(args.tool, 'sid', candidate, '-s', subtune, '-o', exported)
                 if result.returncode:
@@ -345,6 +362,8 @@ def run_command(args):
                 assessment = compare_wavs(audio_source, audio_result)
                 assessment.update(renderer=info, tested_seconds=audio_duration,
                                   source_subtune=args.subtune, output_subtune=subtune)
+                if cache is not None:
+                    cache[key] = (dict(assessment), converted_wav)
                 return assessment
             # Full libsidplayfp emulation honors the SID's actual timer setup.
             if not args.skip_audio:
@@ -397,7 +416,11 @@ def run_command(args):
                         if profile=='dynamic':
                             native,candidate_report = native_song(template,frames,args.multiplier,grid,metadata,
                                                                   tuning,rate, loop_start=loop['loop_start_frame'] if loop and loop['detected'] else None,
-                                                                  pitch_programs=pitch, modulation_programs=modulation, coupled_programs=couple)
+                                                                  pitch_programs=pitch, modulation_programs=modulation, coupled_programs=couple,
+                                                                  instrument_allocation=getattr(args,'instrument_allocation','legacy'),
+                                                                  change_points=getattr(args,'change_points',False),
+                                                                  pattern_mining=getattr(args,'pattern_mining',False),
+                                                                  joint_modeling=getattr(args,'joint_modeling',False))
                             candidate.write_bytes(native)
                             candidate_report['tuning'] = label
                             if label=='dmc4':

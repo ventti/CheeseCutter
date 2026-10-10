@@ -381,3 +381,40 @@ class NativeReconstruction(unittest.TestCase):
 
 
 if __name__=='__main__': unittest.main()
+
+
+class HelperIntegration(NativeReconstruction):
+    # Only new tests; avoid inheriting the full playback suite twice.
+    def test_helpers_preserve_hidden_source_and_native_limits(self):
+        frames = [self.coupled_frame(2, 0, 4455 if i<12 else 6675) for i in range(48)]
+        for mode in ('trajectory', 'budget'):
+            data, report = native_song(self.template, frames, 1, 4, ['','',''],
+                coupled_programs='preserve', pitch_programs='full',
+                instrument_allocation=mode, change_points=True, joint_modeling=True)
+            rendered = self.trace(data)
+            start = next(i for i,f in enumerate(rendered) if f[4]==0x15)
+            self.assertTrue(all(not f[18]&0xF0 for f in rendered[start:start+48]))
+            self.assertLessEqual(report['instruments'],47)
+            self.assertLessEqual(report['wave_rows'],256)
+            self.assertLessEqual(report['pulse_rows'],64)
+            self.assertLessEqual(report['filter_rows'],64)
+            self.assertGreater(report['helpers']['change_points']['count'],0)
+            self.assertGreater(report['helpers']['joint_modeling']['groups'],0)
+
+    def test_exact_patterns_preserve_exported_registers_and_loop(self):
+        frames = [frame(4455,0x21) for _ in range(480)]
+        before, _ = native_song(self.template,frames,1,4,['','',''],loop_start=128)
+        after, report = native_song(self.template,frames,1,4,['','',''],loop_start=128,pattern_mining=True)
+        self.assertEqual(self.trace(before,600),self.trace(after,600))
+        self.assertTrue(report['helpers']['patterns']['lossless'])
+
+    def test_advisory_segmentation_does_not_change_playback(self):
+        frames = [frame(4455 if i<20 else 6675,0x21) for i in range(60)]
+        before, _ = native_song(self.template,frames,1,4,['','',''])
+        after, _ = native_song(self.template,frames,1,4,['','',''],change_points=True)
+        self.assertEqual(before,after)
+
+# Inherit the shared setup/trace utilities, but run inherited tests only once.
+for _name in tuple(dir(NativeReconstruction)):
+    if _name.startswith('test_'):
+        setattr(HelperIntegration,_name,None)
