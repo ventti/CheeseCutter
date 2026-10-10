@@ -47,9 +47,6 @@ def capture(tool, sid, subtune, directory, seconds=None, multiplier=None, max_se
     if not data['detected'] and sum(elapsed) < limit:
         data = run(math.ceil(limit*CC_BASE_RATE*16))
         elapsed = periods(data)
-    if seconds is None and not data['detected']:
-        hint = 'increase --max-seconds or use an explicit --seconds capture' if max_seconds < 600 else 'use an explicit --seconds capture'
-        raise ValueError(f'No full player-state loop found within {max_seconds:g}s; {hint}.')
     source = [bytes.fromhex(line) for line in trace.read_text().splitlines()]
     if seconds is not None and data['detected']:
         cycle = source[data['start_call']:data['end_call']]
@@ -70,9 +67,13 @@ def capture(tool, sid, subtune, directory, seconds=None, multiplier=None, max_se
     if not 1 <= chosen <= 16:
         raise ValueError('Source rate exceeds supported multiplier range 1..16.')
     target = CC_BASE_RATE*chosen
-    duration = min(seconds, boundaries[-1]) if seconds is not None else boundaries[-1]
+    duration = min(limit, boundaries[-1])
     frames = [source[min(len(source)-1, bisect_right(boundaries, i/target+1e-10)-1)]
               for i in range(round(duration*target))]
+    # A tempo acceleration can make the call-count search exceed the time
+    # budget. Do not claim a loop whose end lies outside the captured time.
+    if data['detected'] and boundaries[data['end_call']] > limit + 1e-9:
+        data.update(detected=False, start_call=-1, end_call=-1)
     start_time = boundaries[data['start_call']] if data['detected'] else None
     end_time = boundaries[data['end_call']] if data['detected'] else None
     data.pop('write_hashes', None)
@@ -82,7 +83,10 @@ def capture(tool, sid, subtune, directory, seconds=None, multiplier=None, max_se
         loop_start_frame=round(start_time*target) if start_time is not None else None,
         source_multiplier=chosen, timing_basis='override' if multiplier else 'cia' if cia else 'pal-vbi',
         resampled_calls=len(frames), destination_calls_per_second=target,
-        search_limit_seconds=max_seconds)
+        search_limit_seconds=limit,
+        status='loop_found' if data['detected'] else 'no_loop_within_limit',
+        warnings=[] if data['detected'] else [
+            f'No player-state loop found within {limit:g}s. The song may end, continue, or loop later; the output repeats this finite capture.'])
     return frames, data
 
 

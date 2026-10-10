@@ -375,6 +375,9 @@ string traceSid(ubyte[] file, int subtune, int frames, string loopInfo = "") {
 	int[] timerLatches;
 	auto app = appender!string();
 	int[string] seen;
+	// Keep one initial snapshot; replay a hash candidate for exact equality
+	// rather than retaining 64 KiB for every call in a long song.
+	auto initialMemory = mem.dup;
 	int loopStart = -1, loopEnd = -1, traced;
 	if(loopInfo.length) {
 		// Include all 64 KiB, including zero page, self-modified code, SID
@@ -397,7 +400,15 @@ string traceSid(ubyte[] file, int subtune, int frames, string loopInfo = "") {
 			auto digest = sha256Of(mem);
 			string key = cast(string)digest[].idup;
 			if(auto prior = key in seen) {
-				loopStart = *prior; loopEnd = traced; break;
+				auto candidateMemory = initialMemory.dup;
+				auto candidateCPU = new CPU(candidateMemory);
+				foreach(call; 0 .. *prior) {
+					candidateCPU.reset();
+					candidateCPU.execute(cast(ushort)p.playAddress);
+				}
+				if(candidateMemory == mem) {
+					loopStart = *prior; loopEnd = traced; break;
+				}
 			}
 			seen[key] = traced;
 		}
@@ -409,7 +420,8 @@ string traceSid(ubyte[] file, int subtune, int frames, string loopInfo = "") {
 			"trace_calls": JSONValue(traced),
 			"timer_latches": JSONValue(timerLatches),
 			"cia_timer": JSONValue(observedTimerA), "variable_timer": JSONValue(variableTimerA),
-			"method": JSONValue("SHA256 recurrence of all emulated RAM at play-call boundaries")]);
+			"method": JSONValue("SHA256 lookup with exact replay comparison of all emulated RAM at play-call boundaries"),
+			"scope": JSONValue("deterministic CPU tracer; SID oscillator, envelope and filter state are not emulated")]);
 		std.file.write(loopInfo, toJSON(metadata) ~ "\n");
 		if(loopStart >= 0) explain(format("Trace loop: %d -> %d calls", loopStart, loopEnd));
 	}

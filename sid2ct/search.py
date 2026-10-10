@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 import math
+import shutil
 from pathlib import Path
 import time
 from . import convert, compare
@@ -59,6 +60,11 @@ def select_by_mix(records):
 
 def add_arguments(parser):
     convert.add_arguments(parser)
+    for action in parser._actions:
+        if action.dest == 'output':
+            action.help = 'Folder for all versions, WAV files and comparison reports.'
+        elif action.dest == 'force':
+            action.help = 'Replace search outputs in an existing folder.'
     parser.set_defaults(sound_programs="dynamic", sound_rate="source", tuning="default",
                         pitch_programs="full", modulation_programs="compact", coupled_programs="preserve")
     parser.add_argument('--candidate-cap', type=int, default=12)
@@ -77,11 +83,11 @@ def run_command(args):
             raise ValueError('Helper search requires dynamic sounds and preserve coupling.')
         if args.instrument_allocation != 'legacy' or args.change_points or args.pattern_mining or args.joint_modeling:
             raise ValueError('Search applies helpers itself; leave helper flags at their defaults.')
-        if args.output.exists():
-            raise ValueError('Search output must be a new directory.')
+        if args.output.exists() and not args.force:
+            raise ValueError('Search output already exists; use --force to replace search outputs.')
         if args.candidate_cap < 0 or not math.isfinite(args.search_seconds) or args.search_seconds <= 0:
             raise ValueError('Invalid candidate cap/time budget.')
-        args.output.mkdir(parents=True)
+        args.output.mkdir(parents=True, exist_ok=args.force)
         records_by_name = {}
         assessment_cache = {}
         source_hash = hashlib.sha256(args.sid.read_bytes()).hexdigest()
@@ -89,7 +95,7 @@ def run_command(args):
             if hashlib.sha256(args.sid.read_bytes()).hexdigest() != source_hash:
                 raise ValueError('Source changed during search.')
             values = vars(args).copy()
-            values.update(output=args.output/(name+'.ct'), skip_diagnostics=True, force=False, _assessment_cache=assessment_cache)
+            values.update(output=args.output/(name+'.ct'), skip_diagnostics=True, force=args.force, _assessment_cache=assessment_cache)
             values.update(options)
             began = time.monotonic()
             if convert.run_command(argparse.Namespace(**values)):
@@ -114,6 +120,12 @@ def run_command(args):
         report['selection_method'] = 'heuristic mix ranking; before wins ties; voice/window tradeoffs require review'
         report['diagnostics'] = 'unavailable' 
         if shortlist and not args.skip_diagnostics and time.monotonic()-started < args.search_seconds:
+            diagnostics = args.output/'diagnostics'
+            if args.force and diagnostics.exists():
+                if diagnostics.is_dir() and not diagnostics.is_symlink():
+                    shutil.rmtree(diagnostics)
+                else:
+                    diagnostics.unlink()
             values = dict(source=args.sid, reconstruction=None,
                 candidate=[record['name']+'='+record['path'] for record in shortlist],
                 output=args.output/'diagnostics', seconds=before['mix']['tested_seconds'],

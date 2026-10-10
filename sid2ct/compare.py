@@ -117,7 +117,7 @@ def add_arguments(parser):
     parser.add_argument('--candidate', action='append', default=[], metavar='LABEL=FILE',
                         help='SID or CC reconstruction; repeat to compare baselines and alternatives.')
     parser.add_argument('-o', '--output', type=Path, required=True, help='New directory for report and WAVs.')
-    parser.add_argument('--seconds', type=float, help='Explicit interval; default detect through the source loop.')
+    parser.add_argument('--seconds', type=float, help='Seconds to compare; default: first player-state loop or 600-second search limit.')
     parser.add_argument('--window-seconds', type=float, default=5)
     parser.add_argument('--subtune', type=int, default=1, help='Source subtune.')
     parser.add_argument('--candidate-subtune', type=int, default=1)

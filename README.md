@@ -113,3 +113,22 @@ Binary packages are available for some distributions via
 https://repology.org/metapackage/cheesecutter/versions — the authors of
 CheeseCutter-EXTended take no responsibility for binaries downloaded from any
 third-party website, including the one above.
+
+# sid2ct loop detection
+
+`python3 -m sid2ct convert song.sid -o song.ct` does not need `--seconds`.
+It captures the intro and first complete player-state loop. The tracer hashes
+all 64 KiB of memory after each play call, then confirms a matching state by
+replaying from initialization and comparing every byte. Repeated notes alone
+do not count as a loop. CPU registers reset before each play call.
+
+If no loop is found within 600 seconds, conversion saves that finite capture
+and reports `no_loop_within_limit`. Use `--max-seconds` for a shorter search,
+or `--seconds` for a fixed capture. The generated song repeats the saved
+capture when no source loop was found. An external `--trace` defaults to its
+available duration, capped by the search limit.
+
+A finite search cannot prove that a song never loops. Detection covers the
+CPU tracer's player memory and timer values; it does not compare the SID's
+internal oscillator, envelope, or filter state, or prove identical audio
+samples. Unsupported players still report tracing errors.

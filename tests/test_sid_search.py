@@ -1,7 +1,46 @@
 import unittest
+import argparse
+import json
+from pathlib import Path
+import tempfile
+from unittest.mock import patch
+from sid2ct.search import add_arguments, run_command
 from sid2ct.search import bounded_search, select_by_mix
 
 class HelperSearch(unittest.TestCase):
+    def test_force_reuses_existing_outputs_and_diagnostics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sid = root/'source.sid'; sid.write_bytes(b'source')
+            output = root/'results'; output.mkdir()
+            (output/'before.ct').write_bytes(b'old')
+            (output/'keep.txt').write_text('keep')
+            diagnostics = output/'diagnostics'; diagnostics.mkdir()
+            (diagnostics/'old.json').write_text('{}')
+            parser = argparse.ArgumentParser(); add_arguments(parser)
+            args = parser.parse_args([str(sid), '-o', str(output), '--candidate-cap', '0'])
+            def convert(args):
+                self.assertTrue(args.force)
+                args.output.write_bytes(b'new')
+                args.output.with_suffix('.json').write_text(json.dumps({
+                    'audio_validation': {'similarity': .8, 'tested_seconds': 1}}))
+                return 0
+            def compare(args):
+                self.assertFalse(args.output.exists())
+                args.output.mkdir()
+                (args.output/'report.json').write_text('{}')
+                return 0
+            with patch('sid2ct.search.convert.run_command', side_effect=convert) as conversion, \
+                 patch('sid2ct.search.compare.run_command', side_effect=compare):
+                self.assertEqual(run_command(args), 1)
+                conversion.assert_not_called()
+                args.force = True
+                self.assertEqual(run_command(args), 0)
+            self.assertEqual((output/'before.ct').read_bytes(), b'new')
+            self.assertEqual((output/'selected.ct').read_bytes(), b'new')
+            self.assertEqual((output/'keep.txt').read_text(), 'keep')
+            self.assertFalse((diagnostics/'old.json').exists())
+
     def test_cap_retains_before_and_errors(self):
         calls=[]
         def build(name,options):

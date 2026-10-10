@@ -25,14 +25,62 @@ class SongLoops(unittest.TestCase):
             self.assertEqual(info['end_call']-info['start_call'],256)
             self.assertEqual(len(frames),info['end_call'])
 
-    def test_no_loop_requires_explicit_capture(self):
+    def test_intro_state_is_excluded_from_loop(self):
+        import struct
+        raw = bytearray(unknown_sid())
+        play = struct.unpack_from('>H', raw, 12)[0]
+        at = 124 + play - 0x1000
+        # One permanent state change on the first play call creates an intro.
+        raw[at:at] = bytes.fromhex('a9018505')
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d); sid = d/'source.sid'; sid.write_bytes(raw)
+            _, info = capture(ROOT/'ct2util', sid, 1, d)
+            self.assertEqual(info['start_call'], 1)
+            self.assertEqual(info['end_call'], 257)
+            self.assertEqual(info['status'], 'loop_found')
+            self.assertIn('exact replay comparison', info['method'])
+
+    def test_no_loop_automatically_keeps_finite_capture(self):
         with tempfile.TemporaryDirectory() as d:
             d=Path(d); sid=d/'source.sid'; sid.write_bytes(unknown_sid())
-            with self.assertRaisesRegex(ValueError,'No full player-state loop'):
-                capture(ROOT/'ct2util',sid,1,d,max_seconds=.1)
+            frames, info = capture(ROOT/'ct2util',sid,1,d,max_seconds=.1)
+            self.assertEqual(len(frames),5)
+            self.assertFalse(info['detected'])
+            self.assertEqual(info['status'], 'no_loop_within_limit')
+            self.assertEqual(info['duration_seconds'], .1)
+            self.assertIsNone(info['loop_start_frame'])
+            self.assertTrue(info['warnings'])
             frames, info = capture(ROOT/'ct2util',sid,1,d,seconds=.1)
             self.assertEqual(len(frames),5)
             self.assertFalse(info['detected'])
+
+    def test_long_counter_does_not_turn_repeated_audio_into_loop(self):
+        import struct
+        raw = bytearray(unknown_sid())
+        play = struct.unpack_from('>H', raw, 12)[0]
+        # Carry a 24-bit counter while the audible motif still repeats every
+        # 16 calls. Its actual state period is far outside this capture.
+        at = 124 + play - 0x1000
+        raw[at:at+2] = bytes.fromhex('e602d006e603d002e604')
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d); sid = d/'source.sid'; sid.write_bytes(raw)
+            frames, info = capture(ROOT/'ct2util', sid, 1, d, max_seconds=6)
+            self.assertFalse(info['detected'])
+            self.assertEqual(info['status'], 'no_loop_within_limit')
+            self.assertEqual(len(frames), round(6*CC_BASE_RATE))
+
+    def test_no_loop_conversion_needs_no_seconds(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d); sid = d/'source.sid'; sid.write_bytes(unknown_sid())
+            ct = d/'song.ct'
+            p = subprocess.run(['python3', '-m', 'sid2ct', 'convert', str(sid),
+                '-o', str(ct), '--max-seconds', '.48', '--skip-audio'],
+                cwd=ROOT, capture_output=True, text=True, timeout=90)
+            self.assertEqual(p.returncode, 0, p.stdout+p.stderr)
+            report = json.loads(ct.with_suffix('.json').read_text())
+            self.assertEqual(report['loop_detection']['status'], 'no_loop_within_limit')
+            self.assertEqual(report['captured_seconds'], .48)
+            self.assertIn('none found', p.stdout)
 
     def test_native_intro_restart_survives_export(self):
         with tempfile.TemporaryDirectory() as d:

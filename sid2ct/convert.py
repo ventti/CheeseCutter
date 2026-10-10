@@ -230,8 +230,8 @@ def add_arguments(parser):
     parser.add_argument("--workers", type=int, default=None, help="Parallel analysis workers (default: all available CPU cores).")
     parser.add_argument('sid', type=Path)
     parser.add_argument('-o', '--output', type=Path, required=True)
-    parser.add_argument('--seconds', type=float, help='Explicit capture duration; default detect through the first full player-state loop.')
-    parser.add_argument('--max-seconds', type=float, default=600, help='Loop search limit; fail if no loop is detected (default 600s).')
+    parser.add_argument('--seconds', type=float, help='Seconds to convert; default: first player-state loop or the search limit.')
+    parser.add_argument('--max-seconds', type=float, default=600, help='Maximum seconds to look for a repeating playback state (default: 600).')
     parser.add_argument('--multiplier', type=int, help='Override source timing as 50*N calls/sec (1..16); default infer CIA/VBI timing.')
     parser.add_argument('--row-frames', type=int, default=6, help='PAL frames per output row (3..127).')
     parser.add_argument('--subtune', type=int, default=1)
@@ -323,11 +323,10 @@ def run_command(args):
                 raise ValueError('--max-seconds must be in (0,600].')
             loop = None
             if args.trace:
-                if args.seconds is None:
-                    raise ValueError('An external trace requires explicit --seconds; it has no player-state loop evidence.')
                 args.multiplier = args.multiplier or 1
                 frames = parse_trace(args.trace.read_text())
-                duration = min(args.seconds, len(frames)/(50*args.multiplier))
+                duration = min(args.seconds or args.max_seconds, len(frames)/(50*args.multiplier))
+                frames = frames[:round(duration*50*args.multiplier)]
             else:
                 frames, loop = capture(args.tool.resolve(), args.sid.resolve(), args.subtune,
                     temp, args.seconds, args.multiplier, args.max_seconds)
@@ -462,6 +461,8 @@ def run_command(args):
                 (temp/'best.wav').write_bytes(audio_result.read_bytes())
             report['cross_channel_effects'] = coupling
             report['loop_detection'] = loop
+            if loop:
+                report['warnings'].extend(loop.get('warnings', []))
             report['captured_seconds'] = duration
             if loop:
                 report['source_calls_per_second'] = loop['source_calls_per_second']
@@ -522,6 +523,8 @@ def run_command(args):
         print(f'{args.output}: {report["mode"]} ({report["elapsed_seconds"]:.3f}s)')
         if loop and loop['detected']:
             print(f'Loop: {loop["start_seconds"]:.3f}s → {loop["end_seconds"]:.3f}s; full player-state recurrence')
+        elif loop:
+            print(f'Loop: none found within {loop["search_limit_seconds"]:g}s; saved finite capture')
         print(f'Report: {report_path}')
         if report.get('diagnostics_report'):
             print(f'Diagnostics: {report["diagnostics_report"]}')
