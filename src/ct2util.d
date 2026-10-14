@@ -15,7 +15,8 @@ import std.stdio;
 import std.string;
 import std.conv;
 import std.file;
-import std.array : appender;
+import std.array : appender, array, join;
+import std.algorithm : map;
 import std.digest.sha : sha256Of;
 import std.json : JSONValue, toJSON;
 
@@ -61,7 +62,7 @@ int main(string[] args) {
 	// these two use PSID ranges (1..32)
 	int defaultTune = 1, singleSubtune = -1;
 	int traceFrames = 3000;
-	string loopInfo;
+	string loopInfo, memReads;
 	
 	bool outfnDefined = false, infnDefined = false;
 	int command;
@@ -101,6 +102,7 @@ int main(string[] args) {
 		writefln("\nsidtrace options:");
 		writefln("  -s <num>      Subtune to trace (1-" ~ to!string(ct.base.SUBTUNE_MAX) ~ ", default 1)");
 		writefln("  -f <num>      Number of play calls to trace (default 3000)");
+		writefln("  --mem-reads <file>  Also write per-call data reads and SID writes");
 		writefln("\nPrefix value options with '0x' or '$' to indicate a hexadecimal value.");
 	}
 
@@ -175,6 +177,10 @@ int main(string[] args) {
 				case "--loop-info":
 					if(command != Command.SidTrace) throw new UserException("Option available only with sidtrace.");
 					loopInfo = nextArg();
+					break;
+				case "--mem-reads":
+					if(command != Command.SidTrace) throw new UserException("Option available only with sidtrace.");
+					memReads = nextArg();
 					break;
 				case "-f":
 					if(command != Command.SidTrace)
@@ -335,7 +341,7 @@ int main(string[] args) {
 			break;
 		case Command.SidTrace:
 			std.file.write(outfn, traceSid(cast(ubyte[])std.file.read(infn),
-										   singleSubtune < 0 ? 1 : singleSubtune, traceFrames, loopInfo));
+										   singleSubtune < 0 ? 1 : singleSubtune, traceFrames, loopInfo, memReads));
 			break;
 		default:
 			assert(0);
@@ -358,10 +364,39 @@ int main(string[] args) {
 	return 0;
 }
 
+// Compress sorted unique addresses to "start-end" hex ranges (a lone address
+// is just "start"), comma separated.
+string hexRanges(const int[] sorted) {
+	string[] parts;
+	for(size_t i = 0; i < sorted.length;) {
+		size_t j = i;
+		while(j + 1 < sorted.length && sorted[j+1] == sorted[j] + 1) j++;
+		parts ~= (j == i) ? format("%x", sorted[i]) : format("%x-%x", sorted[i], sorted[j]);
+		i = j + 1;
+	}
+	return parts.join(",");
+}
+
+// One --mem-reads line per play call, tab separated:
+//   <call> R:<ranges> Z:<ranges> W:<reg:value@cycle ...>
+// R = data reads outside zero page, stack and I/O; Z = zero-page reads;
+// W = SID register writes in order (hex reg and value, decimal cycle at the
+// start of the writing instruction, counted from the play call entry).
+string formatMemTrace(int frame, CPU cpu) {
+	string w;
+	foreach(i, sw; cpu.sidWrites)
+		w ~= format("%s%02x:%02x@%d", i ? " " : "", sw.reg, sw.value, sw.cycle);
+	ushort[] reads;
+	ubyte[] zp;
+	cpu.takeMemTrace(reads, zp);
+	return format("%d\tR:%s\tZ:%s\tW:%s\n", frame,
+		hexRanges(reads.map!(a => cast(int)a).array), hexRanges(zp.map!(a => cast(int)a).array), w);
+}
+
 // One line per play call: the 25 SID registers as hex, after that call. A .sid
 // is compared against another by diffing these, so the player that produced
 // the file does not matter, only what it writes.
-string traceSid(ubyte[] file, int subtune, int frames, string loopInfo = "") {
+string traceSid(ubyte[] file, int subtune, int frames, string loopInfo = "", string memReads = "") {
 	PsidFile p = parsePsid(file);
 	ubyte[] mem = p.image.dup;
 	CPU cpu = new CPU(mem);
@@ -385,9 +420,12 @@ string traceSid(ubyte[] file, int subtune, int frames, string loopInfo = "") {
 		auto digest = sha256Of(mem);
 		seen[cast(string)digest[].idup] = 0;
 	}
+	auto memApp = appender!string();
+	cpu.traceMem = memReads.length > 0;
 	foreach(frame; 0 .. frames) {
 		cpu.reset();
 		cpu.execute(cast(ushort)p.playAddress);
+		if(cpu.traceMem) memApp.put(formatMemTrace(frame, cpu));
 		const int timerA = mem[0xdc04] | (cast(int)mem[0xdc05] << 8);
 		if(observedTimerA == 0) observedTimerA = timerA;
 		else if(timerA != observedTimerA) variableTimerA = true;
@@ -425,6 +463,7 @@ string traceSid(ubyte[] file, int subtune, int frames, string loopInfo = "") {
 		std.file.write(loopInfo, toJSON(metadata) ~ "\n");
 		if(loopStart >= 0) explain(format("Trace loop: %d -> %d calls", loopStart, loopEnd));
 	}
+	if(memReads.length) std.file.write(memReads, memApp.data);
 	explain(format("Trace CIA1 timerA: %d; variable: %s", observedTimerA,
 		variableTimerA ? "yes" : "no"));
 	return app.data;

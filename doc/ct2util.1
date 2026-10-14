@@ -67,6 +67,9 @@ Subtune to trace (1\-32, default 1)
 .TP
 \fB\-f\fR <num>
 Number of play calls to trace (default 3000)
+.TP
+\fB\-\-mem\-reads\fR <file>
+Also write one line per play call to <file>: the data addresses read (not stack, I/O or opcode fetches) as hex ranges, the zero\-page reads, and the SID register writes in order as reg:value@cycle. The normal trace output is unchanged.
 .PP
 Prefix value options with '0x' or '$' to indicate a hexadecimal value.
 .SH "SEE ALSO"

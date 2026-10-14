@@ -100,6 +100,7 @@ Useful options:
 - `--subtune 2`: choose the source subtune for generic reconstruction.
 - `--row-frames 3`: finer output row grid; default 6 PAL frames. Range 3..127.
 - `--force-trace`: compare inference with a known CheeseCutter source.
+- `ct2util sidtrace --mem-reads f` adds per-call data reads and SID writes; `sid2ct/memtrace.py` finds streams, row timing and sequence starts in it.
 - `--trace source.trace`: infer from raw `ct2util sidtrace` output (25 hexadecimal
   register bytes per call); the selected multiplier defines the trace's timebase.
 - `--tool /path/to/ct2util`: select a built utility.

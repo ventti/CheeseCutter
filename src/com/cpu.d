@@ -8,6 +8,7 @@ module com.cpu;
 
 import std.stdio;
 import std.string;
+import std.algorithm : sort;
 
 alias ushort address;
 
@@ -193,6 +194,26 @@ public:
 	static int instructionLength(ubyte opcode) {
 		return 1 + OPSIZE[OPTAB[opcode].am];
 	}
+	// Optional memory-access tracing (ct2util sidtrace --mem-reads). Off by
+	// default; the only cost when off is one bool test per decoded instruction
+	// and per store.
+	struct SidWrite { ubyte reg, value; int cycle; }
+	bool traceMem;
+	SidWrite[] sidWrites;       // SID register writes since last clearMemTrace()
+	// Sorted unique data-read addresses since the last call, with the zero
+	// page ($00-$ff) returned separately. Stack ($100-$1ff), I/O ($d000-$dfff)
+	// and opcode fetches are never recorded.
+	void takeMemTrace(out ushort[] reads, out ubyte[] zpReads) {
+		reads = null; zpReads = null;
+		foreach(a; touchedList) {
+			if(a < 0x100) zpReads ~= cast(ubyte)a; else reads ~= a;
+			touched[a] = false;
+		}
+		touchedList.length = 0;
+		reads.sort();
+		zpReads.sort();
+		sidWrites.length = 0;
+	}
 	void reset() {
 		regs.a = regs.x = regs.y = 0;
 		regs.sp = 255;
@@ -215,7 +236,42 @@ public:
 	}
 
 protected:
-	
+	bool[65536] touched;
+	ushort[] touchedList;
+
+	void touch(int a) {
+		a &= 0xffff;
+		if(a >= 0x100 && a < 0x200) return;
+		if(a >= 0xd000 && a < 0xe000) return;
+		if(!touched[a]) { touched[a] = true; touchedList ~= cast(ushort)a; }
+	}
+
+	// Called from decode() only when traceMem is set. decode() fetches the
+	// operand of every opcode, stores and jumps included, so filter to the
+	// opcodes that really read their memory operand.
+	void logRead(ref State st) {
+		switch(st.opcode) {
+		case Op.ADC, Op.AND, Op.ASL, Op.BIT, Op.CMP, Op.CPX, Op.CPY, Op.DEC,
+			Op.EOR, Op.INC, Op.LDA, Op.LDX, Op.LDY, Op.LSR, Op.ORA, Op.ROL,
+			Op.ROR, Op.SBC:
+			break;
+		default:
+			return;
+		}
+		switch(st.addrmode) {
+		case Am.Z, Am.ZEROPAGE_X, Am.ABSOLUTE, Am.ABSOLUTE_X, Am.ABSOLUTE_Y, Am.ZY:
+			touch(fetchAddress(st));
+			break;
+		case Am.INDIRECT_Y:
+			touch(st.arg & 0xff);
+			touch((st.arg + 1) & 0xff);
+			touch(fetchAddress(st));
+			break;
+		default:
+			break;
+		}
+	}
+
 	/* execute a 6502 instruction
 	 * d indicates that ML monitor output is required
 	 * returns the number of cycles
@@ -677,6 +733,7 @@ protected:
 			st.arg = st.chunk[1] | (st.chunk[2] << 8);
 		}
 		st.value = fetch(st);
+		if(traceMem) logRead(st);
 		return st;
 	}
 
@@ -689,7 +746,10 @@ protected:
         case Am.ABSOLUTE_X:
         case Am.ABSOLUTE_Y:
         case Am.INDIRECT_Y:
-            memory[fetchAddress(stat)] = val;
+            const a = fetchAddress(stat);
+            memory[a] = val;
+            if(traceMem && a >= 0xd400 && a < 0xd419)
+                sidWrites ~= SidWrite(cast(ubyte)(a - 0xd400), val, counter);
             return;
         case Am.ACC:
             regs.a = val;
