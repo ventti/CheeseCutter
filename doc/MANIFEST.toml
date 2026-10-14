@@ -228,6 +228,18 @@ category = "decision"
 path = "doc/adr/0013-fullscreen-relays-out-the-ui.md"
 category = "decision"
 
+[[doc]]
+path = "doc/adr/0016-sid2ct-register-distance-inner-objective.md"
+category = "decision"
+
+[[doc]]
+path = "doc/adr/0017-sid2ct-cp-sat-instrument-allocation.md"
+category = "decision"
+
+[[doc]]
+path = "doc/adr/0018-sid2ct-player-extractors-give-hints-only.md"
+category = "decision"
+
 # ---- agent: instructions consumed by AI coding agents ----
 
 [[doc]]

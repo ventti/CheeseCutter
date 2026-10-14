@@ -39,3 +39,6 @@ where things live, the ADRs say why they're shaped that way.
 | [0009](0009-one-shared-mapping-per-editable-graph-axis.md) | An editable graph axis has exactly one shared value↔pixel mapping |
 | [0010](0010-menu-overlays-are-the-topmost-layer.md) | Menu bar, dropdown and command palette are the topmost layer |
 | [0011](0011-replace-foreground-masks-on-every-ui-pass.md) | Replace foreground masks on every UI pass without erasing graphs |
+| [0016](0016-sid2ct-register-distance-inner-objective.md) | sid2ct fits with register distance; audio score selects |
+| [0017](0017-sid2ct-cp-sat-instrument-allocation.md) | sid2ct instrument allocation with CP-SAT within CT 4.x limits |
+| [0018](0018-sid2ct-player-extractors-give-hints-only.md) | sid2ct player extractors give structure hints only |
