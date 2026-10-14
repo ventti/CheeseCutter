@@ -4,14 +4,17 @@ Trials run in batches of BATCH (a constant, so the sampled sequence depends on
 the seed only, not on how many cores there are); a batch is built and scored
 concurrently by the portfolio's worker pool and told to the study in trial
 order. Before any audio is rendered, each trial's register distance (regdist,
-through the exact CT player model) is compared with the best seen: a trial that
-is more than PRUNE_MARGIN worse is pruned without audio. Optuna is optional;
+through the exact CT player model) decides whether it is pruned without audio: by
+the surrogate model (`sid2ct.surrogate`) when one is trained and trusted, else when
+it is more than PRUNE_MARGIN worse than the best seen. Optuna is optional;
 without it (or numpy) the caller falls back to one-change-at-a-time neighbours.
 """
 import json
 import math
 
-from . import portfolio
+import statistics
+
+from . import portfolio, surrogate as surrogates
 from .audio import score_value
 
 BATCH = 8
@@ -84,7 +87,7 @@ def key_of(opts):
 
 class Tuner:
     def __init__(self, runner, axes, base, *, multiplier, seed=0, memory=None, song=None, family='unknown',
-                 effort='default', score='v2', v1_tolerance=0.01, solve_limit=20.0):
+                 effort='default', score='v2', v1_tolerance=0.01, solve_limit=20.0, surrogate=None, song_numbers=None):
         import optuna
         optuna.logging.set_verbosity(optuna.logging.WARNING)
         self.optuna = optuna
@@ -100,6 +103,10 @@ class Tuner:
         self.best_value = None
         self.last_batch_seconds = None
         self.infeasible_grid = 0     # a grid this fine (or finer) overflowed the native layout limits
+        self.model_info = surrogate.summary() if surrogate is not None else None     # also a rejected fit
+        self.surrogate = surrogate if surrogate is not None and surrogate.usable else None
+        self.song_numbers = song_numbers or {}
+        self.seen_regdist, self.seen_v2, self.seen_v1 = [], [], []     # references of the surrogate's targets
 
     # Search space ------------------------------------------------------------
 
@@ -163,11 +170,38 @@ class Tuner:
         audio = result.get('audio')
         if audio and audio.get('score_v1') is not None:
             self.reference_v1 = max(self.reference_v1 or 0.0, audio['score_v1'])
+        if (result.get('options') or {}).get('profile', 'dynamic') == 'dynamic':
+            if result.get('regdist') is not None:
+                self.seen_regdist.append(result['regdist'])
+            if audio and audio.get('score_v2') is not None:
+                self.seen_v2.append(audio['score_v2'])
+                if audio.get('score_v1') is not None:
+                    self.seen_v1.append(audio['score_v1'])
         value = self.value(result)
         if value is not None and result.get('regdist') is not None and (self.best_value is None or value > self.best_value):
             # The solver optimises its own distortion, so a good candidate need not have the smallest
             # register distance: prune relative to the best candidate by audio, not by distance.
             self.best_value, self.best_regdist = value, result['regdist']
+
+    def prune_rule(self):
+        """The surrogate's rule for the next batch, or None (fixed regdist rule) while it lacks references."""
+        if self.surrogate is None or self.best_value is None or len(self.seen_v2) < 2 or not self.seen_regdist:
+            return None
+        return surrogates.PruneRule(
+            self.surrogate, family=self.family, song=self.song_numbers, ref_regdist=min(self.seen_regdist),
+            ref_v2=statistics.median(self.seen_v2), ref_v1=statistics.median(self.seen_v1) if self.seen_v1 else None,
+            best_value=self.best_value, reference_v1=self.reference_v1, tolerance=self.tolerance)
+
+    def prune_summary(self, trials):
+        """Report numbers: pruned trials by rule and the surrogate's cross-validated error."""
+        by = {}
+        for r in trials:
+            if r.get('pruned') and not r.get('duplicate_of'):
+                by[r.get('pruned_by', 'regdist')] = by.get(r.get('pruned_by', 'regdist'), 0) + 1
+        out = dict(pruned_by_rule=by)
+        if self.model_info is not None:
+            out['surrogate'] = self.model_info
+        return out
 
     def seed_with(self, results):
         """Tell the study about the deterministic first-stage results so sampling learns from them."""
@@ -219,6 +253,7 @@ class Tuner:
                 opts = options_from_params(params, self.base, self.axes, self.multiplier)
                 batch.append((trial, params, opts))
             threshold = None if self.best_regdist is None else self.best_regdist * (1 + portfolio.PRUNE_MARGIN)
+            rule = self.prune_rule()
             tasks, positions, fresh = [], {}, {}
             for number, (trial, params, opts) in enumerate(batch):
                 key = key_of(opts)
@@ -231,7 +266,8 @@ class Tuner:
                     continue
                 fresh[key] = number
                 limit = min(self.solve_limit, max(3.0, 0.2 * max(0.0, deadline.remaining())))
-                task = portfolio.make_task(f'trial-{trial.number:04d}', opts, solve_limit=limit, prune_above=threshold)
+                task = portfolio.make_task(f'trial-{trial.number:04d}', opts, solve_limit=limit, prune_above=threshold,
+                                           prune_rule=rule, params=params)
                 positions[number] = len(tasks)
                 tasks.append(task)
             began = deadline.clock()
@@ -278,4 +314,5 @@ class Tuner:
             audio = result.get('audio') or {}
             self.memory.record_trial(self.song, self.family, result.get('name'), params, audio.get('score_v1'),
                                      audio.get('score_v2'), result.get('regdist'), outcome, self.seed, self.effort,
-                                     result.get('wall_seconds'))
+                                     result.get('wall_seconds'),
+                                     features=dict(parts=result.get('regdist_parts'), song=self.song_numbers))

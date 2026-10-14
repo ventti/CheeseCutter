@@ -11,12 +11,15 @@
 Everything runs under one `Budget`; the first dynamic candidate is shielded, so an output exists
 whatever the budget says.
 """
-from . import portfolio, tuner
+from pathlib import Path
+
+from . import polish as polishing, portfolio, surrogate as surrogates, tuner
 
 DEFAULT_SOLVE_LIMIT = {'default': 20.0, 'high': 60.0}
 SEARCH_SHARE = 0.15       # one candidate's solver may use this share of the remaining time
 NEIGHBOURS = 6            # one-change neighbours of the best first-stage candidate that Optuna tries first
 TRIAL_CAP = 400
+POLISH_SHARE = 0.15       # of the search budget, kept for the local polish after the search
 
 
 def _numpy():
@@ -119,28 +122,35 @@ def search(args, ctx, *, axes, profiles, budget, search_budget, workers, effort,
                     results.append(result)
                     first.append(result)
         base_options = portfolio.base_options(axes, layout)
+        polishing_on = (getattr(args, 'polish', True) and dynamic and not ctx.skip_audio and polishing.available())
+        tuner_budget = search_budget.child(reserve=POLISH_SHARE * search_budget.total) if polishing_on else search_budget
         trial_cap = TRIAL_CAP if getattr(args, 'max_trials', None) is None else max(0, args.max_trials)
         if not ctx.skip_audio and dynamic and free_knobs(axes) and trial_cap and not search_budget.expired():
             scored = [r for r in first if r.get('audio') and r['options']['profile'] == 'dynamic']
             best_index, _ = portfolio.select(scored, getattr(args, 'score', 'v2'), getattr(args, 'v1_tolerance', 0.01)) if scored else (None, None)
             best = scored[best_index]['options'] if best_index is not None else base_options
             if tuner.available():
+                with budget.stage('surrogate'):
+                    model = surrogates.load(memory) if memory.enabled else None
+                    numbers = surrogates.song_features(ctx.frames) if memory.enabled else {}
                 with budget.stage('search'):
                     study = tuner.Tuner(runner, axes, base_options, multiplier=ctx.multiplier, seed=getattr(args, 'seed', 0),
                                         memory=memory if memory.enabled else None, song=song, family=family,
                                         effort=effort, score=getattr(args, 'score', 'v2'), v1_tolerance=getattr(args, 'v1_tolerance', 0.01),
-                                        solve_limit=getattr(args, 'solve_time_limit', None) or DEFAULT_SOLVE_LIMIT[effort])
+                                        solve_limit=getattr(args, 'solve_time_limit', None) or DEFAULT_SOLVE_LIMIT[effort],
+                                        surrogate=model, song_numbers=numbers)
                     study.seed_with(first)
                     warm = memory.warm_params(family, song) if memory.enabled else []
                     notes['warm_start_trials'] = len(warm)
                     study.enqueue(warm + [tuner.params_from_options(o, ctx.multiplier)
                                           for o in portfolio.neighbour_options(best, axes)[:NEIGHBOURS]])
-                    trials = study.run(search_budget, cap=trial_cap)
+                    trials = study.run(tuner_budget, cap=trial_cap)
                 for result in trials:
                     result['stage'] = 'optuna'
                 results += trials
                 notes['optuna_trials'] = len(trials)
                 notes['optuna_pruned'] = sum(1 for r in trials if r.get('pruned'))
+                notes['pruning'] = study.prune_summary(trials)
             else:
                 neighbours = portfolio.neighbour_options(best, axes)[:trial_cap]
                 if neighbours:
@@ -152,10 +162,25 @@ def search(args, ctx, *, axes, profiles, budget, search_budget, workers, effort,
                         result['stage'] = 'neighbour'
                     results += ran
                     notes['neighbour_candidates'] = len(ran)
+        with budget.stage('selection'):
+            pick, guard = portfolio.select(results, getattr(args, 'score', 'v2'), getattr(args, 'v1_tolerance', 0.01))
+        if polishing_on and pick is not None:
+            chosen = results[pick]
+            if chosen['options']['profile'] == 'dynamic' and chosen.get('audio') and chosen.get('ct_path'):
+                with budget.stage('polish'):
+                    found, stats = polishing.run(
+                        ctx, runner, search_budget, data=Path(chosen['ct_path']).read_bytes(), audio=chosen['audio'],
+                        opts=chosen['options'], reference_v1=guard.get('reference_v1'),
+                        tolerance=getattr(args, 'v1_tolerance', 0.01), score=getattr(args, 'score', 'v2'),
+                        effort=effort)
+                notes['polish'] = stats
+                if found:
+                    results.append(dict(chosen, name=chosen['name'] + '+polish', stage='polish', audio=found['audio'],
+                                        ct_path=found['ct_path'], wav_path=found['wav_path'], regdist=None,
+                                        wall_seconds=stats['seconds']))
+                    pick = len(results) - 1
     finally:
         runner.close()
-    with budget.stage('selection'):
-        pick, guard = portfolio.select(results, getattr(args, 'score', 'v2'), getattr(args, 'v1_tolerance', 0.01))
     return results, pick, guard, notes
 
 

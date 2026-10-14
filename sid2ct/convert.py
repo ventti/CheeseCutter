@@ -264,6 +264,7 @@ def add_arguments(parser):
     parser.add_argument('--time-budget', type=float, help='Total wall seconds for this conversion, overriding --effort.')
     parser.add_argument('--seed', type=int, default=0, help='Random seed of the parameter search (default: 0).')
     parser.add_argument('--max-trials', type=int, help='Most search candidates after the first stage (default: as many as the time budget allows; 0 skips the search).')
+    parser.add_argument('--no-polish', dest='polish', action='store_false', help='Skip the local polish of the chosen CT (small edits to ADSR, pulse, filter, command and wave table entries, kept only when the audio score improves).')
     parser.add_argument('--no-memory', action='store_true', help='Do not read or write the memory database (~/.cache/sid2ct/memory.sqlite3, or $SID2CT_CACHE): no reused traces and no warm start.')
     parser.add_argument('sid', type=Path, help='Original SID file.')
     parser.add_argument('-o', '--output', type=Path, required=True, help='Output CheeseCutter .ct file.')

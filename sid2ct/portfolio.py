@@ -128,18 +128,43 @@ def build(ctx, opts, directory, solve_limit):
     return out.read_bytes(), report
 
 
-def register_distance(ctx, data, opts):
-    """Register-level distance of a native CT to the source (no audio); None when it cannot be computed."""
+def register_parts(ctx, data, opts):
+    """Register-level distance of a native CT to the source (no audio) with its components; None on failure."""
     try:
-        from .regdist import image_distance
+        from .regdist import CATEGORIES, image_distance
         image = zlib.decompress(data[3:])
-        return float(image_distance(ctx.frames, image, ctx.multiplier, opts['rate'], max_lag=REGDIST_LAG)['total'])
+        found = image_distance(ctx.frames, image, ctx.multiplier, opts['rate'], max_lag=REGDIST_LAG)
+        return dict(total=float(found['total']), **{k: float(found[k]) for k in CATEGORIES})
     except Exception:
         return None
 
 
+def register_distance(ctx, data, opts):
+    """Total register distance (see `register_parts`); None when it cannot be computed."""
+    parts = register_parts(ctx, data, opts)
+    return None if parts is None else parts['total']
+
+
+def _prune_decision(task, opts, regdist, parts):
+    """(pruned?, predicted v2 or None, by which rule). Shielded tasks are never pruned."""
+    if task.get('shield') or regdist is None:
+        return False, None, None
+    rule = task.get('prune_rule')
+    if rule is not None:
+        try:
+            pruned, predicted = rule.decide(task.get('params') or {}, regdist, parts)
+            return pruned, predicted, 'surrogate'
+        except Exception:
+            pass      # a broken model must not stop the trial: use the fixed rule below
+    limit = task.get('prune_above')
+    return (limit is not None and regdist > limit), None, 'regdist'
+
+
 def _evaluate(ctx, task, stages):
-    directory = Path(ctx.work_dir)/f'task{task["index"]}'
+    if task.get('polish'):
+        from . import polish
+        return polish.evaluate(ctx, task, stages)
+    directory = Path(ctx.work_dir)/f'task{task.get("slot", task["index"])}'   # slots are unique per conversion
     directory.mkdir(parents=True, exist_ok=True)
     opts = task['opts']
     clock = time.monotonic
@@ -152,11 +177,15 @@ def _evaluate(ctx, task, stages):
     out = dict(report=report, ct_path=str(candidate))
     if opts['profile'] == 'dynamic' and not ctx.skip_audio:
         began = clock()
-        out['regdist'] = register_distance(ctx, data, opts)
+        parts = register_parts(ctx, data, opts)
+        out['regdist'] = None if parts is None else parts['total']
+        out['regdist_parts'] = parts
         stages['regdist'] = clock() - began
-        limit = task.get('prune_above')
-        if limit is not None and out['regdist'] is not None and out['regdist'] > limit:
-            out['pruned'] = True
+        pruned, predicted, by = _prune_decision(task, opts, out['regdist'], parts)
+        if pruned:
+            out.update(pruned=True, pruned_by=by)
+            if predicted is not None:
+                out['predicted_v2'] = predicted
             return out
     if not ctx.skip_audio:
         began = clock()
@@ -201,6 +230,7 @@ class Runner:
         self.ctx, self.workers, self.budget = ctx, max(1, workers), budget
         self.pool = None
         self.concurrency = 1
+        self.serial = 0              # next working directory number: every task gets its own
         set_context(ctx)
 
     def _pool(self, concurrency):
@@ -220,6 +250,9 @@ class Runner:
         for index, task in enumerate(tasks):
             task.update(inner=inner, deadline_wall=wall)
             task.setdefault('index', index)
+            if 'slot' not in task:
+                task['slot'] = self.serial
+                self.serial += 1
         results = {}
         if concurrency == 1:
             for task in tasks:
@@ -267,8 +300,10 @@ class Runner:
         pool.shutdown(wait=not kill, cancel_futures=True)
 
 
-def make_task(name, opts, *, solve_limit, shield=False, prune_above=None, strict=False):
-    return dict(name=name, opts=opts, solve_limit=solve_limit, shield=shield, prune_above=prune_above, strict=strict)
+def make_task(name, opts, *, solve_limit, shield=False, prune_above=None, strict=False, prune_rule=None, params=None):
+    """One candidate to build. `prune_rule` (surrogate) or `prune_above` (register distance) may skip its audio."""
+    return dict(name=name, opts=opts, solve_limit=solve_limit, shield=shield, prune_above=prune_above, strict=strict,
+                prune_rule=prune_rule, params=params)
 
 
 # Option sets ---------------------------------------------------------------
@@ -347,7 +382,7 @@ def summarise(result):
         entry['effect_tolerance'] = options['effect_tolerance']
     if options.get('solve_params'):
         entry['solve_params'] = options['solve_params']
-    for key in ('regdist', 'pruned', 'expired', 'error', 'audio', 'stage', 'trial'):
+    for key in ('regdist', 'pruned', 'pruned_by', 'predicted_v2', 'expired', 'error', 'audio', 'stage', 'trial'):
         if result.get(key) is not None:
             entry[key] = result[key]
     entry['wall_seconds'] = round(result.get('wall_seconds', 0.0), 2)

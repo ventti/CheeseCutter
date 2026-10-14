@@ -183,12 +183,15 @@ Stages (each one is timed in `effort.stage_seconds` of the report):
 3. **search**: an Optuna study (TPE, seeded with `--seed`) over row grid, sound rate, tuning,
    pitch, modulation and coupled programs, effect tolerance and the solver weights
    (envelope, loudness, AD/SR repair cost). Trials run in batches of 8. Each trial is first
-   scored by `regdist` through the CT player (no audio); one whose distance is 50% above that
-   of the best candidate by audio is pruned before any audio is rendered.
+   scored by `regdist` through the CT player (no audio). Then a surrogate model decides if its
+   audio render can be skipped (see below); without a trusted model, a trial whose distance is
+   50% above that of the best candidate by audio is pruned. The base and shielded candidates
+   are never pruned.
 4. **selection**: best v2 among all candidates whose v1 is within `--v1-tolerance` (0.01) of
    the best v1 any candidate reached. The best v1 (not the first candidate) is the guard
    reference, so a v2 gain cannot hide a larger v1 loss. Ties go to the earlier candidate.
-5. **diagnostics**: voice and window comparison of the chosen CT (12% of the budget is kept for it).
+5. **polish**: local coordinate descent on the selected CT (see below).
+6. **diagnostics**: voice and window comparison of the chosen CT (12% of the budget is kept for it).
 
 Effort: one wall-clock budget covers all stages and is checked inside the inner loops (note
 fitting, solver pricing, audio alignment). `--effort default` is about 10 minutes for a full
@@ -202,10 +205,35 @@ Each CP-SAT solve uses a fixed 2 threads and stops on deterministic time, so up 
 (stable order, fixed batch size, fixed seed, fixed solver threads), except where the time budget
 stops a run early.
 
+Surrogate (`sid2ct/surrogate.py`): a gradient boosting model (scikit-learn) predicts a trial's v2 and v1
+from what is known before audio: the `regdist` total and its components, the options, the player family and
+song numbers (length, voice activity, filter use). Targets are relative to the song's median over the trials
+seen so far. It is trained on the trials in the memory database and saved as `surrogate.pkl` beside it with a
+version key; it is refitted when 100 more usable trials exist. The prune margin is the 95th percentile of
+the cross-validated under-prediction (cross-validation groups by song). A trial is pruned when its predicted v2
+plus the margin is below the best value, or its predicted v1 is clearly below the guard. The model is used
+only when the cross-validated R2 of v2 is at least 0.10 and there are 150 trials from 5 songs; otherwise
+(and without scikit-learn or with `--no-memory`) the fixed 50% rule applies. The report
+(`effort.pruning`) has the pruned trials per rule and the surrogate's rows, songs, CV RMSE, R2 and margin,
+also for a rejected fit. Trials recorded before this feature have no components, so they train with those
+columns empty.
+
+Polish (`sid2ct/polish.py`, `--no-polish` to skip): after selection the chosen CT is improved by
+single-entry edits: ADSR nibbles of the used instruments (and of AD/SR commands), pulse and filter table rows
+(duration, speed or add, start value), slide, vibrato and offset command parameters, and wave table rows
+(transposition, waveform bits, delay). An edit that leaves the played register trace unchanged is skipped
+without audio, one whose `regdist` is over 2% worse is dropped, the rest is rendered and scored. Edits run in
+batches of 8 (fixed, so the result does not depend on `--workers`) against the current best; the largest strict
+v2 gain whose v1 stays within `--v1-tolerance` of the best v1 is accepted, ties go to the earlier edit,
+and the other gains are tried again against the new state. Default effort makes up to 2 passes of 160 edits;
+`--high-effort` up to 6 passes of 2000. The search leaves 15% of its time for the polish and it also uses any
+time the search did not need. `effort.polish` in the report has the edits tried, skipped and accepted, the first
+accepted edit names and v2/v1 before and after; a polished result is listed as `<name>+polish`.
+
 Memory (`~/.cache/sid2ct/memory.sqlite3`, or `$SID2CT_CACHE/memory.sqlite3`): per song it keeps
 the trace (reused on the next run) and the best parameters; per player family
 (`sid2ct.players`) the best parameters of past songs are tried first as Optuna trials (own
-best, then the top 3 by v2). Every trial is recorded. `--no-memory` reads and writes nothing, so a
+best, then the top 3 by v2). Every trial is recorded, with its `regdist` components and the song numbers. `--no-memory` reads and writes nothing, so a
 fixed seed gives the same result with or without a database.
 
 `bench` runs `--workers` conversions in parallel and gives each `cores // workers` workers;

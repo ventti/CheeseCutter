@@ -57,6 +57,7 @@ class Memory:
 
     def __init__(self, path=None, enabled=True):
         self.db = None
+        self.path = None
         if not enabled:
             return
         try:
@@ -64,7 +65,12 @@ class Memory:
             path.parent.mkdir(parents=True, exist_ok=True)
             self.db = sqlite3.connect(path, timeout=30)
             self.db.executescript(SCHEMA)
+            try:
+                self.db.execute('alter table trials add column features text')   # regdist parts and song numbers
+            except sqlite3.OperationalError:
+                pass     # the column exists
             self.db.commit()
+            self.path = path
         except (OSError, sqlite3.Error):
             self.db = None
 
@@ -110,11 +116,30 @@ class Memory:
 
     # Trials and best parameters ---------------------------------------------
 
-    def record_trial(self, song, family, name, params, v1, v2, regdist, state, seed, effort, wall):
+    def record_trial(self, song, family, name, params, v1, v2, regdist, state, seed, effort, wall, features=None):
         self._write('insert into trials (song, family, name, params, score_v1, score_v2, regdist, state, seed, '
-                    'effort, wall_seconds, created) values (?,?,?,?,?,?,?,?,?,?,?,?)',
+                    'effort, wall_seconds, created, features) values (?,?,?,?,?,?,?,?,?,?,?,?,?)',
                     (song, family, name, json.dumps(params, sort_keys=True), v1, v2, regdist, state, seed,
-                     effort, wall, time.strftime('%Y-%m-%d %H:%M:%S')))
+                     effort, wall, time.strftime('%Y-%m-%d %H:%M:%S'),
+                     json.dumps(features, sort_keys=True) if features else None))
+
+    def usable_trials(self):
+        """Number of finished trials with scores and a register distance (what the surrogate trains on)."""
+        rows = self._read("select count(*) from trials where state='done' and score_v2 is not null "
+                          "and regdist is not null")
+        return rows[0][0] if rows else 0
+
+    def trial_rows(self):
+        """Every recorded trial as a dict (params and features decoded), in insertion order."""
+        result = []
+        for (song, family, params, v1, v2, regdist, state, features) in self._read(
+                'select song, family, params, score_v1, score_v2, regdist, state, features from trials order by id'):
+            try:
+                result.append(dict(song=song, family=family, params=json.loads(params), score_v1=v1, score_v2=v2,
+                                   regdist=regdist, state=state, features=json.loads(features) if features else None))
+            except ValueError:
+                continue
+        return result
 
     def record_best(self, song, family, name, params, v1, v2):
         """Keep the better v2 per song."""
