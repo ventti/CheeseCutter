@@ -2,6 +2,7 @@
 import hashlib
 import math
 import time
+from .audio import score_value
 
 
 def load_optuna():
@@ -26,7 +27,7 @@ def suggest_options(trial, row_frames, source_tuning_available=True):
 
 
 def parameter_search(build, *, output, optimizer, cap=40, seconds=600, seed=0,
-                     row_frames=6, clock=time.monotonic):
+                     row_frames=6, clock=time.monotonic, score='v2', v1_tolerance=.01):
     optuna = load_optuna()
     if cap < 0 or not math.isfinite(seconds) or seconds <= 0:
         raise ValueError('Search cap must be nonnegative and seconds positive/finite.')
@@ -74,25 +75,29 @@ def parameter_search(build, *, output, optimizer, cap=40, seconds=600, seed=0,
             options = suggest_options(trial, row_frames, before.get('source_tuning_available', False))
             record = evaluate(f'trial-{trial.number:04d}', options)
             trial.set_user_attr('record', record)
-            score = record.get('mix', {}).get('similarity')
-            if 'error' in record or score is None or not math.isfinite(score):
+            value = score_value(record.get('mix', {}), score)
+            prior = score_value(before.get('mix', {}), 'v1')
+            current = score_value(record.get('mix', {}), 'v1')
+            if prior is not None and (current is None or current < prior-v1_tolerance):
+                value = None
+            if 'error' in record or value is None or not math.isfinite(value):
                 study.tell(trial, state=optuna.trial.TrialState.FAIL)
             else:
-                study.tell(trial, score)
+                study.tell(trial, value)
     return dict(candidates=records, wall_seconds=clock()-start, cap=cap,
                 time_budget_seconds=seconds, truncated=len(records)<cap+1,
                 optimizer=optimizer, seed=seed, optuna_version=optuna.__version__,
                 study_name=study.study_name, study_storage=str((output/'trials.sqlite3').resolve()))
 
 
-def diagnostic_scores(entry):
+def diagnostic_scores(entry, score='v1'):
     """Use fixed mix alignment, including every voice/pair and section."""
-    result = {'mix': entry['mix']['similarity']}
+    result = {'mix': score_value(entry['mix'], score)}
 
     def windows(prefix, values):
         for window in values:
             key = (prefix, window['start_seconds'], window['end_seconds'])
-            result[str(key)] = window['audio']['similarity']
+            result[str(key)] = score_value(window['audio'], score)
 
     windows('mix', entry['mix_windows'])
     if set(entry['voices']) != {'1', '2', '3'}:
@@ -100,19 +105,20 @@ def diagnostic_scores(entry):
     for category in ('voices', 'coupled_pairs'):
         for label, data in entry[category].items():
             prefix = category + label
-            result[prefix] = data['fixed_alignment']['similarity']
+            result[prefix] = score_value(data['fixed_alignment'], score)
             windows(prefix, data['windows'])
     return result
 
 
-def select_validated(records, diagnostics, tolerance=0):
+def select_validated(records, diagnostics, tolerance=0, *, score='v2', v1_tolerance=.01):
     before = next((r for r in records if r['name'] == 'before' and 'error' not in r), None)
     if before is None:
         return None, {}
     entries = diagnostics.get('candidates', {})
     if 'before' not in entries:
         return before, {'before': ['Full diagnostics unavailable.']}
-    baseline = diagnostic_scores(entries['before'])
+    baseline = diagnostic_scores(entries['before'], score)
+    baseline_v1 = diagnostic_scores(entries['before'], 'v1')
     rejected, accepted = {}, [before]
     for record in records:
         name = record['name']
@@ -122,14 +128,19 @@ def select_validated(records, diagnostics, tolerance=0):
         if name not in entries:
             reasons.append('Full diagnostics unavailable.')
         else:
-            scores = diagnostic_scores(entries[name])
+            scores = diagnostic_scores(entries[name], score)
+            scores_v1 = diagnostic_scores(entries[name], 'v1')
+            for key, prior in baseline_v1.items():
+                current = scores_v1.get(key)
+                if prior is not None and (current is None or not math.isfinite(current) or current < prior-v1_tolerance):
+                    reasons.append('V1 regression or unavailable score: '+key)
             if scores.keys() != baseline.keys():
                 reasons.append('Diagnostic sections do not match the baseline.')
             for key, prior in baseline.items():
                 if prior is None:
                     continue  # Silent/inconclusive baseline sections cannot be ranked.
-                score = scores.get(key)
-                if score is None or not math.isfinite(score) or score < prior-tolerance:
+                current = scores.get(key)
+                if current is None or not math.isfinite(current) or current < prior-tolerance:
                     reasons.append('Regression or unavailable score: '+key)
             if baseline['mix'] is None or scores['mix'] is None or scores['mix'] <= baseline['mix']:
                 reasons.append('Full-duration mix did not improve.')
@@ -137,4 +148,4 @@ def select_validated(records, diagnostics, tolerance=0):
             rejected[name] = reasons
         else:
             accepted.append(record)
-    return max(accepted, key=lambda r: entries.get(r['name'], {}).get('mix', {}).get('similarity') or -1), rejected
+    return max(accepted, key=lambda r: score_value(entries.get(r['name'], {}).get('mix', {}), score) or -1), rejected

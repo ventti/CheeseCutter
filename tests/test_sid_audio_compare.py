@@ -129,6 +129,8 @@ class LibSidPlayIntegration(unittest.TestCase):
             valid = [c for c in report['row_grid_search'] if c.get('audio', {}).get('similarity') is not None]
             self.assertTrue(valid)
             best = max(valid, key=lambda c: c['audio']['similarity'])
+            baseline=valid[0]['audio']['score_v1']
+            best=max((c for c in valid if c['audio']['score_v1']>=baseline-.01),key=lambda c:c['audio']['score_v2'])
             self.assertEqual(report['row_frames'], best['row_frames'])
             self.assertEqual(report['audio_validation']['tested_seconds'], 0.5)
             self.assertTrue(ct.with_suffix('.source.wav').exists())
@@ -167,7 +169,8 @@ class LibSidPlayIntegration(unittest.TestCase):
             report=json.loads(ct.with_suffix('.json').read_text())
             candidates=report['sound_program_search']
             self.assertEqual({c['output_multiplier'] for c in candidates},{1,2})
-            best=max(candidates,key=lambda c:c['audio']['similarity'])
+            baseline=candidates[0]['audio']['score_v1']
+            best=max((c for c in candidates if c['audio']['score_v1']>=baseline-.01),key=lambda c:c['audio']['score_v2'])
             self.assertEqual(report['output_multiplier'],best['output_multiplier'])
             self.assertEqual(report['tuning'],best['tuning'])
             self.assertEqual(report['audio_validation']['similarity'],best['audio']['similarity'])
@@ -209,11 +212,12 @@ class ParallelSpectralAnalysis(unittest.TestCase):
         from sid2ct.audio import spectral_features
         # Over two 128-window blocks, with a partial final block.
         samples = array('h', ((i*7919)%65536-32768 for i in range(140000)))
-        with patch.dict('os.environ', {'SID2CT_WORKERS':'1'}):
+        with patch('sid2ct.audio.np',None), patch.dict('os.environ', {'SID2CT_WORKERS':'1'}):
             serial = spectral_features(samples, 16000)
-        with patch.dict('os.environ', {'SID2CT_WORKERS':'2'}):
+        with patch('sid2ct.audio.np',None), patch.dict('os.environ', {'SID2CT_WORKERS':'2'}):
             parallel = spectral_features(samples, 16000)
-        self.assertEqual(parallel, serial)
+        self.assertEqual(parallel.tolist() if hasattr(parallel,'tolist') else parallel,
+                         serial.tolist() if hasattr(serial,'tolist') else serial)
 
 
 if __name__ == '__main__': unittest.main()

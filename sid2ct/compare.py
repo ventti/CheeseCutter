@@ -19,11 +19,14 @@ import time
 import wave
 
 from .coupling import analyze as analyze_coupling, register_comparison
-from .audio import analysis_workers, compare_wavs, load_wav
+from .audio import analysis_workers, compare_wavs, load_wav, score_value
+from .rendercache import render as cached_render
 from .convert import ROOT, read_sid
 
 
 def run(command, timeout=60):
+    if len(command) >= 7 and str(command[2]).endswith('.wav'):
+        return cached_render(command, cwd=ROOT, timeout=timeout)
     result = subprocess.run([str(x) for x in command], cwd=ROOT, capture_output=True, text=True, timeout=timeout)
     if result.returncode:
         raise ValueError(f'Command failed ({result.returncode}): {command[0]} '+result.stdout+result.stderr)
@@ -57,7 +60,7 @@ def window_comparisons(a,b,temp,seconds,window_seconds,alignment):
         if (stop-start)*1000 > abs(alignment)+64:
             audio = compare_wavs(x,y,fixed_alignment_ms=alignment)
         else:
-            audio = dict(verdict='inconclusive',similarity=None,
+            audio = dict(verdict='inconclusive',similarity=None,score_v1=None,score_v2=None,score_v2_components={},
                          reason='Window too short for fixed alignment and spectral analysis.')
         windows.append(dict(start_seconds=start,end_seconds=stop,audio=audio))
         start = stop
@@ -104,13 +107,15 @@ def print_metrics(label, audio):
     if audio['similarity'] is None:
         print(f'  {label}: inconclusive ({audio.get("reason","no signal")})',flush=True)
         return
-    print(f'  {label}: score={audio["similarity"]:.6f} '
+    print(f'  {label}: v1={audio["score_v1"]:.6f} v2={audio["score_v2"]:.6f} '
           f'envelope={audio["envelope_similarity"]:.6f} spectral={audio["spectral_similarity"]:.6f} '
           f'PCM error={audio["normalized_pcm_error"]:.6f} alignment={audio["alignment_ms"]:g}ms '
           f'RMS={audio["source_rms"]:g}→{audio["reconstruction_rms"]:g}',flush=True)
 
 
 def add_arguments(parser):
+    parser.add_argument('--score', choices=('v1','v2'), default='v2', help='Score used for ranking (default: v2).')
+    parser.add_argument('--v1-tolerance', type=float, default=.01, help='Maximum allowed v1 loss when converting (default: 0.01).')
     parser.add_argument("--workers", type=int, default=None, help="CPU cores to use for audio analysis (default: all available).")
     parser.add_argument('source', type=Path, help='Original SID file.')
     parser.add_argument('reconstruction', type=Path, nargs='?', help='Converted .ct or .sid file to compare; omit to convert the original first.')
@@ -139,6 +144,8 @@ def run_command(args, *, print_report=True):
             return 1
         os.environ["SID2CT_WORKERS"] = str(workers)
     try:
+        if not math.isfinite(getattr(args,'v1_tolerance',.01)) or not 0 <= getattr(args,'v1_tolerance',.01) <= 1:
+            raise ValueError('V1 tolerance must be in [0,1].')
         if args.seconds is not None and (not math.isfinite(args.seconds) or not 0 < args.seconds <= 600):
             raise ValueError('Duration must be in (0,600] seconds.')
         if not math.isfinite(args.window_seconds) or not .1 <= args.window_seconds <= 600:
@@ -209,6 +216,7 @@ def run_command(args, *, print_report=True):
                 command = [sys.executable,'-m','sid2ct','convert',args.source.resolve(),'-o',ct,
                            '--seconds',args.seconds,'--audio-seconds',min(args.seconds,args.selection_seconds or args.seconds),
                            '--row-frames',args.row_frames,'--subtune',args.subtune,
+                           '--score',getattr(args,'score','v2'),'--v1-tolerance',getattr(args,'v1_tolerance',.01),
                            '--sid-model',model,'--skip-diagnostics','--renderer',args.renderer.resolve(),'--tool',args.tool.resolve()]
                 if multiplier is not None:
                     command.extend(['--multiplier',multiplier])
@@ -253,7 +261,7 @@ def run_command(args, *, print_report=True):
                     clipped[f'{label}.pair{pair}'] = subtract_background(
                         temp/f'{label}.pair{pair}.wav',temp/f'{label}.muted.wav',
                         temp/f'{label}.pair{pair}.contribution.wav')
-            report = dict(source=str(args.source.resolve()),source_subtune=args.subtune,
+            report = dict(score_selection=getattr(args,'score','v2'), source=str(args.source.resolve()),source_subtune=args.subtune,
                           seconds=args.seconds,window_seconds=args.window_seconds,sid_model=model,
                           sid_model_selection=model_selection,
                           loop_detection=loop, cross_channel_effects=coupling,
@@ -277,7 +285,7 @@ def run_command(args, *, print_report=True):
                 entry = dict(input=str((args.output/path.name).resolve()) if automatic else str(path),mix=mixed,voices={})
                 entry['mix_windows'] = window_comparisons(source_mix,candidate_mix,temp,args.seconds,args.window_seconds,alignment)
                 mix_valid = [w for w in entry['mix_windows'] if w['audio']['similarity'] is not None]
-                entry['worst_mix_window'] = min(mix_valid,key=lambda w:w['audio']['similarity']) if mix_valid else None
+                entry['worst_mix_window'] = min(mix_valid,key=lambda w:score_value(w['audio'],getattr(args,'score','v2'))) if mix_valid else None
                 for mode,mask in modes[1:4]:
                     a,b = temp/f'source.{mode}.contribution.wav',temp/f'{label}.{mode}.contribution.wav'
                     independent = compare_wavs(a,b)
@@ -290,7 +298,7 @@ def run_command(args, *, print_report=True):
                         clipped_samples={'source':clipped[f'source.{mode}'],'candidate':clipped[f'{label}.{mode}']},
                         source_wav=str((args.output/a.name).resolve()),
                         candidate_wav=str((args.output/b.name).resolve()),windows=windows,
-                        worst_window=min(valid,key=lambda w:w['audio']['similarity']) if valid else None)
+                        worst_window=min(valid,key=lambda w:score_value(w['audio'],getattr(args,'score','v2'))) if valid else None)
                 if coupling['edges']:
                     try:
                         from .loops import capture
@@ -327,7 +335,7 @@ def run_command(args, *, print_report=True):
                         voices=[int(v) for v in pair],dependencies=edges,
                         fixed_alignment=compare_wavs(a,b,fixed_alignment_ms=alignment),
                         windows=windows,active_windows=active,
-                        worst_active_window=min(valid,key=lambda w:w['audio']['similarity']) if valid else None,
+                        worst_active_window=min(valid,key=lambda w:score_value(w['audio'],getattr(args,'score','v2'))) if valid else None,
                         source_wav=str((args.output/a.name).resolve()),
                         candidate_wav=str((args.output/b.name).resolve()),
                         clipped_samples={'source':clipped[f'source.pair{pair}'],

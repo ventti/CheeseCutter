@@ -7,6 +7,7 @@ import shutil
 from pathlib import Path
 import time
 from . import convert, compare
+from .audio import score_value
 
 VARIANTS = (
     ('change-points', {'change_points': True}),
@@ -50,11 +51,14 @@ def bounded_search(build, *, cap=12, seconds=600, clock=time.monotonic):
                 promotion='provisional mix selection; before retained for voice/pair/window review')
 
 
-def select_by_mix(records):
+def select_by_mix(records, score='v2', v1_tolerance=.01):
     """Select finished scored alternatives; before wins ties and unavailable scores."""
     scored = [record for record in records if 'error' not in record and
               record.get('mix', {}).get('similarity') is not None]
-    return max(scored, key=lambda record:record['mix']['similarity']) if scored else next(
+    before = next((r for r in scored if r['name']=='before'), None)
+    if before:
+        scored = [r for r in scored if score_value(r['mix'],'v1') >= score_value(before['mix'],'v1')-v1_tolerance]
+    return max(scored, key=lambda record:score_value(record['mix'],score)) if scored else next(
         (record for record in records if record['name']=='before' and 'error' not in record), None)
 
 
@@ -145,18 +149,21 @@ def run_command(args):
         if parameter_mode:
             from .optimize import parameter_search, select_validated
             report = parameter_search(build, output=args.output, optimizer=args.optimizer,
-                cap=args.candidate_cap, seconds=args.search_seconds, seed=args.seed, row_frames=args.row_frames)
+                cap=args.candidate_cap, seconds=args.search_seconds, seed=args.seed, row_frames=args.row_frames, score=args.score, v1_tolerance=args.v1_tolerance)
         else:
             report = bounded_search(build, cap=args.candidate_cap, seconds=args.search_seconds)
         if hashlib.sha256(args.sid.read_bytes()).hexdigest() != source_hash:
             raise ValueError('Source changed during search.')
         successes = [record for record in report['candidates'] if 'error' not in record]
         before = next((record for record in successes if record['name']=='before'), None)
+        baseline_v1 = score_value(before['mix'],'v1') if before else None
         ranked = sorted((record for record in successes if record['name']!='before' and
-                         'duplicate_of' not in record and record['mix']['similarity'] is not None),
-                        key=lambda record:-record['mix']['similarity'])[:3]
+                         'duplicate_of' not in record and score_value(record['mix'],args.score) is not None
+                         and (baseline_v1 is None or (score_value(record['mix'],'v1') is not None
+                              and score_value(record['mix'],'v1') >= baseline_v1-args.v1_tolerance))),
+                        key=lambda record:-score_value(record['mix'],args.score))[:3]
         shortlist = ([before] if before else []) + ranked
-        selected = select_by_mix(report['candidates'])
+        selected = select_by_mix(report['candidates'],args.score,args.v1_tolerance)
         if parameter_mode:
             selected = before  # Promote only after full-duration regression checks.
         report['selected'] = selected['name'] if selected else None
@@ -175,14 +182,14 @@ def run_command(args):
                 window_seconds=args.window_seconds, subtune=args.subtune, candidate_subtune=1,
                 sid_model=args.sid_model, multiplier=args.multiplier, row_frames=args.row_frames,
                 auto_row_frames=False, selection_seconds=None, renderer=args.renderer,
-                tool=args.tool, workers=args.workers)
+                tool=args.tool, workers=args.workers, score=args.score, v1_tolerance=args.v1_tolerance)
             if compare.run_command(argparse.Namespace(**values)) == 0:
                 report['diagnostics'] = str((args.output/'diagnostics/report.json').resolve())
                 if parameter_mode:
                     try:
                         diagnostic_report = json.loads(Path(report['diagnostics']).read_text())
                         selected, rejected = select_validated(report['candidates'], diagnostic_report,
-                                                             args.regression_tolerance)
+                                                             args.regression_tolerance, score=args.score, v1_tolerance=args.v1_tolerance)
                         report['rejected'] = rejected
                     except (KeyError, TypeError, ValueError) as error:
                         report['validation_error'] = str(error)

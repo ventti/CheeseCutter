@@ -227,6 +227,8 @@ def run(tool, *args):
 
 
 def add_arguments(parser):
+    parser.add_argument('--score', choices=('v1','v2'), default='v2', help='Score used to choose candidates (default: v2).')
+    parser.add_argument('--v1-tolerance', type=float, default=0.01, help='Maximum allowed v1 loss from the first valid candidate (default: 0.01).')
     parser.add_argument("--workers", type=int, default=None, help="CPU cores to use for audio analysis (default: all available).")
     parser.add_argument('sid', type=Path, help='Original SID file.')
     parser.add_argument('-o', '--output', type=Path, required=True, help='Output CheeseCutter .ct file.')
@@ -266,6 +268,8 @@ def add_arguments(parser):
 
 def run_command(args):
     started = time.monotonic()
+    from .audio import score_value
+    from .rendercache import render as cached_render
     requested_multiplier = args.multiplier
     workers = getattr(args, "workers", None)
     if workers is not None:
@@ -278,6 +282,8 @@ def run_command(args):
     converted_wav = args.output.with_suffix('.reconstructed.wav')
     diagnostics_path = args.output.with_suffix('.comparison')
     try:
+        if not math.isfinite(getattr(args,'v1_tolerance',.01)) or not 0 <= getattr(args,'v1_tolerance',.01) <= 1:
+            raise ValueError('V1 tolerance must be in [0,1].')
         if args.output.resolve() == args.sid.resolve() or report_path.resolve() == args.sid.resolve():
             raise ValueError('Output must not replace the input SID.')
         if args.output.suffix.lower() != '.ct':
@@ -347,11 +353,8 @@ def run_command(args):
             audio_duration = min(args.audio_seconds or duration, duration)
             renderer_info = None
             def render(sid, output, subtune):
-                result = run(args.renderer.resolve(), sid, output, audio_duration,
-                             subtune, 16000, model)
-                if result.returncode:
-                    raise ValueError('Audio rendering failed: ' + result.stdout + result.stderr)
-                return result.stdout.strip()
+                return cached_render([args.renderer.resolve(), sid, output, audio_duration,
+                                      subtune, 16000, model, 'all'], cwd=ROOT)
             def assess(candidate, subtune):
                 import hashlib
                 cache = getattr(args, '_assessment_cache', None)
@@ -428,6 +431,7 @@ def run_command(args):
                 variants = [(profile,rate,tuning,label,pitch,modulation,couple) for profile in profiles
                             for rate,tuning,label,pitch,modulation,couple in (native_variants if profile=='dynamic' else [(1,None,'default','attack','legacy','legacy')])]
                 candidates, best_score = [], -1.0
+                baseline_v1 = None
                 for grid, profile, rate, tuning, label, pitch, modulation, couple in [(g,*v) for g in grids for v in variants]:
                     try:
                         candidate = temp/'candidate.ct'
@@ -454,10 +458,15 @@ def run_command(args):
                             candidate_report['sound_programs'] = 'static'
                         candidate_report['subtune'] = args.subtune
                         audio = assess(candidate, 1) if not args.skip_audio else None
-                        score = audio['similarity'] if audio and audio['similarity'] is not None else -0.5
+                        value = score_value(audio, getattr(args,'score','v2')) if audio else None
+                        score = value if value is not None else -0.5
+                        if baseline_v1 is None and audio and audio.get('score_v1') is not None:
+                            baseline_v1 = audio['score_v1']
+                        guarded = (baseline_v1 is None or (audio and audio.get('score_v1') is not None
+                                   and audio['score_v1'] >= baseline_v1-getattr(args,'v1_tolerance',.01)))
                         candidates.append({'row_frames': grid, 'sound_programs': profile,
                                            'output_multiplier': rate, 'tuning': label, 'pitch_programs': pitch, 'modulation_programs': modulation, 'coupled_programs': couple, 'audio': audio})
-                        if score > best_score:
+                        if guarded and score > best_score:
                             best_score, report = score, candidate_report
                             ct.write_bytes(candidate.read_bytes())
                             if audio is not None:
@@ -516,6 +525,7 @@ def run_command(args):
                     subtune=args.subtune, candidate_subtune=report['audio_validation']['output_subtune'],
                     sid_model=model, multiplier=requested_multiplier, row_frames=args.row_frames,
                     auto_row_frames=False, selection_seconds=audio_duration,
+                    score=getattr(args,"score","v2"), v1_tolerance=getattr(args,"v1_tolerance",.01),
                     renderer=args.renderer, tool=args.tool)
                 if compare.run_command(diagnostic_args,print_report=False):
                     raise ValueError('Voice/window validation failed.')
@@ -525,6 +535,8 @@ def run_command(args):
                 (diagnostic_temp/'report.json').write_text(json.dumps(diagnostic_report,indent=2)+'\n')
                 report['diagnostics'] = diagnostic_report
                 report['diagnostics_report'] = str((diagnostics_path/'report.json').resolve())
+            report['score_selection'] = getattr(args,'score','v2')
+            report['v1_tolerance'] = getattr(args,'v1_tolerance',.01)
             report['analysis_workers'] = analysis_workers()
             report['elapsed_seconds'] = round(time.monotonic() - started, 3)
             report['source'] = str(args.sid.resolve())

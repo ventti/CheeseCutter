@@ -657,3 +657,16 @@ and `tools/sid_render`. Optional packages: `uv venv .venv && uv pip install -p .
 - `tools/semantic_if.py` has `semantic_if(question, text)` (`yes`/`no`/`unknown`) and `semantic_choice`.
   It calls the local ollama model `clef-flash:9b` (`/v1/systemone`), caches answers in
   `~/.cache/sid2ct/llm.sqlite3`, and returns `unknown` if ollama is not running.
+
+Scoring reports include `score_v1` (also kept as `similarity`) and `score_v2`.
+V2 combines log-mel spectra at three window sizes, envelope/onset agreement and
+pitch-class agreement, using the same alignment as v1. NumPy speeds up analysis
+when installed; plain Python remains supported. Convert, compare and search
+accept `--score v1|v2` (default: v2). `--v1-tolerance` (default: 0.01) limits
+v1 loss against the first valid conversion or search baseline. Full search
+validation also checks voices, pairs and windows.
+
+Renderer outputs are reused under `~/.cache/sid2ct/renders/`. Keys include SID
+content, renderer binary content, playback settings and voice mask; exported CT
+changes therefore invalidate the cache when their playback bytes change. Remove
+that directory to clear the cache.
