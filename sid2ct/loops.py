@@ -8,14 +8,20 @@ import subprocess
 CC_BASE_RATE = 985248 / (312 * 63)
 
 
-def capture(tool, sid, subtune, directory, seconds=None, multiplier=None, max_seconds=600):
-    """Require full emulated memory recurrence; musical motifs are insufficient."""
+def capture(tool, sid, subtune, directory, seconds=None, multiplier=None, max_seconds=600, extras=None):
+    """Require full emulated memory recurrence; musical motifs are insufficient.
+
+    extras (a dict) asks for the memory-read trace too (slower): it receives
+    'mem_reads' (the trace text) and 'source_frames' (the traced calls' raw frames).
+    """
     trace = directory/'source.trace'
     info = directory/'loop.json'
-    def run(calls):
+    reads = directory/'source.reads'
+    def run(calls, with_reads=False):
         result = subprocess.run([str(tool), 'sidtrace', str(sid), '-s', str(subtune),
-            '-f', str(calls), '--loop-info', str(info), '-o', str(trace)],
-            capture_output=True, text=True, timeout=180)
+            '-f', str(calls), '--loop-info', str(info), '-o', str(trace)]
+            + (['--mem-reads', str(reads)] if with_reads else []),
+            capture_output=True, text=True, timeout=600 if with_reads else 180)
         if result.returncode:
             raise ValueError('Tracing failed: '+result.stdout+result.stderr)
         return json.loads(info.read_text())
@@ -41,13 +47,16 @@ def capture(tool, sid, subtune, directory, seconds=None, multiplier=None, max_se
     if fastest > CC_BASE_RATE*16*1.05:
         raise ValueError('Source rate exceeds supported multiplier range 1..16.')
     limit = seconds if seconds is not None else max_seconds
-    data = run(math.ceil(limit*fastest))
+    want = extras is not None
+    data = run(math.ceil(limit*fastest), want)
     elapsed = periods(data)
     # A later tempo acceleration may need more calls than the short probe.
     if not data['detected'] and sum(elapsed) < limit:
-        data = run(math.ceil(limit*CC_BASE_RATE*16))
+        data = run(math.ceil(limit*CC_BASE_RATE*16), want)
         elapsed = periods(data)
     source = [bytes.fromhex(line) for line in trace.read_text().splitlines()]
+    if want:
+        extras.update(mem_reads=reads.read_text(), source_frames=list(source))
     if seconds is not None and data['detected']:
         cycle = source[data['start_call']:data['end_call']]
         cycle_periods = elapsed[data['start_call']:data['end_call']]

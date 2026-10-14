@@ -111,13 +111,55 @@ def sound_distance(left, right):
     return envelope*20 + shape*30 + duty + filtering + abs(len(wave)-len(other_wave))/4
 
 
-def _native_song(template, frames, multiplier, row_frames, metadata, frequencies=None, output_multiplier=1, loop_start=None, pitch_programs="attack", modulation_programs="legacy", coupled_programs="legacy", instrument_allocation="legacy", change_points=False, pattern_mining=False, joint_modeling=False, layout="chunks", effect_programs="off", filter_mode="instrument"):
+def _solve_allocation(frames, events, stops, plans, usage, weighted, eff, data, offset, output_multiplier, multiplier,
+                      coupled_signatures, protected, hints, hint_scale, time_limit, report):
+    """CP-SAT allocation (sid2ct.solve); None means: use the greedy budget allocation instead."""
+    from .allocation import select_with_budgets, program_cost
+    from . import solve
+    limits = (47, 254, 63, 63)
+    allocation = report.setdefault('allocation', {})
+    if len(weighted) <= 47 and all(c <= b for c, b in zip(program_cost(list(weighted)), limits)):
+        allocation.update(status='trivial', objective=0.0)
+        return list(weighted), {}, 0
+    try:
+        warm = select_with_budgets(weighted, instrument_limit=47, wave_limit=254, pulse_limit=63,
+                                   filter_limit=63, coupled=coupled_signatures, protected=protected)
+    except ValueError:
+        warm = None
+    make_image = solve.ImageMaker(data, {i: offset(i) for i in (14, 15, 16, 17)}, output_multiplier)
+    from .effectmap import COMMAND_ROWS
+    try:
+        selected, assignment, solved = solve.allocate(
+            events, stops, plans, frames=frames, usage=usage, step=max(1, multiplier // output_multiplier),
+            effects=eff is not None, make_image=make_image, output_multiplier=output_multiplier,
+            limits=limits, coupled_signatures=coupled_signatures, protected=protected,
+            warm_selection=warm, hints=hints, hint_scale=hint_scale, time_limit=time_limit,
+            free_commands=frozenset(eff.commands) if eff is not None else frozenset(),
+            command_limit=COMMAND_ROWS - eff.reserved - len(eff.commands) if eff is not None else 0,
+            workers=int(__import__('os').environ.get('SID2CT_WORKERS') or __import__('os').cpu_count() or 1),
+            compare_warm=bool(__import__('os').environ.get('SID2CT_SOLVE_DEBUG')),
+            evaluate={'legacy': [sig for sig, _ in usage.most_common(47)]} if __import__('os').environ.get('SID2CT_SOLVE_DEBUG') else None)
+    except Exception as error:  # the greedy allocation still works; keep the reason in the report
+        allocation.update(status='error', error=f'{type(error).__name__}: {error}')
+        return None
+    allocation.update(solved)
+    if hints is not None:
+        allocation['hint_player'] = hints.player
+    if selected is None:
+        return None
+    allocation['tables'] = dict(zip(('instruments', 'wave_rows', 'pulse_rows', 'filter_rows'),
+                                    program_cost(selected)))
+    allocation['repaired_variants'] = sum(1 for v in assignment.values() if v[2])
+    return selected, assignment, 0
+
+
+def _native_song(template, frames, multiplier, row_frames, metadata, frequencies=None, output_multiplier=1, loop_start=None, pitch_programs="attack", modulation_programs="legacy", coupled_programs="legacy", instrument_allocation="legacy", change_points=False, pattern_mining=False, joint_modeling=False, layout="chunks", effect_programs="off", filter_mode="instrument", solve_time_limit=20.0, structure_hints=None, hint_scale=1.0):
     if effect_programs not in ("off", "on"):
         raise ValueError("Effect programmes must be off or on.")
     if layout not in ("chunks", "compact"):
         raise ValueError("Layout must be chunks or compact.")
-    if instrument_allocation not in ("legacy", "trajectory", "budget"):
-        raise ValueError("Instrument allocation must be legacy, trajectory or budget.")
+    if instrument_allocation not in ("legacy", "trajectory", "budget", "solve"):
+        raise ValueError("Instrument allocation must be legacy, trajectory, budget or solve.")
     if joint_modeling and coupled_programs != "preserve":
         raise ValueError("Joint modeling requires preserved physical oscillator dependencies.")
     if coupled_programs not in ("legacy", "preserve"):
@@ -344,6 +386,7 @@ def _native_song(template, frames, multiplier, row_frames, metadata, frequencies
         return starts
     plans = {}
     wanted_adsr = {}
+    stops = {}
     if eff is not None:
         requests = []
         for v in range(3):
@@ -394,6 +437,7 @@ def _native_song(template, frames, multiplier, row_frames, metadata, frequencies
             # Legacy widths are quantized; compact programs retain low bits.
             signature=(ad,sr,wp,pp,fp)
             events.append((v,start,base,signature,coupled))
+            stops[(v,start)] = stop
             wanted_adsr[(v,start)] = (ad,sr)
             if coupled:
                 metrics['coupled_oscillator_events'] += 1
@@ -402,7 +446,7 @@ def _native_song(template, frames, multiplier, row_frames, metadata, frequencies
     if not events:
         raise ValueError('No playable attacks found for native reconstruction.')
     adsr_supers = {}
-    if eff is not None and len({e[3] for e in events}) > 47:
+    if eff is not None and instrument_allocation != 'solve' and len({e[3] for e in events}) > 47:
         # Capacity pressure: sounds that differ only in AD/SR share the shape's
         # most used envelope; the difference becomes a nibble super or command 4.
         shapes = {}
@@ -446,7 +490,28 @@ def _native_song(template, frames, multiplier, row_frames, metadata, frequencies
             weighted.setdefault(silent_fallback, 1)
             protected = (silent_fallback,)
         coupled_signatures = {e[3] for e in events if e[4]}
-        if instrument_allocation == 'budget':
+        solved = None
+        if instrument_allocation == 'solve':
+            solved = _solve_allocation(frames, events, stops, plans, usage, weighted, eff, data, offset, output_multiplier,
+                                       multiplier, coupled_signatures, protected, structure_hints, hint_scale,
+                                       solve_time_limit, helper_report)
+        if solved is not None:
+            selected, forced, repaired = solved
+            for index,(v,start,base,signature,coupled) in enumerate(events):
+                target = forced.get(signature)
+                if target is None or target[0] == signature or not target[2]:
+                    continue
+                wanted = (v,start)
+                sup = eff.adsr_super(signature[:2], target[0][:2])
+                plan = plans.get(wanted)
+                if coupled or sup is None or (plan is not None and (plan.command or plan.chord)):
+                    continue
+                if sup:
+                    adsr_supers[wanted] = sup
+                events[index] = (v,start,base,target[0],coupled)
+            selected.sort(key=lambda signature: (-len(signature[2]), signature))
+            allocation = [(signature,usage.get(signature,0)) for signature in selected]
+        elif instrument_allocation in ('budget','solve'):
             selected = select_with_budgets(weighted, instrument_limit=47,
                 wave_limit=254, pulse_limit=63, filter_limit=63,
                 coupled=coupled_signatures, protected=protected)
@@ -459,7 +524,9 @@ def _native_song(template, frames, multiplier, row_frames, metadata, frequencies
             allocation = [(signature,usage[signature]) for signature in selected]
             allocation += [(signature,weight) for signature,weight in usage.most_common()
                            if signature not in selected]
-        helper_report['allocation'] = dict(mode=instrument_allocation, selected=len(selected))
+        helper_report.setdefault('allocation', {}).update(mode=instrument_allocation, selected=len(selected))
+        if instrument_allocation == 'solve' and solved is None:
+            helper_report['allocation']['fallback'] = 'budget'
     if silent_fallback is not None and silent_fallback not in dict(allocation):
         allocation.insert(0,(silent_fallback,0))
     for signature,_ in allocation:
@@ -510,12 +577,16 @@ def _native_song(template, frames, multiplier, row_frames, metadata, frequencies
     }
     fallbacks = {}
     placed = {}
+    forced = forced if instrument_allocation == 'solve' and solved is not None else {}
     for v,start,base,signature,coupled in events:
         ins=instruments.get(signature)
         exact = ins is not None
         if ins is None:
             context = (signature,coupled,base)
             ins = fallbacks.get(context)
+            target = forced.get(signature)
+            if ins is None and target is not None and target[0] in instruments and base + relative_limits[instruments[target[0]]] <= 95:
+                ins = fallbacks[context] = instruments[target[0]]
             if ins is None:
                 # Favor envelope/control likeness before trajectory length.
                 def distance(other):
@@ -800,7 +871,7 @@ def _native_song(template, frames, multiplier, row_frames, metadata, frequencies
     return b'CC2'+zlib.compress(data),report
 
 
-def native_song(template, frames, multiplier, row_frames, metadata, frequencies=None, output_multiplier=1, loop_start=None, pitch_programs="attack", modulation_programs="legacy", coupled_programs="legacy", instrument_allocation="legacy", change_points=False, pattern_mining=False, joint_modeling=False, layout="chunks", effect_programs="off"):
+def native_song(template, frames, multiplier, row_frames, metadata, frequencies=None, output_multiplier=1, loop_start=None, pitch_programs="attack", modulation_programs="legacy", coupled_programs="legacy", instrument_allocation="legacy", change_points=False, pattern_mining=False, joint_modeling=False, layout="chunks", effect_programs="off", solve_time_limit=20.0, structure_hints=None, hint_scale=1.0):
     """Build a native CC2 song; returns (bytes, report).
 
     effect_programs "off" is the original mapper. "on" fits slide, vibrato,
@@ -814,7 +885,8 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
                    pitch_programs=pitch_programs, modulation_programs=modulation_programs,
                    coupled_programs=coupled_programs, instrument_allocation=instrument_allocation,
                    change_points=change_points, pattern_mining=pattern_mining, joint_modeling=joint_modeling,
-                   layout=layout, effect_programs=effect_programs)
+                   layout=layout, effect_programs=effect_programs, solve_time_limit=solve_time_limit,
+                   structure_hints=structure_hints, hint_scale=hint_scale)
     if effect_programs != "on":
         return _native_song(template, frames, multiplier, row_frames, metadata, **options)
     try:

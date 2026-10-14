@@ -220,6 +220,32 @@ def reconstruct(frames, multiplier=1, row_frames=6, metadata=None, loop_start=No
     return bytes(out), report
 
 
+def identify_extractor(raw):
+    """The structure extractor module for a recognised GoatTracker, DMC or JCH NewPlayer SID, else None."""
+    from .players import family, identify
+    from .players import dmc, goattracker, jch
+    try:
+        families = {family(name) for name in identify(raw)}
+    except (ValueError, OSError):
+        return None
+    for name, module in (('GoatTracker', goattracker), ('DMC', dmc), ('JCH NewPlayer', jch)):
+        if name in families:
+            return module
+    return None
+
+
+def source_structure(raw, subtune, extras, loop):
+    """StructureHints from a --mem-reads capture, or None (hints only ever guide, never decide)."""
+    module = identify_extractor(raw)
+    if module is None or not extras.get('mem_reads'):
+        return None
+    from . import memtrace
+    try:
+        return module.extract(raw, subtune, extras['source_frames'], memtrace.parse(extras['mem_reads']))
+    except Exception:  # an extractor failure costs the hint, not the conversion
+        return None
+
+
 def run(tool, *args):
     result = subprocess.run([str(tool), *map(str, args)], cwd=ROOT, capture_output=True,
                             text=True, timeout=60)
@@ -260,7 +286,9 @@ def add_arguments(parser):
     parser.add_argument('--effect-programs', choices=('auto','off','on'), default='auto',
                         help='on: map slides, vibrato, detune, arpeggios, AD/SR changes, volume and one global filter to command rows; off: older method; auto: try both.')
     parser.add_argument('--auto-row-frames', action='store_true', help='Try row lengths of 3, 4, 5, 6, 8 and 12 frames plus the requested length; keep the best audio match.')
-    parser.add_argument('--instrument-allocation', choices=('legacy','trajectory','budget'), default='legacy', help='legacy: most-used sounds first; trajectory: group similar sound changes; budget: also fit all sound tables within their limits.')
+    parser.add_argument('--instrument-allocation', choices=('legacy','trajectory','budget','solve'), default='legacy', help='legacy: most-used sounds first; trajectory: group similar sound changes; budget: also fit all sound tables within their limits; solve: choose sounds with an integer solver (OR-Tools) that minimises register distortion within the table limits, falling back to budget.')
+    parser.add_argument('--solve-time-limit', type=float, default=20.0, help='Seconds the integer solver may spend per sound allocation with --instrument-allocation solve (default: 20).')
+    parser.add_argument('--structure-hints', choices=('auto','off'), default='auto', help='With --instrument-allocation solve, read the source player\'s own song data (GoatTracker, DMC, JCH NewPlayer) so notes that share a source instrument prefer one CC instrument. auto adds a slower memory trace; off skips it (default: auto).')
     parser.add_argument('--change-points', action='store_true', help='Report where pitch, gate or control values change; playback stays unchanged.')
     parser.add_argument('--pattern-mining', action='store_true', help='Reuse repeated pattern rows while keeping every row and the loop position.')
     parser.add_argument('--joint-modeling', action='store_true', help='Give extra priority to instruments in voices that affect each other; requires --coupled-programs preserve and trajectory or budget allocation.')
@@ -332,25 +360,30 @@ def run_command(args):
                 raise ValueError('--max-seconds must be in (0,600].')
             loop = None
             input_cache = getattr(args, '_input_cache', None)
+            wants_hints = (getattr(args, 'instrument_allocation', 'legacy') == 'solve' and getattr(args, 'structure_hints', 'auto') == 'auto'
+                           and not args.trace and identify_extractor(raw_sid) is not None)
             import hashlib
             input_key = (hashlib.sha256(raw_sid).hexdigest(), args.subtune,
                          args.seconds, args.multiplier, args.max_seconds,
                          hashlib.sha256(args.tool.read_bytes()).hexdigest(),
                          hashlib.sha256(args.trace.read_bytes()).hexdigest() if args.trace else None)
             if input_cache is not None and input_key in input_cache:
-                frames, loop, args.multiplier, duration = input_cache[input_key]
+                frames, loop, args.multiplier, duration, hints = input_cache[input_key]
             elif args.trace:
+                hints = None
                 args.multiplier = args.multiplier or 1
                 frames = parse_trace(args.trace.read_text())
                 duration = min(args.seconds or args.max_seconds, len(frames)/(50*args.multiplier))
                 frames = frames[:round(duration*50*args.multiplier)]
             else:
+                extras = {} if wants_hints else None
                 frames, loop = capture(args.tool.resolve(), args.sid.resolve(), args.subtune,
-                    temp, args.seconds, args.multiplier, args.max_seconds)
+                    temp, args.seconds, args.multiplier, args.max_seconds, extras)
                 args.multiplier = loop['source_multiplier']
                 duration = loop['duration_seconds']
+                hints = source_structure(raw_sid, args.subtune, extras, loop) if wants_hints else None
             if input_cache is not None:
-                input_cache[input_key] = (frames, loop, args.multiplier, duration)
+                input_cache[input_key] = (frames, loop, args.multiplier, duration, hints)
             coupling = analyze_coupling(frames, (50 if args.trace else CC_BASE_RATE)*args.multiplier)
             audio_duration = min(args.audio_seconds or duration, duration)
             renderer_info = None
@@ -437,25 +470,37 @@ def run_command(args):
                     requested = getattr(args,'effect_programs','auto')
                     effects = ['off','on'] if requested == 'auto' and not args.skip_audio and have_numpy else [
                         'off' if requested == 'auto' else requested]
-                    native_variants = [(rate,tuning,label,pitch,modulation,couple,effect) for rate in rates for tuning,label in tunings for pitch in pitches for modulation in modulations for couple in coupled for effect in effects]
-                variants = [(profile,rate,tuning,label,pitch,modulation,couple,effect) for profile in profiles
-                            for rate,tuning,label,pitch,modulation,couple,effect in (native_variants if profile=='dynamic' else [(1,None,'default','attack','legacy','legacy','off')])]
+                    # The solver is one more way to allocate instruments, not a replacement: legacy stays
+                    # a candidate, so the audio selection can still pick it.
+                    requested_allocation = getattr(args,'instrument_allocation','legacy')
+                    allocations = ['solve','legacy'] if requested_allocation == 'solve' and not args.skip_audio else [requested_allocation]
+                    native_variants = [(rate,tuning,label,pitch,modulation,couple,effect,allocation) for rate in rates for tuning,label in tunings for pitch in pitches for modulation in modulations for couple in coupled for effect in effects for allocation in allocations]
+                variants = [(profile,rate,tuning,label,pitch,modulation,couple,effect,allocation) for profile in profiles
+                            for rate,tuning,label,pitch,modulation,couple,effect,allocation in (native_variants if profile=='dynamic' else [(1,None,'default','attack','legacy','legacy','off','legacy')])]
                 candidates, best_score = [], -1.0
+                # The solves of one conversion share about six solve limits (most finish early).
+                solves = sum(1 for v in variants if v[0] == 'dynamic' and v[-1] == 'solve')
+                solve_limit = max(3.0, min(getattr(args, 'solve_time_limit', 20.0), 6*getattr(args, 'solve_time_limit', 20.0)/max(1, solves)))
+                hint_scale = loop['destination_calls_per_second']/loop['source_calls_per_second'] if loop and hints is not None else 1.0
                 baseline_v1 = None
-                for grid, profile, rate, tuning, label, pitch, modulation, couple, effect in [(g,*v) for g in grids for v in variants]:
+                for grid, profile, rate, tuning, label, pitch, modulation, couple, effect, allocation in [(g,*v) for g in grids for v in variants]:
                     try:
                         candidate = temp/'candidate.ct'
                         if profile=='dynamic':
                             native,candidate_report = native_song(template,frames,args.multiplier,grid,metadata,
                                                                   tuning,rate, loop_start=loop['loop_start_frame'] if loop and loop['detected'] else None,
                                                                   pitch_programs=pitch, modulation_programs=modulation, coupled_programs=couple,
-                                                                  instrument_allocation=getattr(args,'instrument_allocation','legacy'),
+                                                                  instrument_allocation=allocation,
                                                                   change_points=getattr(args,'change_points',False),
                                                                   pattern_mining=getattr(args,'pattern_mining',False),
                                                                   joint_modeling=getattr(args,'joint_modeling',False),
-                                                                  effect_programs=effect)
+                                                                  effect_programs=effect,
+                                                                  solve_time_limit=solve_limit, structure_hints=hints,
+                                                                  hint_scale=hint_scale)
                             candidate.write_bytes(native)
                             candidate_report['tuning'] = label
+                            if getattr(args,'instrument_allocation','legacy') == 'solve':
+                                candidate_report['instrument_allocation'] = allocation
                             if label=='dmc4':
                                 candidate_report['source_player']='DMC4-compatible anchored tuning'
                         else:
@@ -476,7 +521,7 @@ def run_command(args):
                         guarded = (baseline_v1 is None or (audio and audio.get('score_v1') is not None
                                    and audio['score_v1'] >= baseline_v1-getattr(args,'v1_tolerance',.01)))
                         candidates.append({'row_frames': grid, 'sound_programs': profile,
-                                           'output_multiplier': rate, 'tuning': label, 'pitch_programs': pitch, 'modulation_programs': modulation, 'coupled_programs': couple, 'effect_programs': effect, 'audio': audio})
+                                           'output_multiplier': rate, 'tuning': label, 'pitch_programs': pitch, 'modulation_programs': modulation, 'coupled_programs': couple, 'effect_programs': effect, 'instrument_allocation': allocation, 'audio': audio})
                         if guarded and score > best_score:
                             best_score, report = score, candidate_report
                             ct.write_bytes(candidate.read_bytes())
@@ -487,7 +532,7 @@ def run_command(args):
                         if len(grids)*len(variants)==1:
                             raise
                         candidates.append({'row_frames': grid, 'sound_programs': profile,
-                                           'output_multiplier': rate, 'tuning': label, 'pitch_programs': pitch, 'modulation_programs': modulation, 'coupled_programs': couple, 'effect_programs': effect, 'error': str(error)})
+                                           'output_multiplier': rate, 'tuning': label, 'pitch_programs': pitch, 'modulation_programs': modulation, 'coupled_programs': couple, 'effect_programs': effect, 'instrument_allocation': allocation, 'error': str(error)})
                 if report is None:
                     raise ValueError('Every row-grid candidate failed: ' + json.dumps(candidates))
                 if args.auto_row_frames:

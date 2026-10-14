@@ -569,7 +569,7 @@ records the final measured candidates and explicitly separates discarded trials.
 ### Optional staged helpers
 
 Default conversion retains the existing allocation, event extraction and fixed
-pattern chunks. Opt in with `--instrument-allocation trajectory` or `budget`,
+pattern chunks. Opt in with `--instrument-allocation trajectory`, `budget` or `solve`,
 `--pattern-mining`, `--change-points`, and `--joint-modeling`. Joint modeling
 requires `--coupled-programs preserve` and trajectory/budget allocation.
 
@@ -579,6 +579,40 @@ Budget allocation admits complete programs within 47 instruments, 256 wave
 rows and 64 pulse/filter records including sentinels. Longer waves pack first
 so exact suffix sharing matches the selector's accounting. Mandatory medoids
 that exceed capacity reject the experiment; legacy remains available.
+
+Solver allocation (`--instrument-allocation solve`, needs `ortools`, numpy and
+`--effect-programs on` for row repairs) replaces the greedy choice with an
+integer model (`sid2ct/solve.py`, CP-SAT):
+
+- Candidates are every observed sound variant plus merged medoids (greedy
+  facility location over the priced pairs; the cluster's most used AD/SR joins
+  the medoid's programs) and a silent instrument.
+- Cost of giving variant v to candidate c is the weighted register distortion
+  between a typical observed note of v and c played by the exact CT player
+  (`ctplayer.simulate_voice` through `regdist.frame_costs`), plus an envelope
+  level and a loudness-ratio term (regdist does not see ADSR), times the event
+  ticks (coupled sources count double). Windows cover both programs and
+  envelopes; the rest of a long note counts at the window's end value. Each
+  variant prices its nearest candidates (sampled-program distance) and an
+  "unmatched" option that falls back to the greedy nearest choice.
+- A pair that differs only in AD/SR can be repaired on rows without a command
+  or chord: an inline `$a0..$df` nibble is free, command 4 costs one command row
+  (shared by equal AD/SR pairs, limited to the rows effectmap left).
+- Limits: at most 47 instruments, wave rows 254 with exact-suffix sharing,
+  pulse and filter 63 each. Greedy `budget` is the warm start and the fallback
+  (no solution, error, or missing ortools; reported as `allocation.fallback`).
+  Notes that share a source instrument number prefer one instrument (soft
+  penalty, never a requirement) when GoatTracker, DMC or JCH data is read.
+- `--solve-time-limit` (default 20 s per solve; a conversion shares about six
+  of them across its candidates), `--structure-hints auto|off` (auto runs
+  `sidtrace --mem-reads` only for a recognised player; off skips it).
+  `convert` keeps legacy as a candidate next to solve, so the audio selection
+  can still choose it. The report has status, objective, bound, seconds,
+  tables and repaired variants under `helpers.allocation`.
+- Known limits: the cost is register distance, which can prefer silence or a
+  wrong loud sound over a quiet right one, so the loudness term is a tuned
+  guess; approximated attacks can rise because the objective is distortion,
+  not the exact-variant count (a small bias favours exact variants).
 
 Change points currently provide advisory diagnostics without adding ADSR
 attacks. Joint modeling weights representatives at time-local dependency

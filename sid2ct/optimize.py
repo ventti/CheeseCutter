@@ -14,7 +14,7 @@ def load_optuna():
 
 
 def suggest_options(trial, row_frames, source_tuning_available=True):
-    allocation = trial.suggest_categorical('instrument_allocation', ['legacy', 'trajectory', 'budget'])
+    allocation = trial.suggest_categorical('instrument_allocation', ['legacy', 'trajectory', 'budget', 'solve'])
     return dict(
         row_frames=trial.suggest_categorical('row_frames', sorted({3, 4, 5, 6, 8, 12, row_frames})),
         sound_programs='dynamic', coupled_programs='preserve',

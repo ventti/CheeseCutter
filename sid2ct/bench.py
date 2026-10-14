@@ -140,23 +140,23 @@ def failure_reason(log_text):
     return lines[-1][:200] if lines else 'no output'
 
 
-def convert_command(sid, output, entry, seconds, full, effect_programs=None):
+def convert_command(sid, output, entry, seconds, full, effect_programs=None, extra=()):
     command = [sys.executable, '-m', 'sid2ct', 'convert', str(sid), '-o', str(output), '--force',
                '--subtune', str(entry['subtune']), '--workers', '1']
     if not full:
         command += ['--seconds', f'{seconds:g}']
     if effect_programs:
         command += ['--effect-programs', effect_programs]
-    return command
+    return command + list(extra)
 
 
-def run_song(entry, hvsc, song_dir, seconds, full, timeout=TIMEOUT, effect_programs=None):
+def run_song(entry, hvsc, song_dir, seconds, full, timeout=TIMEOUT, effect_programs=None, extra=()):
     """Run one conversion; returns (status, error, wall_seconds, scores, report_path)."""
     song_dir.mkdir(parents=True, exist_ok=True)
     output = song_dir/'song.ct'
     report_path = output.with_suffix('.json')
     report_path.unlink(missing_ok=True)
-    command = convert_command(hvsc/entry['path'], output, entry, seconds, full, effect_programs)
+    command = convert_command(hvsc/entry['path'], output, entry, seconds, full, effect_programs, extra)
     started = time.monotonic()
     status, error = 'ok', None
     with open(song_dir/'convert.log', 'w') as log:
@@ -268,6 +268,9 @@ def add_arguments(parser):
     parser.add_argument('--hvsc', type=Path, default=corpus.default_root(), help='HVSC root (default: $HVSC_ROOT or ../shallowsid/_hvsc-source).')
     parser.add_argument('--corpus', type=Path, default=corpus.MANIFEST, help='Corpus manifest (default: tools/sid_corpus.toml).')
     parser.add_argument('--effect-programs', choices=('auto', 'off', 'on'), help='Pass --effect-programs to every conversion (default: the converter default).')
+    parser.add_argument('--instrument-allocation', choices=('legacy', 'trajectory', 'budget', 'solve'), help='Pass --instrument-allocation to every conversion.')
+    parser.add_argument('--structure-hints', choices=('auto', 'off'), help='Pass --structure-hints to every conversion.')
+    parser.add_argument('--solve-time-limit', type=float, help='Pass --solve-time-limit to every conversion.')
     parser.add_argument('--timeout', type=float, default=TIMEOUT, help='Per-song limit in seconds (default: 900).')
 
 
@@ -281,14 +284,17 @@ def run_command(args):
         return 1
     db = connect()
     options = {'split': args.split, 'seconds': None if args.full else args.seconds, 'full': args.full, 'only': args.only,
-               'effect_programs': args.effect_programs}
+               'effect_programs': args.effect_programs, 'instrument_allocation': args.instrument_allocation,
+               'structure_hints': args.structure_hints, 'solve_time_limit': args.solve_time_limit}
+    extra = [x for flag, value in (('--instrument-allocation', args.instrument_allocation), ('--structure-hints', args.structure_hints),
+                                   ('--solve-time-limit', args.solve_time_limit)) if value is not None for x in (flag, str(value))]
     run_id = start_run(db, args.label, git_sha(), options)
     base = CACHE/'bench'/args.label
     print(f'run {run_id} label={args.label} songs={len(songs)} workers={args.workers}', flush=True)
 
     def work(entry):
         name = song_name(entry)
-        outcome = run_song(entry, args.hvsc, base/name, args.seconds, args.full, args.timeout, args.effect_programs)
+        outcome = run_song(entry, args.hvsc, base/name, args.seconds, args.full, args.timeout, args.effect_programs, extra)
         print(f'{name}: {outcome[0]} {outcome[2]:.0f}s mix={fmt(outcome[3]["mix"])}', flush=True)
         return entry, name, outcome
 
