@@ -452,17 +452,57 @@ def fit_pitch(note, tuning, *, tolerance=12.0, max_tolerance=None, quantum=6, vo
     Notes that are mostly noise waveform (bit $80) are fitted with the
     tolerances multiplied by noise_scale: their pitch is only a timbre colour.
     """
+    ctx = _context(note, tuning, tolerance, max_tolerance, quantum, voice, lag, noise_scale)
+    return fit_trace(ctx)
+
+
+def _context(note, tuning, tolerance, max_tolerance, quantum, voice, lag, noise_scale):
     if np.count_nonzero(np.asarray(note.control) & 0x80) * 2 >= max(1, len(note.control)):
         tolerance *= noise_scale
         max_tolerance = max_tolerance * noise_scale if max_tolerance is not None else None
     src, mask = np.asarray(note.freq, np.int64), np.asarray(note.test_mask)
     if lag:
         src, mask = np.concatenate([np.zeros(lag, np.int64), src]), np.concatenate([np.ones(lag, bool), mask])
-    ctx = _Ctx(src, mask, list(tuning),
-               note.voice if voice is None else voice, tolerance,
-               max_tolerance if max_tolerance is not None else max(3 * tolerance, 40.0),
-               max(1, quantum), note.prev_freq)
-    return fit_trace(ctx)
+    return _Ctx(src, mask, list(tuning),
+                note.voice if voice is None else voice, tolerance,
+                max_tolerance if max_tolerance is not None else max(3 * tolerance, 40.0),
+                max(1, quantum), note.prev_freq)
+
+
+def refit_command(note, tuning, fit, command, *, tolerance=12.0, max_tolerance=None, quantum=6, voice=None,
+                  lag=0, noise_scale=4.0):
+    """Evaluate fit's primitive (same base note and delay) with another command row (op, hi, lo).
+
+    Used to share a command-table row between notes whose own parameters differ slightly.
+    Returns an EffectFit (ok tells whether the substitute stays within tolerance), or None
+    when the command does not belong to the fit's primitive.
+    """
+    ctx = _context(note, tuning, tolerance, max_tolerance, quantum, voice, lag, noise_scale)
+    op, hi, lo = command
+    base, delay = fit.params.get('note'), fit.delay
+    key = ('cmd', op, hi, lo)
+    if fit.primitive == 'slide' and op in (0, 1):
+        speed = hi << 8 | lo
+        params = {'note': base, 'direction': 'up' if op == 0 else 'down', 'speed': speed}
+        model = _slide(ctx, base, 1 if op == 0 else -1, speed, delay)
+    elif fit.primitive == 'vibrato_hifi' and op == 2:
+        feel, amp, frq = hi & 15, lo & 15, (lo >> 4) + 1
+        params = {'note': base, 'feel': feel, 'amp': amp, 'frq': frq}
+        model = _hifi(ctx, base, feel, amp, frq, delay)
+    elif fit.primitive == 'vibrato_lofi' and op == 5:
+        params = {'note': base, 'frq': hi, 'amp': lo}
+        model = _lofi(ctx, base, hi, lo, delay) if hi else None
+    elif fit.primitive == 'detune' and op == 3:
+        offset = hi << 8 | lo
+        params = {'note': base, 'offset': offset}
+        model = _flat(ctx, base, offset)
+    elif fit.primitive == 'portamento' and op == 7:
+        speed = (hi & 15) << 8 | lo
+        params = {'note': base, 'speed': speed, 'start': ctx.prev_freq}
+        model = _porta(ctx, ctx.prev_freq, base, speed) if speed else None
+    else:
+        return None
+    return _make(ctx, fit.primitive, params, model, fit.cost, delay=delay, command=command, dedup_key=key)
 
 
 def fit_trace(ctx):

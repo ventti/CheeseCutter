@@ -74,6 +74,7 @@ def add_arguments(parser):
         'tuning': 'Use CheeseCutter tuning or recovered original tuning (default: default; auto is not supported).',
         'coupled_programs': 'Search requires preserve to keep voices that affect each other (default: preserve).',
         'modulation_programs': 'Pulse-width method: compact or legacy (default: compact; auto is not supported).',
+        'effect_programs': 'Map effects to command rows: on or off (default: off; auto is not supported).',
         'pitch_programs': 'Pitch changes to keep: attack, compact or full (default: full; auto is not supported).',
         'instrument_allocation': 'Leave at legacy; search tries the other instrument selection methods itself.',
         'change_points': 'Leave off; search tries change-point reporting itself.',
@@ -87,7 +88,8 @@ def add_arguments(parser):
                      'accept improvements only after voice, pair and section checks; helpers use provisional mix ranking. '
                      'Auto choices are supported by convert instead.')
     parser.set_defaults(sound_programs="dynamic", sound_rate="source", tuning="default",
-                        pitch_programs="full", modulation_programs="compact", coupled_programs="preserve")
+                        pitch_programs="full", modulation_programs="compact", coupled_programs="preserve",
+                        effect_programs="off")
     parser.add_argument('--candidate-cap', type=int, default=None, help='Maximum new versions besides before (default: 12 for helpers, 40 for optuna/random).')
     parser.add_argument('--search-seconds', type=float, default=600, help='Time limit in seconds (default: 600); a running conversion or comparison finishes before stopping.')
     parser.add_argument('--optimizer', choices=('helpers', 'optuna', 'random'), default='helpers',
@@ -112,8 +114,8 @@ def run_command(args):
         if args.skip_audio:
             raise ValueError('Helper search requires audio; use convert for trace-only helpers.')
         if args.auto_row_frames or any(getattr(args, key)=='auto' for key in
-            ('sound_programs','sound_rate','tuning','pitch_programs','modulation_programs','coupled_programs')):
-            raise ValueError('Pin settings for helper search: dynamic, source/base rate, default/source tuning, attack/compact/full pitch, legacy/compact modulation and preserve coupling.')
+            ('sound_programs','sound_rate','tuning','pitch_programs','modulation_programs','coupled_programs','effect_programs')):
+            raise ValueError('Pin settings for helper search: dynamic, source/base rate, default/source tuning, attack/compact/full pitch, legacy/compact modulation, preserve coupling and on/off effects.')
         if args.sound_programs != 'dynamic' or args.coupled_programs != 'preserve':
             raise ValueError('Helper search requires dynamic sounds and preserve coupling.')
         if args.instrument_allocation != 'legacy' or args.change_points or args.pattern_mining or args.joint_modeling:

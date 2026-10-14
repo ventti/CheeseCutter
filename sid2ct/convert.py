@@ -257,6 +257,8 @@ def add_arguments(parser):
                         help='compact: follow pulse-width jumps and remove redundant holds; legacy: older method; auto: try both.')
     parser.add_argument('--pitch-programs', choices=('auto','attack','compact','full'), default='auto',
                         help='attack: keep early pitch changes; compact: remove redundant holds; full: keep later changes too; auto: compare all three (full without audio).')
+    parser.add_argument('--effect-programs', choices=('auto','off','on'), default='auto',
+                        help='on: map slides, vibrato, detune, arpeggios, AD/SR changes, volume and one global filter to command rows; off: older method; auto: try both.')
     parser.add_argument('--auto-row-frames', action='store_true', help='Try row lengths of 3, 4, 5, 6, 8 and 12 frames plus the requested length; keep the best audio match.')
     parser.add_argument('--instrument-allocation', choices=('legacy','trajectory','budget'), default='legacy', help='legacy: most-used sounds first; trajectory: group similar sound changes; budget: also fit all sound tables within their limits.')
     parser.add_argument('--change-points', action='store_true', help='Report where pitch, gate or control values change; playback stays unchanged.')
@@ -427,12 +429,20 @@ def run_command(args):
                     coupled = ['legacy','preserve'] if args.coupled_programs == 'auto' and coupling['edges'] and not args.skip_audio else [
                         'preserve' if args.coupled_programs == 'auto' and coupling['edges'] else
                         'legacy' if args.coupled_programs == 'auto' else args.coupled_programs]
-                    native_variants = [(rate,tuning,label,pitch,modulation,couple) for rate in rates for tuning,label in tunings for pitch in pitches for modulation in modulations for couple in coupled]
-                variants = [(profile,rate,tuning,label,pitch,modulation,couple) for profile in profiles
-                            for rate,tuning,label,pitch,modulation,couple in (native_variants if profile=='dynamic' else [(1,None,'default','attack','legacy','legacy')])]
+                    try:
+                        import numpy  # noqa: F401  (effect fitting needs it; plain conversion does not)
+                        have_numpy = True
+                    except ImportError:
+                        have_numpy = False
+                    requested = getattr(args,'effect_programs','auto')
+                    effects = ['off','on'] if requested == 'auto' and not args.skip_audio and have_numpy else [
+                        'off' if requested == 'auto' else requested]
+                    native_variants = [(rate,tuning,label,pitch,modulation,couple,effect) for rate in rates for tuning,label in tunings for pitch in pitches for modulation in modulations for couple in coupled for effect in effects]
+                variants = [(profile,rate,tuning,label,pitch,modulation,couple,effect) for profile in profiles
+                            for rate,tuning,label,pitch,modulation,couple,effect in (native_variants if profile=='dynamic' else [(1,None,'default','attack','legacy','legacy','off')])]
                 candidates, best_score = [], -1.0
                 baseline_v1 = None
-                for grid, profile, rate, tuning, label, pitch, modulation, couple in [(g,*v) for g in grids for v in variants]:
+                for grid, profile, rate, tuning, label, pitch, modulation, couple, effect in [(g,*v) for g in grids for v in variants]:
                     try:
                         candidate = temp/'candidate.ct'
                         if profile=='dynamic':
@@ -442,7 +452,8 @@ def run_command(args):
                                                                   instrument_allocation=getattr(args,'instrument_allocation','legacy'),
                                                                   change_points=getattr(args,'change_points',False),
                                                                   pattern_mining=getattr(args,'pattern_mining',False),
-                                                                  joint_modeling=getattr(args,'joint_modeling',False))
+                                                                  joint_modeling=getattr(args,'joint_modeling',False),
+                                                                  effect_programs=effect)
                             candidate.write_bytes(native)
                             candidate_report['tuning'] = label
                             if label=='dmc4':
@@ -465,7 +476,7 @@ def run_command(args):
                         guarded = (baseline_v1 is None or (audio and audio.get('score_v1') is not None
                                    and audio['score_v1'] >= baseline_v1-getattr(args,'v1_tolerance',.01)))
                         candidates.append({'row_frames': grid, 'sound_programs': profile,
-                                           'output_multiplier': rate, 'tuning': label, 'pitch_programs': pitch, 'modulation_programs': modulation, 'coupled_programs': couple, 'audio': audio})
+                                           'output_multiplier': rate, 'tuning': label, 'pitch_programs': pitch, 'modulation_programs': modulation, 'coupled_programs': couple, 'effect_programs': effect, 'audio': audio})
                         if guarded and score > best_score:
                             best_score, report = score, candidate_report
                             ct.write_bytes(candidate.read_bytes())
@@ -476,7 +487,7 @@ def run_command(args):
                         if len(grids)*len(variants)==1:
                             raise
                         candidates.append({'row_frames': grid, 'sound_programs': profile,
-                                           'output_multiplier': rate, 'tuning': label, 'pitch_programs': pitch, 'modulation_programs': modulation, 'coupled_programs': couple, 'error': str(error)})
+                                           'output_multiplier': rate, 'tuning': label, 'pitch_programs': pitch, 'modulation_programs': modulation, 'coupled_programs': couple, 'effect_programs': effect, 'error': str(error)})
                 if report is None:
                     raise ValueError('Every row-grid candidate failed: ' + json.dumps(candidates))
                 if args.auto_row_frames:

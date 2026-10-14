@@ -17,6 +17,7 @@ STOP_ROW = (0, 0, 255, 127)
 MAX_ROWS = 64          # table rows 0..63, row 0 is the stop row
 MAX_STARTS = 31        # start supers address rows 1..31
 INITIAL_ROUTE = 240    # cold-start value the player leaves in reg 23
+PRESET_SLACK = 4       # cutoff units: half a preset step
 
 
 @dataclass(frozen=True)
@@ -35,7 +36,7 @@ class FilterPlan:
     max_error: float = 0.0
     route_mismatch: int = 0      # frames whose route/res or mode bits differ
     tolerance_used: float = 0.0
-    ok: bool = True              # fits the 63-row / 31-start capacity
+    ok: bool = True              # fits the 63-row / 31-start capacity and max_error is within tolerance_used
 
     @property
     def rows_used(self):
@@ -188,4 +189,6 @@ def fit_filter(timeline, *, tolerance=16, gap=48, max_steps=10):
         error = np.abs(cut - cutoff)
         plan.error, plan.max_error = float(error.mean()), float(error.max())
         plan.route_mismatch = int(((regs != reg23) | (modes != mode)).sum())
+        # Presets are multiples of 8 units, so half a step is the rounding slack.
+        plan.ok = plan.max_error <= tol + PRESET_SLACK
     return plan

@@ -23,6 +23,34 @@ class Bench(unittest.TestCase):
         empty = bench.extract_scores({})
         self.assertTrue(all(v is None for v in empty.values()))
 
+    def test_v1_and_v2_scores_are_recorded_and_regressions_listed(self):
+        def scored(v1, v2):
+            data = report(v1)
+            data['audio_validation'].update(score_v1=v1, score_v2=v2)
+            return data
+        self.assertEqual(bench.extract_scores(scored(.8, .6))['score_v2'], .6)
+        # A report that predates score_v1 falls back to its similarity.
+        self.assertEqual(bench.extract_scores(report(.7))['score_v1'], .7)
+        self.assertIsNone(bench.extract_scores(report(.7))['score_v2'])
+        with tempfile.TemporaryDirectory() as directory:
+            db = bench.connect(Path(directory)/'b.sqlite3')
+            entry = {'split': 'dev', 'composer': 'TBB'}
+            base = bench.start_run(db, 'baseline', 'abc', {})
+            new = bench.start_run(db, 'try', 'def', {})
+            for name, before, after in (('TBB__A', (.80, .60), (.78, .62)), ('TBB__B', (.70, .50), (.71, .52))):
+                bench.record(db, base, entry, name, 'ok', None, 1.0, bench.extract_scores(scored(*before)), 'r.json')
+                bench.record(db, new, entry, name, 'ok', None, 1.0, bench.extract_scores(scored(*after)), 'r.json')
+            table = bench.format_table(db, new, base)
+            self.assertIn('mean score_v1 dev: 0.7450 (n=2)', table)
+            self.assertIn('mean score_v2 dev: 0.5700 (n=2), mean delta +0.0200', table)
+            self.assertIn('regression TBB__A: score_v1 -0.0200 score_v2 +0.0200', table)
+            self.assertNotIn('regression TBB__B', table)
+
+    def test_effect_programs_passthrough(self):
+        command = bench.convert_command(Path('a.sid'), Path('o.ct'), {'subtune': 1}, 60, False, 'off')
+        self.assertEqual(command[command.index('--effect-programs')+1], 'off')
+        self.assertNotIn('--effect-programs', bench.convert_command(Path('a.sid'), Path('o.ct'), {'subtune': 1}, 60, False))
+
     def test_select_songs(self):
         songs = [{'path': 'MUSICIANS/T/TBB/Viidakko.sid', 'composer': 'TBB', 'split': 'dev'},
                  {'path': 'MUSICIANS/P/PRI/Foo.sid', 'composer': 'PRI', 'split': 'heldout'}]

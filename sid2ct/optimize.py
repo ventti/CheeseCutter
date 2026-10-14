@@ -22,6 +22,7 @@ def suggest_options(trial, row_frames, source_tuning_available=True):
         tuning=trial.suggest_categorical('tuning', ['default', 'source'] if source_tuning_available else ['default']),
         pitch_programs=trial.suggest_categorical('pitch_programs', ['attack', 'compact', 'full']),
         modulation_programs=trial.suggest_categorical('modulation_programs', ['legacy', 'compact']),
+        effect_programs=trial.suggest_categorical('effect_programs', ['off', 'on']),
         instrument_allocation=allocation,
         joint_modeling=trial.suggest_categorical('joint_modeling', [False, True]) if allocation != 'legacy' else False)
 

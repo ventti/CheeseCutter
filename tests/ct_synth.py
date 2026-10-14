@@ -44,12 +44,13 @@ def wave_program(kind, **p):
 
 
 def synth(tmpl, rows, *, wave=('plain', {}), commands=(), chord=None, filt=None,
-          adsr=(0x09, 0xF0), speed=4, multiplier=1, length=12, restart=0):
+          adsr=(0x09, 0xF0), speed=4, multiplier=1, length=12, restart=0, extra=None):
     """Return a decompressed CC2 image.
 
     rows: [(note, super, tie)] on voice 0, each row held `length` sequence rows
     (a row is `speed` base ticks). commands: [(op, hi, lo)] starting at index 1.
     chord: bytes for the chord table. filt: filter table (flat list of bytes).
+    extra: {row index: super} put on otherwise blank rows (delayed effects, filter starts).
     """
     seed = bytearray(25)
     seed[0:2] = bytes((0x68, 0x11))
@@ -85,6 +86,8 @@ def synth(tmpl, rows, *, wave=('plain', {}), commands=(), chord=None, filt=None,
     for note, sup, tie in rows:
         raw += [0xC1, 0x5F if tie else 0xF0, 0x60 + note, sup]
         raw += [0xF0, 0xF0, 0x60, 0] * (length - 1)
+    for index, sup in (extra or {}).items():
+        raw[index * 4 + 3] = sup
     raw.append(0xBF)
     silent = [0xC0, 0xF0, 0x60, 0, 0xBF]
     lo = struct.unpack_from('<H', data, 0xFA0 + 22 * 2)[0]

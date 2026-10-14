@@ -111,7 +111,9 @@ def sound_distance(left, right):
     return envelope*20 + shape*30 + duty + filtering + abs(len(wave)-len(other_wave))/4
 
 
-def native_song(template, frames, multiplier, row_frames, metadata, frequencies=None, output_multiplier=1, loop_start=None, pitch_programs="attack", modulation_programs="legacy", coupled_programs="legacy", instrument_allocation="legacy", change_points=False, pattern_mining=False, joint_modeling=False, layout="chunks"):
+def _native_song(template, frames, multiplier, row_frames, metadata, frequencies=None, output_multiplier=1, loop_start=None, pitch_programs="attack", modulation_programs="legacy", coupled_programs="legacy", instrument_allocation="legacy", change_points=False, pattern_mining=False, joint_modeling=False, layout="chunks", effect_programs="off", filter_mode="instrument"):
+    if effect_programs not in ("off", "on"):
+        raise ValueError("Effect programmes must be off or on.")
     if layout not in ("chunks", "compact"):
         raise ValueError("Layout must be chunks or compact.")
     if instrument_allocation not in ("legacy", "trajectory", "budget"):
@@ -145,8 +147,17 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
     struct.pack_into('<H',data,0xFA0+12*2,freq_addr)
     default_tuning = [data[freq_addr+i] | data[freq_addr+96+i]<<8 for i in range(96)]
     tuning = frequencies or default_tuning
+    tuning_offset = 0.0
     if frequencies:
         put(12, [v & 255 for v in tuning]+[v>>8 for v in tuning])
+    elif effect_programs == 'on':
+        # A uniformly detuned source cannot fit any effect; shift the table to it.
+        from .ir import estimate_tuning
+        step = max(1, multiplier // output_multiplier)
+        tuning, tuning_offset = estimate_tuning(frames[::step], default_tuning)
+        tuning = [min(65535, v) for v in tuning]
+        if tuning_offset:
+            put(12, [v & 255 for v in tuning]+[v>>8 for v in tuning])
     @lru_cache(maxsize=65536)
     def note(freq):
         return min(range(96), key=lambda n: abs(tuning[n]-freq)) if freq else 36
@@ -164,6 +175,13 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
     count = (len(frames)+quantum-1)//quantum
     rows = [[[0xF0,0xF0,0x60,0] for _ in range(count)] for _ in range(3)]
     metrics = Counter()
+    eff = None
+    if effect_programs == 'on':
+        from .effectmap import EffectPlanner
+        eff = EffectPlanner(frames, multiplier, output_multiplier, tuning, row_frames,
+                            full_pitch=pitch_programs == 'full',
+                            reserved_commands=1 if participating else 0)
+    global_filter = None
     helper_report = {}
     if change_points:
         from .segmentation import detect_boundaries
@@ -188,17 +206,19 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
     pulse_map, filter_map, wave_map = {}, {}, {}
     definitions = []
     events = []
-    def make_wave(samples, base, coupled=False):
+    def make_wave(samples, base, coupled=False, flat=False):
         # Keep the attack/control trajectory and explicit release timing, but
         # compress runs using CC delay rows. Pitch changes use relative offsets
         # when possible so the instrument remains transposable.
         program = []
-        for f,b in samples:
+        for index,(f,b) in enumerate(samples):
             freq = f[b]|f[b+1]<<8
             n, c = note(freq), f[b+4]
             if freq > max(tuning):
                 metrics['tuning_clamped_source_samples'] += 1
-            trans = n-base if 0 <= n-base < 96 else 0x80+n
+            # A fitted effect owns the pitch after the first row; that row keeps the
+            # source's attack pitch (a noise hit starts high), as the plain program does.
+            trans = 0 if flat and index else n-base if 0 <= n-base < 96 else 0x80+n
             if coupled and not freq:
                 trans = 0x80
             if c < 16: c |= 0xE0
@@ -313,7 +333,7 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
             i=end+1
         result[-1][3]=127
         return tuple(tuple(r) for r in result)
-    for v in range(3):
+    def attack_starts(v):
         b=v*7
         # TEST+GATE ($09) is a real envelope attack even without a waveform.
         starts=[i for i,f in enumerate(frames) if f[b+4]&1 and
@@ -321,6 +341,25 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
         if participating & (1<<v) and (not starts or starts[0] != 0):
             # Seed even a waveform/gate-off modulator before the first attack.
             starts.insert(0, 0)
+        return starts
+    plans = {}
+    wanted_adsr = {}
+    if eff is not None:
+        requests = []
+        for v in range(3):
+            starts = attack_starts(v)
+            for j,start in enumerate(starts):
+                stop = starts[j+1] if j+1 < len(starts) else len(frames)
+                if not any(mask & (1<<v) for mask in required[start:stop]):
+                    requests.append((v,start,stop))
+        plans = eff.plan(requests)
+        if filter_mode == 'global':
+            global_filter = eff.filter_plan()
+            if global_filter is not None and not global_filter.ok:
+                global_filter = None
+    for v in range(3):
+        b=v*7
+        starts=attack_starts(v)
         for j,start in enumerate(starts):
             stop=starts[j+1] if j+1<len(starts) else len(frames)
             segment=frames[start:stop:multiplier//output_multiplier]
@@ -334,6 +373,9 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
                        Counter(pitches).most_common(1)[0][0])) if pitches else 36
             # Sequence bytes reserve notes 0..2 and 95 for controls. Wave
             # rows can still select every table entry, including note 95.
+            plan = plans.get((v,start)) if not coupled else None
+            if plan is not None:
+                base = plan.base
             base = max(3, min(94, base))
             ad,sr=segment[0][b+5:b+7]
             # A waveform programme owns short gates, avoiding a row-level
@@ -341,19 +383,44 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
             cutoff=next((i for i,f in enumerate(segment) if i>0 and not f[b+4]&1),len(segment))
             length=(len(segment) if pitch_programs == "full" or coupled else
                     min(len(segment), max(8*output_multiplier,cutoff+1),64*output_multiplier))
-            wp=make_wave([(f,b) for f in segment[:length]],base,coupled)
+            if plan is not None and plan.arpeggio():
+                from .effectmap import arpeggio_program
+                wp=arpeggio_program(plan)
+            else:
+                wp=make_wave([(f,b) for f in segment[:length]],base,coupled,flat=plan is not None)
             pp=(compact_pulse_program if modulation_programs == "compact" else pulse_program)([(f[b+2]|f[b+3]<<8)&4095 for f in segment[:min(64*output_multiplier,len(segment))]]) if any(f[b+4]&0x40 for f in segment) else ()
-            fp=filter_program(segment[:min(64*output_multiplier,len(segment))]) if segment[0][23]&(1<<v) else ()
+            fp=filter_program(segment[:min(64*output_multiplier,len(segment))]) if segment[0][23]&(1<<v) and (eff is None or filter_mode != 'global') else ()
             # Programme signatures cluster musical sounds independently of pitch.
             # Legacy widths are quantized; compact programs retain low bits.
             signature=(ad,sr,wp,pp,fp)
             events.append((v,start,base,signature,coupled))
+            wanted_adsr[(v,start)] = (ad,sr)
             if coupled:
                 metrics['coupled_oscillator_events'] += 1
                 if not any(f[b+4]&0xF0 for f in segment):
                     metrics['waveform_off_modulator_events'] += 1
     if not events:
         raise ValueError('No playable attacks found for native reconstruction.')
+    adsr_supers = {}
+    if eff is not None and len({e[3] for e in events}) > 47:
+        # Capacity pressure: sounds that differ only in AD/SR share the shape's
+        # most used envelope; the difference becomes a nibble super or command 4.
+        shapes = {}
+        for e in events:
+            if not e[4]:
+                shapes.setdefault(e[3][2:], Counter())[e[3][:2]] += 1
+        common = {shape: counts.most_common(1)[0][0] for shape,counts in shapes.items()}
+        for index,(v,start,base,signature,coupled) in enumerate(events):
+            representative = common.get(signature[2:])
+            if coupled or representative is None or signature[:2] == representative:
+                continue
+            plan = plans.get((v,start))
+            if plan is not None and (plan.command or plan.chord):
+                continue
+            sup = eff.adsr_super(signature[:2], representative)
+            if sup:
+                adsr_supers[(v,start)] = sup
+                events[index] = (v,start,base,representative+signature[2:],coupled)
     # Allocate frequently-used sounds first. Rare variants reuse an existing
     # sound when an instrument/programme table reaches editable capacity.
     usage=Counter(e[3] for e in events)
@@ -431,7 +498,8 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
                     filters.append(rr)
             else: metrics['filter_programs_omitted']+=1
         idx=len(definitions)+1
-        definitions.append([ad,sr,0,0,fi,pi,0,wi])
+        # An arpeggio program's end row carries the chord step as the wave time.
+        definitions.append([ad,sr,wp[-1][1] if wp[-1][0] == 0x7E else 0,0,fi,pi,0,wi])
         instruments[signature]=idx
     if not definitions:
         raise ValueError('Sound programmes exceed native capacity.')
@@ -441,8 +509,10 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
         for signature, index in instruments.items()
     }
     fallbacks = {}
+    placed = {}
     for v,start,base,signature,coupled in events:
         ins=instruments.get(signature)
+        exact = ins is not None
         if ins is None:
             context = (signature,coupled,base)
             ins = fallbacks.get(context)
@@ -487,6 +557,63 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
         if rows[v][row][2]!=0x60: metrics['row_collisions']+=1
         if start!=row*quantum: metrics['quantized_events']+=1
         rows[v][row]=[0xC0+ins,0xF0,0x60+base,1 if coupled else 0]
+        placed[(v,row)] = (start,exact,coupled)
+    if eff is not None:
+        occupied = {v: {r for r,row in enumerate(rows[v]) if row[3] or row[2] == 0x61} for v in range(3)}
+        blank = [0xF0,0xF0,0x60,0]
+        effect_stats = Counter()
+        for (v,row),(start,exact,coupled) in sorted(placed.items()):
+            plan = plans.get((v,start))
+            if coupled or rows[v][row][3]:
+                continue
+            sup = adsr_supers.get((v,start), 0)
+            if plan is not None and plan.arpeggio():
+                if not exact:
+                    effect_stats['arpeggio_on_approximated_instrument'] += 1
+                    continue
+                keyoff = row + plan.keyoff_rows if plan.keyoff_rows else None
+                if keyoff is not None and (keyoff >= count or rows[v][keyoff] != blank):
+                    effect_stats['arpeggio_keyoff_unavailable'] += 1
+                    continue
+                sup = eff.chord_super(plan)
+                if keyoff is not None:
+                    rows[v][keyoff] = [0xF0,0xF0,0x61,0]
+                    occupied[v].add(keyoff)
+                effect_stats['arpeggio_rows'] += 1
+            elif plan is not None and plan.command:
+                target = row + plan.delay_rows
+                if target >= count or any(rows[v][k][2] != 0x60 for k in range(row+1, target+1)):
+                    effect_stats['effect_delay_rows_unavailable'] += 1
+                    continue
+                if plan.delay_rows:
+                    if rows[v][target][3]:
+                        effect_stats['effect_delay_rows_unavailable'] += 1
+                        continue
+                    rows[v][target][3] = eff.command_super(plan)
+                    occupied[v].add(target)
+                    effect_stats['delayed_command_rows'] += 1
+                    continue
+                sup = eff.command_super(plan)
+                effect_stats['command_rows'] += 1
+            if sup:
+                rows[v][row][3] = sup
+                occupied[v].add(row)
+                if (v,start) in adsr_supers:
+                    effect_stats['adsr_supers'] += 1
+        if global_filter is not None:
+            for hosted in eff.host(global_filter.starts, occupied, frame_of=lambda e: e.frame):
+                if hosted.voice is None or hosted.row >= count:
+                    effect_stats['filter_starts_unhosted'] += 1
+                    continue
+                rows[hosted.voice][hosted.row][3] = 0x60 + hosted.event.row
+                effect_stats['filter_starts'] += 1
+            filters = [list(r) for r in global_filter.table]
+        for hosted in eff.host(eff.volume_events(), occupied, frame_of=lambda e: e.frame):
+            if hosted.voice is None or hosted.row >= count:
+                effect_stats['volume_events_unhosted'] += 1
+                continue
+            rows[hosted.voice][hosted.row][3] = hosted.event.super_byte
+            effect_stats['volume_events'] += 1
     put(14,wave+[0]*(256-len(wave)))
     put(15,control+[0]*(256-len(control)))
     put(17,[x for r in pulses for x in r]+[0]*(256-4*len(pulses)))
@@ -500,8 +627,13 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
         # CMD_SET_OFFSET(0) removes CC's legacy per-voice frequency seed.
         # This prevents a one/two-unit error in coupled oscillator ratios.
         commands[1] = 3
+    chord_table = [0]*128
+    if eff is not None:
+        for (op,hi,lo),index in eff.commands.items():
+            commands[index], commands[64+index], commands[128+index] = op, hi, lo
+        chord_table[:len(eff.chord_table)] = eff.chord_table
     put(24,commands)
-    put(30,[0]*128)
+    put(30,chord_table)
     # Clear sequence slots and install deduplicated 64-row chunks.
     seqlo,seqhi=offset(22),offset(23)
     sequence_map={}
@@ -642,6 +774,13 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
                 output_multiplier=output_multiplier,pitch_programs=pitch_programs,modulation_programs=modulation_programs,coupled_programs=coupled_programs,coupled_voices=[v+1 for v in range(3) if participating&(1<<v)],row_frames=row_frames,captured_seconds=len(frames)/(50*multiplier),
                 instruments=len(definitions),observed_instrument_variants=len(usage),patterns=len(sequence_map),wave_rows=len(wave),
                 pulse_rows=len(pulses),filter_rows=len(filters),events=len(events),**metrics)
+    if eff is not None:
+        report['effect_programs'] = effect_programs
+        report['effects'] = dict(eff.metrics, **effect_stats, command_table_rows=len(eff.commands),
+                                 tuning_offset_cents=round(tuning_offset, 2),
+                                 chord_entries=len(eff.chords),
+                                 filter='global' if global_filter is not None else 'instrument',
+                                 filter_plan_rows=len(global_filter.table)-1 if global_filter is not None else 0)
     if helper_report:
         report['helpers'] = helper_report
         report['instrument_allocation'] = instrument_allocation
@@ -659,3 +798,51 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
         report['warnings'].append('Coupled source/control trajectories are retained, including waveform-off oscillators; pitch still rounds to tuning notes and row/table limits can alter oscillator phase and ratios.')
     if frequencies: report['source_tuning']='Recovered 96-note source frequency table'
     return b'CC2'+zlib.compress(data),report
+
+
+def native_song(template, frames, multiplier, row_frames, metadata, frequencies=None, output_multiplier=1, loop_start=None, pitch_programs="attack", modulation_programs="legacy", coupled_programs="legacy", instrument_allocation="legacy", change_points=False, pattern_mining=False, joint_modeling=False, layout="chunks", effect_programs="off"):
+    """Build a native CC2 song; returns (bytes, report).
+
+    effect_programs "off" is the original mapper. "on" fits slide, vibrato,
+    detune and arpeggio effects into command/chord rows, merges AD/SR variants
+    into row supers and hosts one global filter program, but keeps the global
+    filter only when it plays the source's filter registers closer than the
+    per-instrument filter programs (register distance on cutoff, resolution,
+    mode and routing through the exact CT player model).
+    """
+    options = dict(frequencies=frequencies, output_multiplier=output_multiplier, loop_start=loop_start,
+                   pitch_programs=pitch_programs, modulation_programs=modulation_programs,
+                   coupled_programs=coupled_programs, instrument_allocation=instrument_allocation,
+                   change_points=change_points, pattern_mining=pattern_mining, joint_modeling=joint_modeling,
+                   layout=layout, effect_programs=effect_programs)
+    if effect_programs != "on":
+        return _native_song(template, frames, multiplier, row_frames, metadata, **options)
+    try:
+        import numpy  # noqa: F401
+    except ImportError as error:
+        raise ValueError('Effect programmes need numpy: python3 -m pip install -r tools/requirements-sid-search.txt') from error
+    try:
+        instrument_song, instrument_report = _native_song(template, frames, multiplier, row_frames, metadata,
+                                                          filter_mode="instrument", **options)
+    except (ArithmeticError, LookupError, TypeError) as error:
+        # Searches and auto selection treat a ValueError as a failed candidate only.
+        raise ValueError(f'Effect mapping failed: {type(error).__name__}: {error}') from error
+    try:
+        global_song, global_report = _native_song(template, frames, multiplier, row_frames, metadata,
+                                                  filter_mode="global", **options)
+    except (ValueError, ArithmeticError, LookupError, TypeError):
+        global_song, global_report = None, None
+    if global_report is None or global_report['effects']['filter'] != 'global':
+        return instrument_song, instrument_report
+    from .regdist import filter_distance
+    step = max(1, multiplier // output_multiplier)
+    source = [bytes(f) for f in frames[::step]]
+    def distance(song):
+        from .ctplayer import CTPlayer
+        played = CTPlayer(zlib.decompress(song[3:])).frames(len(source))
+        return filter_distance(source, played, output_multiplier)
+    before, after = distance(instrument_song), distance(global_song)
+    chosen, report = (global_song, global_report) if after < before else (instrument_song, instrument_report)
+    report['effects']['filter_distance'] = dict(instrument=round(before, 6), global_plan=round(after, 6),
+                                                chosen='global' if chosen is global_song else 'instrument')
+    return chosen, report

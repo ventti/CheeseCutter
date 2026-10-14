@@ -140,6 +140,22 @@ Useful options:
   candidates still use bounded programs, so complex or long pulse evolution can
   remain incomplete. Auto retains the better whole-capture mix score; individual
   voices/windows can still regress and must be checked in the diagnostics.
+- `--effect-programs auto`: compare the original mapper (`off`) with effect mapping
+  (`on`, needs numpy; also available in `search` and `optimize`). `on` fits each
+  attack's pitch with `effects.fit_pitch` and writes slides, hi-fi/lo-fi vibrato
+  and detune as command-table rows (deduplicated, at most 63; when full, rows are
+  merged by refitting similar parameters, otherwise the effect stays in the wave
+  program). Arpeggios become chord entries started with `$80+n`; the chord step is
+  the instrument wave time, and the gate-off becomes a key-off row. Vibrato delays
+  use a later blank row. Portamento is not mapped (it stays sticky after a note).
+  Under instrument pressure, sounds that differ only in AD/SR share the most used
+  envelope plus an inline nibble or command 4. The global filter replaces the
+  per-instrument filter programs when `fit_filter` hosted on free rows plays the
+  cutoff/resolution/mode/routing registers closer (measured with `ctplayer`,
+  reported in `effects.filter_distance`). Master-volume changes become `$e0+v`
+  supers. A uniformly detuned source also shifts the tuning table
+  (`ir.estimate_tuning`). `regdist.py` measures source against CT registers
+  (`image_distance`) without rendering audio. Without audio or numpy, auto uses `off`.
 - `--sound-rate auto`: compare native programs at 50 Hz and the input play-call
   rate (default). `base` forces 50 Hz; `source` preserves source-rate sound ticks.
   Sequence rows always advance at 50 Hz. With audio skipped, `auto` uses source rate.
@@ -652,7 +668,7 @@ and `tools/sid_render`. Optional packages: `uv venv .venv && uv pip install -p .
   (`--llm` asks the local model to confirm). Seed 1, 70/30 dev/heldout split per composer.
 - `python3 -m sid2ct bench --split dev|heldout|all --label NAME` converts each song in parallel
   (`--workers`, default half the cores; `--seconds 60` or `--full`; `--only GLOB`) into
-  `~/.cache/sid2ct/bench/<label>/<song>/` (log in `convert.log`) and records mix/voice scores,
+  `~/.cache/sid2ct/bench/<label>/<song>/` (log in `convert.log`) and records mix/voice scores (and `score_v1`/`score_v2`, backfilled from the kept WAVs for older runs),
   wall time and git SHA in `~/.cache/sid2ct/bench.sqlite3`. It prints a table and the delta against the
   last run labelled `baseline` (`--compare LABEL`). Each song has a 15 minute limit.
 - `tools/semantic_if.py` has `semantic_if(question, text)` (`yes`/`no`/`unknown`) and `semantic_choice`.
