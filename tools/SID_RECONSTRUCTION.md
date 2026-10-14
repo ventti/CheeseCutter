@@ -87,7 +87,7 @@ python3 -m sid2ct search song.sid -o experiments
 Each stage is timed in `effort.stage_seconds` in the report.
 
 1. **capture**: trace and loop detection. Reused from memory when the same song was seen before.
-2. **candidates**: the static bridge, plus the base settings crossed with effects and allocation. Built and scored in parallel. The first dynamic candidate always finishes, so an output exists. An effects-on candidate builds two filter variants (per instrument or global). Both are rendered and the better v2 wins (`effects.filter_selection` says `audio`).
+2. **candidates**: the static bridge, plus the base settings crossed with effects and allocation. Also one compact-programme candidate at the base sound rate with greedy allocation (the search does not always reach it). Built and scored in parallel. The first dynamic candidate always finishes, so an output exists. An effects-on candidate builds two filter variants (per instrument or global). Both are rendered and the better v2 wins (`effects.filter_selection` says `audio`).
 3. **search**: an Optuna study (TPE, seeded with `--seed`) over row grid, sound rate, tuning, pitch, modulation, coupled programs, effect tolerance and solver weights. Trials run in batches of 8. Each trial is first scored by `regdist` through the CT player, with no audio. A surrogate model may skip the audio render of a trial. Without a trusted model, a trial whose distance is 50% above the best candidate is pruned.
 4. **selection**: the best v2 among candidates whose v1 is within `--v1-tolerance` (0.01) of the best v1 any candidate reached. Ties go to the earlier candidate.
 5. **polish**: local single-entry edits to the chosen CT (see below).

@@ -364,6 +364,13 @@ def initial_options(axes, layout='compact', static=True, all_grids=False):
     base = base_options(axes, layout)
     dynamic = [dict(base, effect=effect, allocation=allocation)
                for effect in axes['effect'] for allocation in axes['allocation']]
+    if 'compact' in axes['pitch']:
+        # The compact programmes at the base rate with greedy allocation: often the best before the
+        # solver and effects existed, and the search does not always reach it (it fits the most sounds).
+        compact = dict(base, rate=axes['rate'][-1], pitch='compact', effect=axes['effect'][0],
+                       allocation=axes['allocation'][0])
+        if compact not in dynamic:
+            dynamic.append(compact)
     if all_grids:
         dynamic += [dict(base, grid=grid) for grid in axes['grid'][1:]]
     result = ([dict(base, profile='static', effect='off', allocation='legacy', pitch='attack',

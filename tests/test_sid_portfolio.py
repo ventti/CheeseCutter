@@ -230,6 +230,13 @@ class Defaults(unittest.TestCase):
                          {(e, a) for e in ('off', 'on') for a in ('legacy', 'solve')})
         self.assertEqual(len(portfolio.initial_options(axes, all_grids=True)), 6)
 
+    def test_first_stage_includes_the_compact_greedy_candidate(self):
+        axes = dict(grid=[6], rate=[4, 1], tuning=['default'], pitch=['full', 'compact', 'attack'],
+                    modulation=['compact', 'legacy'], couple=['preserve'], effect=['off', 'on'],
+                    allocation=['legacy', 'solve'])
+        last = portfolio.initial_options(axes)[-1]
+        self.assertEqual((last['rate'], last['pitch'], last['effect'], last['allocation']), (1, 'compact', 'off', 'legacy'))
+
     def test_help_mentions_the_effort_flags(self):
         text = subprocess.run([sys.executable, '-m', 'sid2ct', 'convert', '--help'], cwd=ROOT, capture_output=True,
                               text=True).stdout
