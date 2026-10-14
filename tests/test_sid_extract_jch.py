@@ -1,4 +1,4 @@
-"""Packed NP20 extraction, including real HVSC timelines when available."""
+"""Packed NewPlayer extraction with synthetic and independent HVSC timelines."""
 import os
 import struct
 import subprocess
@@ -14,6 +14,19 @@ from sid2ct.players.sidid import identify
 
 ROOT = Path(__file__).resolve().parents[1]
 HVSC = Path(os.environ.get('HVSC_ROOT', ROOT.parent / 'shallowsid/_hvsc-source'))
+
+
+def audible_gate_recall(hints, frames):
+    matched = total = 0
+    for voice, vh in enumerate(hints.voices):
+        control = voice * 7 + 4
+        notes = {n.call for n in vh.notes if n.kind == 'note'}
+        for call in range(1, len(frames)):
+            if (frames[call][control] & 1 and not frames[call - 1][control] & 1
+                    and any(f[control] & 0xf0 for f in frames[call:call + 4])):
+                total += 1
+                matched += bool(notes & {call - 1, call, call + 1})
+    return matched / total if total else 1.0
 
 
 def fixture(base=0x2000, frames_count=60):
@@ -61,6 +74,7 @@ def fixture(base=0x2000, frames_count=60):
     put(0x610, bytes([0xa3, 0x81, 0x30, 0xa4, 0x90, 0x32, 0x34, 0, 0x7f]))
     put(0x630, bytes([0xa5, 0x82, 0x35, 0x36, 0x7f]))
     put(0x700, bytes(range(256)))
+    put(0x430, bytes([3]))
     events = [(0, 0x610, 0x613, True), (8, 0x613, 0x616, False),
               (12, 0x616, 0x617, True), (16, 0x617, 0x618, False),
               (20, 0x630, 0x633, True), (32, 0x633, 0x634, True),
@@ -95,8 +109,8 @@ class PackedNP20(unittest.TestCase):
             self.assertEqual(voice.pattern_calls, [2, 22, 46])
             self.assertEqual(voice.orderlist, [(0, 2), (1, 2)])
             self.assertEqual(voice.loop_index, 0)
-            self.assertEqual([n.note for n in voice.notes], [48, 50, 52, 53, 54, 48, 50, 52])
-            self.assertEqual([n.tie for n in voice.notes], [False, True, False, False, False, False, True, False])
+            self.assertEqual([n.note for n in voice.notes if n.kind == 'note'], [48, 50, 52, 53, 54, 48, 50, 52])
+            self.assertEqual([n.tie for n in voice.notes if n.kind == 'note'], [False, True, False, False, False, False, True, False])
             self.assertIsNone(voice.notes[2].instrument)
         self.assertEqual(hints.instruments[3]['raw'], bytes(range(24, 32)))
         self.assertEqual(gate_rise_agreement(hints, frames, tolerance=0), 1)
@@ -122,19 +136,17 @@ class PackedNP20(unittest.TestCase):
         calls[12].reads = []
         self.assertIsNone(extract(raw, 1, frames, calls))
         raw, frames, calls = fixture()
-        for offset, value in ((0x306, 1), (0x307, 3), (0x160, 0)):
+        for offset, value in ((0x160, 0),):
             edited = bytearray(raw)
             edited[124 + offset] = value
             self.assertIsNone(extract(bytes(edited), 1, frames, calls))
 
-    def test_invalid_pointer_and_speed_command(self):
+    def test_invalid_pointer_and_unterminated_sequence(self):
         raw, frames, calls = fixture()
-        for offset, values in ((0x602, b'\xff\xff'), (0x610, b'\xc1'),
+        for offset, values in ((0x602, b'\xff\xff'),
                                (0x618, b'\x80' * 256)):
             edited = bytearray(raw)
             edited[124 + offset:124 + offset + len(values)] = values
-            if offset == 0x610:
-                edited[124 + 0x802:124 + 0x804] = b'\xe0\x05'
             self.assertIsNone(extract(bytes(edited), 1, frames, calls))
 
     def test_commands_and_duration_across_pattern_boundaries(self):
@@ -155,9 +167,89 @@ class PackedNP20(unittest.TestCase):
         self.assertEqual(hints.voices[0].row_calls[-1], 22)
         # At call 24 the bare note must be read, proving duration did carry.
         calls[24].reads = [(0x2633, 0x2634)]
+        frames[26] = bytes([0, 0, 0, 0, 1, 0, 0] * 3 + [0] * 4)
         hints = extract(bytes(edited), 1, frames[:28], calls[:28])
         self.assertIsNotNone(hints)
         self.assertEqual(hints.voices[0].row_calls[-1], 26)
+
+    def test_new_fields_and_non_note_rows(self):
+        raw, frames, calls = fixture()
+        hints = extract(raw, 1, frames, calls)
+        voice = hints.voices[0]
+        self.assertEqual(voice.row_durations, [8, 4, 4, 4, 12, 12, 8, 4, 4])
+        self.assertEqual((voice.sequences[0].address, voice.sequences[0].length), (0x2610, 9))
+        self.assertEqual((voice.sequences[1].address, voice.sequences[1].length), (0x2630, 5))
+        self.assertEqual(voice.notes[3].kind, 'gate_off')
+        edited = bytearray(raw)
+        edited[124 + 0x617] = 0x7e
+        hints = extract(bytes(edited), 1, frames, calls)
+        self.assertEqual(hints.voices[0].notes[3].kind, 'rest')
+        self.assertTrue(hints.voices[0].notes[3].tie)
+        edited = bytearray(raw)
+        edited[124 + 0x610] = 0xc1
+        edited[124 + 0x612] = 0
+        edited[124 + 0x802:124 + 0x804] = b'\xf0\x0e'
+        frames = [bytes(25) if i in (2, 46) else f for i, f in enumerate(frames)]
+        hints = extract(bytes(edited), 1, frames, calls)
+        self.assertIsNotNone(hints)
+        self.assertEqual(hints.voices[0].notes[0].kind, 'effect')
+        self.assertEqual(hints.voices[0].notes[0].command, ((0xc1, 0xf0, 14),))
+        self.assertEqual(hints.tables['commands']['address'], 0x2800)
+        self.assertEqual(hints.tables['instruments']['address'], 0x2700)
+
+    def test_init_overrides_saved_counter(self):
+        raw, frames, calls = fixture()
+        edited = bytearray(raw)
+        edited[124 + 0x3f:124 + 0x48] = bytes.fromhex('b9 00 23 8d 30 24 8d 31 24')
+        edited[124 + 0x430] = 12
+        hints = extract(bytes(edited), 1, frames, calls)
+        self.assertIsNotNone(hints)
+        self.assertEqual(hints.voices[0].row_calls[:3], [2, 10, 14])
+
+    def test_disabled_voice(self):
+        raw, frames, calls = fixture()
+        edited = bytearray(raw)
+        edited[124 + 0x307] = 3
+        frames = [f[:14] + bytes(7) + f[21:] for f in frames]
+        hints = extract(bytes(edited), 1, frames, calls)
+        self.assertIsNotNone(hints)
+        self.assertEqual(hints.voices[2].notes, [])
+        self.assertEqual(hints.voices[2].row_calls, [])
+        self.assertEqual(hints.voices[2].orderlist, [])
+        self.assertEqual(hints.voices[2].sequences, {})
+
+    def test_funk_and_speed_change(self):
+        for funk, times in [(True, [2, 12, 18, 22, 28, 42, 58]),
+                            (False, [2, 14, 20, 26, 32, 50])]:
+            raw, _, _ = fixture()
+            edited = bytearray(raw)
+            if funk:
+                edited[124 + 0x306] = 1
+                edited[124 + 0x900:124 + 0x902] = bytes([3, 5])
+            else:
+                edited[124 + 0x610] = 0xc1
+                edited[124 + 0x802:124 + 0x804] = bytes([0xe0, 5])
+            calls = [Call(i, [], [], []) for i in range(60)]
+            frames = [bytearray(25) for _ in calls]
+            ranges = [(0x610, 0x613, True), (0x613, 0x616, False),
+                      (0x616, 0x617, True), (0x617, 0x618, False),
+                      (0x630, 0x633, True), (0x633, 0x634, True),
+                      (0x610, 0x613, True)]
+            for sounded, (lo, hi, attack) in zip(times, ranges):
+                calls[sounded - 2].reads = [(0x2000 + lo, 0x2000 + hi)]
+                if attack:
+                    for voice in range(3):
+                        frames[sounded][voice * 7 + 4] = 0x11
+            hints = extract(bytes(edited), 1, frames, calls)
+            self.assertIsNotNone(hints)
+            self.assertEqual(hints.voices[0].row_calls, times)
+            self.assertTrue(hints.speed_commands)
+            if funk:
+                self.assertEqual(hints.tempo_calls, [4, 6])
+                self.assertEqual(hints.voices[0].row_durations[:6], [10, 6, 4, 6, 14, 16])
+            else:
+                self.assertEqual(hints.speed_commands, [(2, 6)])
+                self.assertEqual(hints.voices[0].row_durations[:5], [12, 6, 6, 6, 18])
 
     def test_short_trace_and_no_frames_outside_window(self):
         raw, frames, calls = fixture(frames_count=1)
@@ -167,7 +259,7 @@ class PackedNP20(unittest.TestCase):
         self.assertEqual(hints.voices[0].pattern_calls, [])
 
 
-class HVSCNP20(unittest.TestCase):
+class HVSCNewPlayer(unittest.TestCase):
     SONGS = (
         'MUSICIANS/D/DRAX/Regrets.sid',
         'MUSICIANS/D/DRAX/Worktunes/JRRR.sid',
@@ -175,6 +267,9 @@ class HVSCNP20(unittest.TestCase):
         'MUSICIANS/M/Mitch_and_Dane/Dane/Tasty.sid',
         'MUSICIANS/D/DRAX/Advanced.sid',
         'MUSICIANS/D/DRAX/Black_Jack.sid',
+        'MUSICIANS/D/DRAX/Axel_Mix.sid',
+        'MUSICIANS/D/DRAX/Baboon.sid',
+        'MUSICIANS/D/DRAX/8-bit_Mayhem_Podcast_Ep_4.sid',
     )
 
     def test_gate_agreement_and_memory_row_timing(self):
@@ -197,9 +292,23 @@ class HVSCNP20(unittest.TestCase):
                     frames = parse_trace((d / 'sid.trace').read_text())
                     calls = load(d / 'reads.txt')
                     hints = extract(sid.read_bytes(), 1, frames, calls)
+                    if relative.endswith('Nick_De_Caro_and_Orchestra.sid'):
+                        # Wave-table gate pulses do not correspond to source
+                        # note rows. Reject this incomplete timeline.
+                        self.assertIsNone(hints)
+                        continue
                     self.assertIsNotNone(hints)
                     self.assertGreater(sum(len(v.notes) for v in hints.voices), 50)
                     self.assertGreaterEqual(gate_rise_agreement(hints, frames), 0.98)
+                    self.assertGreaterEqual(audible_gate_recall(hints, frames), 0.95)
+                    self.assertEqual(len(hints.voices), 3)
+                    for vh in hints.voices:
+                        self.assertEqual(len(vh.row_calls), len(vh.row_durations))
+                        self.assertTrue(all(d > 0 for d in vh.row_durations))
+                        self.assertTrue(vh.sequences)
+                    if hints.version != '20':
+                        tested += 1
+                        continue
                     period, = hints.tempo_calls
                     # Only read streams overlapping independently decoded rows
                     # count here: table programs also produce slow read streams.
