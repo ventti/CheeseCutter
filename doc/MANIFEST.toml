@@ -261,3 +261,8 @@ category = "agent"
 path = "LICENSE.md"
 category = "vendor"
 note = "GNU GPL text."
+
+[[doc]]
+path = "sid2ct/players/signatures/README.md"
+category = "vendor"
+note = "Provenance and license of the bundled SIDId signatures; changes only when sidid.cfg is refreshed."

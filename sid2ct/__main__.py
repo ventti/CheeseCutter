@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 
-from . import bench, compare, convert, corpus, search
+from . import bench, compare, convert, corpus, search, players
 from .audio import compare_wavs
 
 
@@ -20,6 +20,7 @@ def main(argv=None):
         module.add_arguments(command)
         command.set_defaults(handler=module.run_command)
     for name, module, help_text in (
+        ('players', players, 'Identify music players in the SID corpus and composer folders.'),
         ('corpus', corpus, 'Build the fixed benchmark corpus from an HVSC checkout.'),
         ('bench', bench, 'Convert the corpus songs and record scores to compare runs.'),
     ):
