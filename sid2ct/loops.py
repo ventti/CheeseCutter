@@ -8,7 +8,7 @@ import subprocess
 CC_BASE_RATE = 985248 / (312 * 63)
 
 
-def capture(tool, sid, subtune, directory, seconds=None, multiplier=None, max_seconds=600, extras=None):
+def capture(tool, sid, subtune, directory, seconds=None, multiplier=None, max_seconds=600, extras=None, reads_timeout=600):
     """Require full emulated memory recurrence; musical motifs are insufficient.
 
     extras (a dict) asks for the memory-read trace too (slower): it receives
@@ -21,7 +21,7 @@ def capture(tool, sid, subtune, directory, seconds=None, multiplier=None, max_se
         result = subprocess.run([str(tool), 'sidtrace', str(sid), '-s', str(subtune),
             '-f', str(calls), '--loop-info', str(info), '-o', str(trace)]
             + (['--mem-reads', str(reads)] if with_reads else []),
-            capture_output=True, text=True, timeout=600 if with_reads else 180)
+            capture_output=True, text=True, timeout=reads_timeout if with_reads else 180)
         if result.returncode:
             raise ValueError('Tracing failed: '+result.stdout+result.stderr)
         return json.loads(info.read_text())

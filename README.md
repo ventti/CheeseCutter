@@ -128,6 +128,10 @@ or `--seconds` for a fixed capture. The generated song repeats the saved
 capture when no source loop was found. An external `--trace` defaults to its
 available duration, capped by the search limit.
 
+`convert` builds and scores many candidates in parallel and keeps the best by audio.
+It stops after a time budget: about 10 minutes for a full loop (`--high-effort`:
+about 60). See `tools/SID_RECONSTRUCTION.md` for effort, memory and defaults.
+
 A finite search cannot prove that a song never loops. Detection covers the
 CPU tracer's player memory and timer values; it does not compare the SID's
 internal oscillator, envelope, or filter state, or prove identical audio

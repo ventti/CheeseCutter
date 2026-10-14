@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 import time
 
+from . import budget
 from .allocation import _state, _wave, waveform_off
 
 SCALE = 100000            # cost units are rounded to this fraction for the integer model
@@ -34,6 +35,15 @@ UNMATCHED_FACTOR = 1.1  # a variant left to the nearest chosen sound costs this 
 EXACT_BIAS = 0.05       # per tick: tie-break toward an instrument that is exactly the variant's sound
 SILENT = (0, 0, ((0, 0xE0), (0x7E, 0)), (), ())   # an instrument that plays nothing
 ARP_PENALTY = 2.0       # distortion per tick for an arpeggio variant leaving its exact instrument
+REPAIR_COST = 0.0       # distortion per tick charged for repairing a variant's AD/SR with a row command
+DEFAULTS = dict(envelope_weight=ENVELOPE_WEIGHT, loudness_weight=LOUDNESS_WEIGHT, repair_cost=REPAIR_COST)
+
+
+def tuned(params=None):
+    """The solver's distortion weights: DEFAULTS overridden by a (possibly partial) dict."""
+    merged = dict(DEFAULTS)
+    merged.update({k: v for k, v in (params or {}).items() if k in DEFAULTS})
+    return merged
 
 
 @dataclass
@@ -176,7 +186,10 @@ def solve_model(problem, time_limit=20.0, *, workers=8, seed=0, gap=0.0, fix=Non
             for k, x in enumerate(xs[vi]):
                 m.AddHint(x, int(k == oi))
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = max(0.5, time_limit - (time.monotonic() - started))
+    budget.check()
+    # Stop on deterministic time so the result does not depend on machine load; wall time is only a backstop.
+    solver.parameters.max_deterministic_time = max(0.5, time_limit)
+    solver.parameters.max_time_in_seconds = max(0.5, min(4 * time_limit, budget.remaining()))
     solver.parameters.num_search_workers = workers
     if workers > 1:
         solver.parameters.interleave_search = True    # reproducible multi-worker search
@@ -376,7 +389,7 @@ def _blend(per_tick, window, ticks):
     return (d_all * window + tail * (ticks - window)) / ticks
 
 
-def _price(v, candidate, compare, render, effects, output_multiplier=1):
+def _price(v, candidate, compare, render, effects, output_multiplier=1, repair_cost=0.0):
     """Option list for one pair: [(cost, command, repaired)]."""
     window = _window(v, candidate, output_multiplier)
     try:
@@ -392,7 +405,7 @@ def _price(v, candidate, compare, render, effects, output_multiplier=1):
         fixed = _blend(compare(v, window, render(wanted + candidate[2:], v.base, window)), window, v.ticks)
     except (IndexError, ValueError, ZeroDivisionError):
         return result
-    cost = fixed * v.free + plain * v.busy
+    cost = fixed * v.free + plain * v.busy + repair_cost * v.free
     if cost < result[0][0] - 1e-9:
         result.append((cost, command, True))
     return result
@@ -483,8 +496,9 @@ class Pricer:
     """Prices (variant, candidate) pairs: renders the candidate through the CT player model and compares
     it with the variant's observed note. Picklable, so price_many can use a process pool."""
 
-    def __init__(self, variants, image_maker, output_multiplier, effects, workers=1):
+    def __init__(self, variants, image_maker, output_multiplier, effects, workers=1, params=None):
         self.variants, self.image_maker = variants, image_maker
+        self.params = tuned(params)
         self.output_multiplier, self.effects, self.workers = output_multiplier, effects, workers
         self._render = None
 
@@ -504,11 +518,13 @@ class Pricer:
         ea = envelope_estimate(a, 0, self.output_multiplier)[:n]
         eb = envelope_estimate(b, 0, self.output_multiplier)[:n]
         octaves = abs(np.log2((ea + QUIET) / (eb + QUIET)))
-        return total + ENVELOPE_WEIGHT * abs(ea - eb) + LOUDNESS_WEIGHT * octaves
+        return total + self.params['envelope_weight'] * abs(ea - eb) + self.params['loudness_weight'] * octaves
 
     def price(self, vi, candidate):
+        budget.check()
         self._setup()
-        return _price(self.variants[vi], candidate, self.compare, self._render, self.effects, self.output_multiplier)
+        return _price(self.variants[vi], candidate, self.compare, self._render, self.effects, self.output_multiplier,
+                      self.params['repair_cost'])
 
     def price_many(self, pairs):
         """Results in the order of pairs, whatever the worker count (pricing is a pure function)."""
@@ -517,7 +533,7 @@ class Pricer:
         from concurrent.futures import ProcessPoolExecutor
         chunk = max(8, -(-len(pairs) // (self.workers * 8)))
         chunks = [pairs[i:i + chunk] for i in range(0, len(pairs), chunk)]
-        with ProcessPoolExecutor(self.workers, initializer=_init_worker, initargs=(self,)) as pool:
+        with ProcessPoolExecutor(self.workers, initializer=_init_worker, initargs=(self, budget.remaining())) as pool:
             return [r for part in pool.map(_price_chunk, chunks) for r in part]
 
     def __getstate__(self):
@@ -529,9 +545,11 @@ class Pricer:
 _WORKER = None
 
 
-def _init_worker(pricer):
+def _init_worker(pricer, seconds_left=float('inf')):
     global _WORKER
     _WORKER = pricer
+    if seconds_left != float('inf'):
+        budget.install(budget.Budget(max(0.0, seconds_left)))   # lives as long as the worker
 
 
 def _price_chunk(pairs):
@@ -602,7 +620,8 @@ def make_renderer(make_image, output_multiplier):
 
 def allocate(events, stops, plans, *, frames, usage, step, effects, make_image, output_multiplier, limits,
              coupled_signatures, protected, warm_selection=None, hints=None, hint_scale=1.0,
-             time_limit=20.0, free_commands=frozenset(), command_limit=0, workers=8, hint_penalty=0.05, compare_warm=False, evaluate=None):
+             time_limit=20.0, free_commands=frozenset(), command_limit=0, workers=8, hint_penalty=0.05, compare_warm=False, evaluate=None,
+             params=None):
     """Run the solver over a native mapper's events.
 
     frames: the source's register frames; step: source frames per sound tick.
@@ -635,7 +654,7 @@ def allocate(events, stops, plans, *, frames, usage, step, effects, make_image, 
         ticks, base, voice, start = sorted(e['events'])[len(e['events']) // 2]
         variants.append(Variant(sig, base, e['max_base'], ticks, e['free'], e['busy'], e['coupled'], e['arp'],
                                 _observed(frames, voice, start, start + ticks * step, step)))
-    pricer = Pricer(variants, make_image, output_multiplier, effects, workers)
+    pricer = Pricer(variants, make_image, output_multiplier, effects, workers, params)
     groups = {}
     if hints is not None:
         position = {sig: i for i, sig in enumerate(modelled)}
@@ -664,6 +683,7 @@ def allocate(events, stops, plans, *, frames, usage, step, effects, make_image, 
             keep = {index[s] for s in selection if s in index}
             alt = solve_model(problem, 10.0, workers=workers, fix=keep)
             report['compare'][label] = round(alt.objective, 3) if alt else None
+    budget.check()
     remaining = max(1.0, time_limit - built)
     solution = solve_model(problem, remaining, workers=workers)
     if compare_warm and warm_selection:

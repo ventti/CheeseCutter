@@ -11,6 +11,7 @@ import re
 import struct
 import zlib
 
+from . import budget
 from .coupling import dependency_masks, trajectory_distance
 
 
@@ -112,7 +113,7 @@ def sound_distance(left, right):
 
 
 def _solve_allocation(frames, events, stops, plans, usage, weighted, eff, data, offset, output_multiplier, multiplier,
-                      coupled_signatures, protected, hints, hint_scale, time_limit, report):
+                      coupled_signatures, protected, hints, hint_scale, time_limit, report, params=None):
     """CP-SAT allocation (sid2ct.solve); None means: use the greedy budget allocation instead."""
     from .allocation import select_with_budgets, program_cost
     from . import solve
@@ -136,9 +137,11 @@ def _solve_allocation(frames, events, stops, plans, usage, weighted, eff, data, 
             warm_selection=warm, hints=hints, hint_scale=hint_scale, time_limit=time_limit,
             free_commands=frozenset(eff.commands) if eff is not None else frozenset(),
             command_limit=COMMAND_ROWS - eff.reserved - len(eff.commands) if eff is not None else 0,
-            workers=int(__import__('os').environ.get('SID2CT_WORKERS') or __import__('os').cpu_count() or 1),
+            workers=int(__import__('os').environ.get('SID2CT_WORKERS') or __import__('os').cpu_count() or 1), params=params,
             compare_warm=bool(__import__('os').environ.get('SID2CT_SOLVE_DEBUG')),
             evaluate={'legacy': [sig for sig, _ in usage.most_common(47)]} if __import__('os').environ.get('SID2CT_SOLVE_DEBUG') else None)
+    except budget.BudgetExpired:
+        raise
     except Exception as error:  # the greedy allocation still works; keep the reason in the report
         allocation.update(status='error', error=f'{type(error).__name__}: {error}')
         return None
@@ -153,7 +156,7 @@ def _solve_allocation(frames, events, stops, plans, usage, weighted, eff, data, 
     return selected, assignment, 0
 
 
-def _native_song(template, frames, multiplier, row_frames, metadata, frequencies=None, output_multiplier=1, loop_start=None, pitch_programs="attack", modulation_programs="legacy", coupled_programs="legacy", instrument_allocation="legacy", change_points=False, pattern_mining=False, joint_modeling=False, layout="chunks", effect_programs="off", filter_mode="instrument", solve_time_limit=20.0, structure_hints=None, hint_scale=1.0):
+def _native_song(template, frames, multiplier, row_frames, metadata, frequencies=None, output_multiplier=1, loop_start=None, pitch_programs="attack", modulation_programs="legacy", coupled_programs="legacy", instrument_allocation="legacy", change_points=False, pattern_mining=False, joint_modeling=False, layout="chunks", effect_programs="off", filter_mode="instrument", solve_time_limit=20.0, structure_hints=None, hint_scale=1.0, effect_tolerance=12.0, solve_params=None):
     if effect_programs not in ("off", "on"):
         raise ValueError("Effect programmes must be off or on.")
     if layout not in ("chunks", "compact"):
@@ -222,7 +225,7 @@ def _native_song(template, frames, multiplier, row_frames, metadata, frequencies
         from .effectmap import EffectPlanner
         eff = EffectPlanner(frames, multiplier, output_multiplier, tuning, row_frames,
                             full_pitch=pitch_programs == 'full',
-                            reserved_commands=1 if participating else 0)
+                            reserved_commands=1 if participating else 0, tolerance=effect_tolerance)
     global_filter = None
     helper_report = {}
     if change_points:
@@ -404,6 +407,7 @@ def _native_song(template, frames, multiplier, row_frames, metadata, frequencies
         b=v*7
         starts=attack_starts(v)
         for j,start in enumerate(starts):
+            budget.check()
             stop=starts[j+1] if j+1<len(starts) else len(frames)
             segment=frames[start:stop:multiplier//output_multiplier]
             coupled = any(mask & (1<<v) for mask in required[start:stop])
@@ -494,7 +498,7 @@ def _native_song(template, frames, multiplier, row_frames, metadata, frequencies
         if instrument_allocation == 'solve':
             solved = _solve_allocation(frames, events, stops, plans, usage, weighted, eff, data, offset, output_multiplier,
                                        multiplier, coupled_signatures, protected, structure_hints, hint_scale,
-                                       solve_time_limit, helper_report)
+                                       solve_time_limit, helper_report, solve_params)
         if solved is not None:
             selected, forced, repaired = solved
             for index,(v,start,base,signature,coupled) in enumerate(events):
@@ -871,7 +875,7 @@ def _native_song(template, frames, multiplier, row_frames, metadata, frequencies
     return b'CC2'+zlib.compress(data),report
 
 
-def native_song(template, frames, multiplier, row_frames, metadata, frequencies=None, output_multiplier=1, loop_start=None, pitch_programs="attack", modulation_programs="legacy", coupled_programs="legacy", instrument_allocation="legacy", change_points=False, pattern_mining=False, joint_modeling=False, layout="chunks", effect_programs="off", solve_time_limit=20.0, structure_hints=None, hint_scale=1.0):
+def native_song(template, frames, multiplier, row_frames, metadata, frequencies=None, output_multiplier=1, loop_start=None, pitch_programs="attack", modulation_programs="legacy", coupled_programs="legacy", instrument_allocation="legacy", change_points=False, pattern_mining=False, joint_modeling=False, layout="chunks", effect_programs="off", solve_time_limit=20.0, structure_hints=None, hint_scale=1.0, effect_tolerance=12.0, solve_params=None):
     """Build a native CC2 song; returns (bytes, report).
 
     effect_programs "off" is the original mapper. "on" fits slide, vibrato,
@@ -886,7 +890,8 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
                    coupled_programs=coupled_programs, instrument_allocation=instrument_allocation,
                    change_points=change_points, pattern_mining=pattern_mining, joint_modeling=joint_modeling,
                    layout=layout, effect_programs=effect_programs, solve_time_limit=solve_time_limit,
-                   structure_hints=structure_hints, hint_scale=hint_scale)
+                   structure_hints=structure_hints, hint_scale=hint_scale, effect_tolerance=effect_tolerance,
+                   solve_params=solve_params)
     if effect_programs != "on":
         return _native_song(template, frames, multiplier, row_frames, metadata, **options)
     try:

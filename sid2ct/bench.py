@@ -140,9 +140,9 @@ def failure_reason(log_text):
     return lines[-1][:200] if lines else 'no output'
 
 
-def convert_command(sid, output, entry, seconds, full, effect_programs=None, extra=()):
+def convert_command(sid, output, entry, seconds, full, effect_programs=None, extra=(), workers=1):
     command = [sys.executable, '-m', 'sid2ct', 'convert', str(sid), '-o', str(output), '--force',
-               '--subtune', str(entry['subtune']), '--workers', '1']
+               '--subtune', str(entry['subtune']), '--workers', str(workers)]
     if not full:
         command += ['--seconds', f'{seconds:g}']
     if effect_programs:
@@ -150,13 +150,13 @@ def convert_command(sid, output, entry, seconds, full, effect_programs=None, ext
     return command + list(extra)
 
 
-def run_song(entry, hvsc, song_dir, seconds, full, timeout=TIMEOUT, effect_programs=None, extra=()):
+def run_song(entry, hvsc, song_dir, seconds, full, timeout=TIMEOUT, effect_programs=None, extra=(), workers=1):
     """Run one conversion; returns (status, error, wall_seconds, scores, report_path)."""
     song_dir.mkdir(parents=True, exist_ok=True)
     output = song_dir/'song.ct'
     report_path = output.with_suffix('.json')
     report_path.unlink(missing_ok=True)
-    command = convert_command(hvsc/entry['path'], output, entry, seconds, full, effect_programs, extra)
+    command = convert_command(hvsc/entry['path'], output, entry, seconds, full, effect_programs, extra, workers)
     started = time.monotonic()
     status, error = 'ok', None
     with open(song_dir/'convert.log', 'w') as log:
@@ -259,7 +259,9 @@ def score_summary(db, run_id, compare_id, threshold=0.01):
 
 def add_arguments(parser):
     parser.add_argument('--split', choices=('dev', 'heldout', 'all'), default='dev', help='Corpus split to run (default: dev).')
-    parser.add_argument('--workers', type=int, default=max(1, (os.cpu_count() or 2)//2), help='Parallel conversions (default: half the cores).')
+    parser.add_argument('--workers', type=int, default=max(1, (os.cpu_count() or 2)//2), help='Parallel conversions (default: half the cores). Each conversion gets cores // this many workers.')
+    parser.add_argument('--effort', choices=('default', 'high'), help='Pass --effort to every conversion (default: the converter default).')
+    parser.add_argument('--no-memory', action='store_true', help='Pass --no-memory to every conversion.')
     parser.add_argument('--seconds', type=float, default=60, help='Explicit capture length in seconds (default: 60).')
     parser.add_argument('--full', action='store_true', help='Convert the detected loop instead of an explicit capture.')
     parser.add_argument('--label', default='adhoc', help='Name of this run, for example baseline.')
@@ -271,7 +273,7 @@ def add_arguments(parser):
     parser.add_argument('--instrument-allocation', choices=('legacy', 'trajectory', 'budget', 'solve'), help='Pass --instrument-allocation to every conversion.')
     parser.add_argument('--structure-hints', choices=('auto', 'off'), help='Pass --structure-hints to every conversion.')
     parser.add_argument('--solve-time-limit', type=float, help='Pass --solve-time-limit to every conversion.')
-    parser.add_argument('--timeout', type=float, default=TIMEOUT, help='Per-song limit in seconds (default: 900).')
+    parser.add_argument('--timeout', type=float, default=TIMEOUT, help='Per-song limit in seconds (default: 900; raise it with --effort high).')
 
 
 def run_command(args):
@@ -283,18 +285,24 @@ def run_command(args):
         print('error: no songs match.')
         return 1
     db = connect()
+    per_song = max(1, (os.cpu_count() or 1)//max(1, args.workers))
     options = {'split': args.split, 'seconds': None if args.full else args.seconds, 'full': args.full, 'only': args.only,
                'effect_programs': args.effect_programs, 'instrument_allocation': args.instrument_allocation,
-               'structure_hints': args.structure_hints, 'solve_time_limit': args.solve_time_limit}
+               'structure_hints': args.structure_hints, 'solve_time_limit': args.solve_time_limit,
+               'effort': args.effort, 'no_memory': args.no_memory, 'parallel_songs': args.workers,
+               'workers_per_song': per_song}
     extra = [x for flag, value in (('--instrument-allocation', args.instrument_allocation), ('--structure-hints', args.structure_hints),
-                                   ('--solve-time-limit', args.solve_time_limit)) if value is not None for x in (flag, str(value))]
+                                   ('--solve-time-limit', args.solve_time_limit), ('--effort', args.effort))
+             if value is not None for x in (flag, str(value))]
+    if args.no_memory:
+        extra.append('--no-memory')
     run_id = start_run(db, args.label, git_sha(), options)
     base = CACHE/'bench'/args.label
-    print(f'run {run_id} label={args.label} songs={len(songs)} workers={args.workers}', flush=True)
+    print(f'run {run_id} label={args.label} songs={len(songs)} parallel={args.workers} workers_per_song={per_song}', flush=True)
 
     def work(entry):
         name = song_name(entry)
-        outcome = run_song(entry, args.hvsc, base/name, args.seconds, args.full, args.timeout, args.effect_programs, extra)
+        outcome = run_song(entry, args.hvsc, base/name, args.seconds, args.full, args.timeout, args.effect_programs, extra, per_song)
         print(f'{name}: {outcome[0]} {outcome[2]:.0f}s mix={fmt(outcome[3]["mix"])}', flush=True)
         return entry, name, outcome
 

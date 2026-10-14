@@ -12,6 +12,8 @@ from pathlib import Path
 import sys
 import wave
 
+from . import budget
+
 try:
     import numpy as np
 except ImportError:
@@ -238,6 +240,7 @@ def compare_wavs(source, reconstruction, max_lag_ms=250, *, fixed_alignment_ms=N
     limit = min(round(max_lag_ms*rate/1000/step), max(0, min(len(ea), len(eb))//10))
     best = None
     for lag in ([fixed_lag] if fixed_lag is not None else range(-limit, limit+1)):
+        budget.check()
         sa, sb = max(0, -lag), max(0, lag)
         count = min(len(ea)-sa, len(eb)-sb)
         x, y = ea[sa:sa+count], eb[sb:sb+count]
@@ -252,6 +255,7 @@ def compare_wavs(source, reconstruction, max_lag_ms=250, *, fixed_alignment_ms=N
     count = min(len(a)-sa, len(b)-sb)
     x, y = a[sa:sa+count], b[sb:sb+count]
     workers = analysis_workers()
+    budget.check()
     fa = _cached_spectral_features(x.tobytes(), rate, workers)
     fb = _cached_spectral_features(y.tobytes(), rate, workers)
     if np is not None:

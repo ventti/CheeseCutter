@@ -124,14 +124,16 @@ class LibSidPlayIntegration(unittest.TestCase):
                                     capture_output=True, text=True, timeout=60)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             report = json.loads(ct.with_suffix('.json').read_text())
-            self.assertEqual(len(report['row_grid_search']), 42)
+            self.assertEqual({c['row_frames'] for c in report['row_grid_search']}, {3, 4, 5, 6, 8, 12})
             self.assertEqual({c['modulation_programs'] for c in report['row_grid_search']}, {'legacy', 'compact'})
             valid = [c for c in report['row_grid_search'] if c.get('audio', {}).get('similarity') is not None]
             self.assertTrue(valid)
             best = max(valid, key=lambda c: c['audio']['similarity'])
-            baseline=valid[0]['audio']['score_v1']
-            best=max((c for c in valid if c['audio']['score_v1']>=baseline-.01),key=lambda c:c['audio']['score_v2'])
+            # The v1 guard reference is the best v1 among all candidates (not the first one built).
+            reference=max(c['audio']['score_v1'] for c in valid)
+            best=max((c for c in valid if c['audio']['score_v1']>=reference-.01),key=lambda c:c['audio']['score_v2'])
             self.assertEqual(report['row_frames'], best['row_frames'])
+            self.assertEqual(report['effort']['selection']['reference_v1'], reference)
             self.assertEqual(report['audio_validation']['tested_seconds'], 0.5)
             self.assertTrue(ct.with_suffix('.source.wav').exists())
             self.assertTrue(ct.with_suffix('.reconstructed.wav').exists())
@@ -169,8 +171,8 @@ class LibSidPlayIntegration(unittest.TestCase):
             report=json.loads(ct.with_suffix('.json').read_text())
             candidates=report['sound_program_search']
             self.assertEqual({c['output_multiplier'] for c in candidates},{1,2})
-            baseline=candidates[0]['audio']['score_v1']
-            best=max((c for c in candidates if c['audio']['score_v1']>=baseline-.01),key=lambda c:c['audio']['score_v2'])
+            reference=max(c['audio']['score_v1'] for c in candidates if c.get('audio'))
+            best=max((c for c in candidates if c.get('audio') and c['audio']['score_v1']>=reference-.01),key=lambda c:c['audio']['score_v2'])
             self.assertEqual(report['output_multiplier'],best['output_multiplier'])
             self.assertEqual(report['tuning'],best['tuning'])
             self.assertEqual(report['audio_validation']['similarity'],best['audio']['similarity'])

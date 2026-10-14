@@ -18,6 +18,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from . import budget
 from .effects import (assign_hosts, chord_table_bytes, fit_adsr, fit_pitch, fit_volume,  # noqa: F401
                       refit_command)
 from .filterfit import fit_filter
@@ -61,7 +62,8 @@ def restart_nibble(wave_program):
 
 class EffectPlanner:
     def __init__(self, frames, multiplier, output_multiplier, tuning, row_frames, *, full_pitch=False,
-                 reserved_commands=0):
+                 reserved_commands=0, tolerance=TOLERANCE_CENTS):
+        self.tolerance = tolerance
         self.step = max(1, multiplier // output_multiplier)
         self.output_multiplier = output_multiplier
         self.tuning = list(tuning)
@@ -101,7 +103,8 @@ class EffectPlanner:
     def _fit(self, note):
         key = (note.freq.tobytes(), note.control.tobytes(), note.voice, note.prev_freq)
         if key not in self._cache:
-            self._cache[key] = fit_pitch(note, self.tuning, tolerance=TOLERANCE_CENTS, quantum=self.quantum)
+            budget.check()
+            self._cache[key] = fit_pitch(note, self.tuning, tolerance=self.tolerance, quantum=self.quantum)
         return self._cache[key]
 
     def _covers(self, key, next_start, horizon=None):
@@ -202,7 +205,7 @@ class EffectPlanner:
             near = sorted((c for c in kept if c[0] == entry.command[0]),
                           key=lambda c: self._distance(c, entry.command))[:3]
             for command in near:
-                fit = refit_command(entry.note, self.tuning, entry.fit, command, tolerance=TOLERANCE_CENTS,
+                fit = refit_command(entry.note, self.tuning, entry.fit, command, tolerance=self.tolerance,
                                     quantum=self.quantum)
                 if fit is not None and fit.ok:
                     entry.command, entry.fit = command, fit

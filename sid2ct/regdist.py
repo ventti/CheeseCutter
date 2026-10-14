@@ -13,6 +13,8 @@ import math
 
 import numpy as np
 
+from . import budget
+
 # SID attack and decay/release times (ms, full scale) indexed by nibble.
 ATTACK_MS = (2, 8, 16, 24, 38, 56, 68, 80, 100, 250, 500, 800, 1000, 3000, 5000, 8000)
 DECAY_MS = tuple(3 * t for t in ATTACK_MS)
@@ -131,6 +133,7 @@ def trace_distance(source, trace, multiplier=1, *, max_lag=0):
     a, b = _frames(source), _frames(trace)
     best = None
     for lag in range(-max_lag, max_lag + 1):
+        budget.check()
         x = a[max(0, -lag):]
         y = b[max(0, lag):]
         costs, n = frame_costs(x, y, multiplier)

@@ -16,8 +16,11 @@ import tempfile
 import time
 
 from .coupling import analyze as analyze_coupling
-from .audio import analysis_workers, compare_wavs
-from .native import dmc_tuning, indexed_tuning, native_song
+from .audio import analysis_workers
+from .budget import Budget, effort_seconds, DIAGNOSTICS_SHARE
+from . import portfolio
+from .memory import Memory, capture_key, player_family, song_key
+from .native import dmc_tuning, indexed_tuning
 
 ROOT = Path(__file__).resolve().parents[1]
 REST = (0xBD, 0, 0, 0)
@@ -254,14 +257,20 @@ def run(tool, *args):
 
 def add_arguments(parser):
     parser.add_argument('--score', choices=('v1','v2'), default='v2', help='Score used to choose candidates (default: v2).')
-    parser.add_argument('--v1-tolerance', type=float, default=0.01, help='Maximum allowed v1 loss from the first valid candidate (default: 0.01).')
-    parser.add_argument("--workers", type=int, default=None, help="CPU cores to use for audio analysis (default: all available).")
+    parser.add_argument('--v1-tolerance', type=float, default=0.01, help='Maximum allowed v1 loss from the best v1 reached by any candidate (default: 0.01).')
+    parser.add_argument("--workers", type=int, default=None, help="CPU cores to use: candidates are built and scored concurrently and the solver gets the rest (default: all available).")
+    parser.add_argument('--effort', choices=('default', 'high'), default='default', help='Time budget for the whole conversion: default is about 10 minutes for a full detected-loop song (shorter captures get a proportional share), high about 60 minutes. The best result so far is always written when the budget ends.')
+    parser.add_argument('--high-effort', dest='effort', action='store_const', const='high', help='Same as --effort high.')
+    parser.add_argument('--time-budget', type=float, help='Total wall seconds for this conversion, overriding --effort.')
+    parser.add_argument('--seed', type=int, default=0, help='Random seed of the parameter search (default: 0).')
+    parser.add_argument('--max-trials', type=int, help='Most search candidates after the first stage (default: as many as the time budget allows; 0 skips the search).')
+    parser.add_argument('--no-memory', action='store_true', help='Do not read or write the memory database (~/.cache/sid2ct/memory.sqlite3, or $SID2CT_CACHE): no reused traces and no warm start.')
     parser.add_argument('sid', type=Path, help='Original SID file.')
     parser.add_argument('-o', '--output', type=Path, required=True, help='Output CheeseCutter .ct file.')
     parser.add_argument('--seconds', type=float, help='Seconds to convert; default: first player-state loop or the search limit.')
     parser.add_argument('--max-seconds', type=float, default=600, help='Maximum seconds to look for a repeating playback state (default: 600).')
     parser.add_argument('--multiplier', type=int, help='Set the original playback update rate to 50 times this number (1..16); default: detect it.')
-    parser.add_argument('--row-frames', type=int, default=6, help='Length of each pattern row in PAL frames (3..127; default: 6).')
+    parser.add_argument('--row-frames', type=int, default=None, help='Length of each pattern row in PAL frames (3..127). Default: the search chooses among 3, 4, 5, 6, 8 and 12 (6 first).')
     parser.add_argument('--subtune', type=int, default=1, help='Song number in the SID file (default: 1).')
     parser.add_argument('--force-trace', action='store_true', help='Rebuild from observed sounds even if the original CheeseCutter song can be recovered.')
     parser.add_argument('--trace', type=Path, help='Read recorded SID register values from a ct2util sidtrace file.')
@@ -286,9 +295,10 @@ def add_arguments(parser):
     parser.add_argument('--effect-programs', choices=('auto','off','on'), default='auto',
                         help='on: map slides, vibrato, detune, arpeggios, AD/SR changes, volume and one global filter to command rows; off: older method; auto: try both.')
     parser.add_argument('--auto-row-frames', action='store_true', help='Try row lengths of 3, 4, 5, 6, 8 and 12 frames plus the requested length; keep the best audio match.')
-    parser.add_argument('--instrument-allocation', choices=('legacy','trajectory','budget','solve'), default='legacy', help='legacy: most-used sounds first; trajectory: group similar sound changes; budget: also fit all sound tables within their limits; solve: choose sounds with an integer solver (OR-Tools) that minimises register distortion within the table limits, falling back to budget.')
-    parser.add_argument('--solve-time-limit', type=float, default=20.0, help='Seconds the integer solver may spend per sound allocation with --instrument-allocation solve (default: 20).')
-    parser.add_argument('--structure-hints', choices=('auto','off'), default='auto', help='With --instrument-allocation solve, read the source player\'s own song data (GoatTracker, DMC, JCH NewPlayer) so notes that share a source instrument prefer one CC instrument. auto adds a slower memory trace; off skips it (default: auto).')
+    parser.add_argument('--instrument-allocation', choices=('auto','legacy','trajectory','budget','solve'), default='auto', help='auto: build legacy and solve and keep the better by audio; legacy: most-used sounds first; trajectory: group similar sound changes; budget: also fit all sound tables within their limits; solve: choose sounds with an integer solver (OR-Tools) that minimises register distortion within the table limits, falling back to budget.')
+    parser.add_argument('--solve-time-limit', type=float, default=None, help='Seconds the integer solver may spend per sound allocation (default: 20, or 60 with --high-effort; never more than a share of the remaining budget).')
+    parser.add_argument('--structure-hints', choices=('auto','off'), default='auto', help='When the solver is used, read the source player\'s own song data (GoatTracker, DMC, JCH NewPlayer) so notes that share a source instrument prefer one CC instrument. auto adds a slower memory trace; off skips it (default: auto).')
+    parser.add_argument('--layout', choices=('compact','chunks'), default='compact', help='compact: reuse repeated and transposed sequence blocks (falls back to chunks if it cannot be verified); chunks: fixed 64-row blocks (default: compact).')
     parser.add_argument('--change-points', action='store_true', help='Report where pitch, gate or control values change; playback stays unchanged.')
     parser.add_argument('--pattern-mining', action='store_true', help='Reuse repeated pattern rows while keeping every row and the loop position.')
     parser.add_argument('--joint-modeling', action='store_true', help='Give extra priority to instruments in voices that affect each other; requires --coupled-programs preserve and trajectory or budget allocation.')
@@ -296,9 +306,60 @@ def add_arguments(parser):
     parser.add_argument('--skip-diagnostics', action='store_true', help='Compare only the combined sound; skip individual voices and short sections.')
 
 
+def convert_search(args, ctx, *, temp, raw_sid, frames, loop, hints, metadata, coupling, budget, memory,
+                   song, family, workers, effort):
+    """Build the candidate portfolio (sid2ct.flow) and return the chosen one: report, CT and WAV paths, audio."""
+    from . import flow
+    from .tuner import params_from_options
+    skip = args.skip_audio
+    profiles = ['static', 'dynamic'] if args.sound_programs == 'auto' and not skip else [
+        'dynamic' if args.sound_programs == 'auto' else args.sound_programs]
+    recovered = anchored = None
+    if 'dynamic' in profiles:
+        fresh = temp/'fresh.ct'
+        result = run(args.tool, 'init', ROOT/'src/c64/player.bin', '-o', fresh)
+        if result.returncode:
+            raise ValueError('Native template failed: '+result.stdout+result.stderr)
+        ctx.template = fresh.read_bytes()
+        anchored = dmc_tuning(raw_sid)
+        recovered = anchored or indexed_tuning(raw_sid, frames)
+        if args.tuning == 'source' and recovered is None:
+            raise ValueError('No corroborated source frequency table found.')
+        ctx.tunings = {'default': (None, 'default')}
+        if recovered is not None:
+            ctx.tunings['source'] = (recovered, 'dmc4' if anchored else 'indexed-source')
+    axes = flow.build_axes(args, multiplier=args.multiplier, coupling=coupling, recovered=recovered,
+                           anchored=bool(anchored), profiles=profiles)
+    share = 0.03 if skip or args.skip_diagnostics else DIAGNOSTICS_SHARE
+    search_budget = budget.child(reserve=budget.total*share)
+    results, pick, guard, notes = flow.search(args, ctx, axes=axes, profiles=profiles, budget=budget,
+                                              search_budget=search_budget, workers=workers or analysis_workers(),
+                                              effort=effort, memory=memory, family=family, song=song)
+    if pick is None:
+        errors = [dict(name=r['name'], error=r.get('error', 'expired' if r.get('expired') else 'unknown')) for r in results]
+        raise ValueError('Every candidate failed: '+json.dumps(errors))
+    chosen = results[pick]
+    report = chosen['report']
+    summaries = [portfolio.summarise(r) for r in results]
+    if args.auto_row_frames:
+        report['row_grid_search'] = summaries
+        report['warnings'].append('Row grid selected by a heuristic WAV score over the tested interval; it may differ elsewhere.')
+    elif len(results) > 1:
+        report['sound_program_search'] = summaries
+    if any(r.get('expired') for r in results):
+        report['warnings'].append('The time budget ended before every candidate was built; the best finished candidate was kept.')
+    info = dict(selected=chosen['name'], selection=guard, candidates=len(results),
+                worker_seconds=flow.aggregate_worker_seconds(results), **notes)
+    if chosen['options']['profile'] == 'dynamic' and chosen.get('audio') and memory.enabled:
+        audio = chosen['audio']
+        memory.record_best(song, family, chosen['name'], params_from_options(chosen['options'], args.multiplier),
+                           audio.get('score_v1'), audio.get('score_v2'))
+    return dict(report=report, ct_path=chosen['ct_path'], audio=chosen.get('audio'), wav_path=chosen.get('wav_path'),
+                recovered=recovered, info=info)
+
+
 def run_command(args):
     started = time.monotonic()
-    from .audio import score_value
     from .rendercache import render as cached_render
     requested_multiplier = args.multiplier
     workers = getattr(args, "workers", None)
@@ -307,6 +368,12 @@ def run_command(args):
             print("Analysis workers must be positive.")
             return 1
         os.environ["SID2CT_WORKERS"] = str(workers)
+    effort = getattr(args, 'effort', None) or 'default'
+    time_budget = getattr(args, 'time_budget', None)
+    if time_budget is not None and not 0 < time_budget < math.inf:
+        print('Time budget must be positive and finite.')
+        return 1
+    budget = Budget(time_budget if time_budget else effort_seconds(effort))
     report_path = args.output.with_suffix('.json')
     source_wav = args.output.with_suffix('.source.wav')
     converted_wav = args.output.with_suffix('.reconstructed.wav')
@@ -318,7 +385,7 @@ def run_command(args):
             raise ValueError('Output must not replace the input SID.')
         if args.output.suffix.lower() != '.ct':
             raise ValueError('Output must have a .ct extension.')
-        if (args.seconds is not None and (not math.isfinite(args.seconds) or not 0 < args.seconds <= 600)) or (args.multiplier is not None and not 1 <= args.multiplier <= 16) or not 3 <= args.row_frames <= 127:
+        if (args.seconds is not None and (not math.isfinite(args.seconds) or not 0 < args.seconds <= 600)) or (args.multiplier is not None and not 1 <= args.multiplier <= 16) or (args.row_frames is not None and not 3 <= args.row_frames <= 127):
             raise ValueError('Use seconds in (0,600], multiplier 1..16 and row frames 3..127.')
         if args.auto_row_frames and args.skip_audio:
             raise ValueError('--auto-row-frames requires WAV validation.')
@@ -326,8 +393,8 @@ def run_command(args):
             raise ValueError('Audio seconds must be in (0,600].')
         if not args.skip_audio and not args.renderer.is_file():
             raise ValueError('Build the renderer with python3 tools/build_sid_renderer.py (libsidplayfp 3.x required), or use --skip-audio.')
-        if getattr(args,'joint_modeling',False) and (args.coupled_programs != 'preserve' or getattr(args,'instrument_allocation','legacy') == 'legacy'):
-            raise ValueError('--joint-modeling requires --coupled-programs preserve and trajectory/budget allocation.')
+        if getattr(args,'joint_modeling',False) and (args.coupled_programs != 'preserve' or getattr(args,'instrument_allocation','auto') == 'legacy'):
+            raise ValueError('--joint-modeling requires --coupled-programs preserve and an allocation other than legacy.')
         outputs = [args.output, report_path] + ([] if args.skip_audio else [source_wav, converted_wav])
         if not args.skip_audio and not args.skip_diagnostics:
             if not math.isfinite(args.window_seconds) or not .1 <= args.window_seconds <= 600:
@@ -353,77 +420,92 @@ def run_command(args):
             ct = temp/'reconstructed.ct'
             report = None
             recovered = None
+            chosen_info = None
             audio_source = temp/'source.wav'
-            audio_result = temp/'result.wav'
             from .loops import capture, CC_BASE_RATE
             if not math.isfinite(args.max_seconds) or not 0 < args.max_seconds <= 600:
                 raise ValueError('--max-seconds must be in (0,600].')
             loop = None
             input_cache = getattr(args, '_input_cache', None)
-            wants_hints = (getattr(args, 'instrument_allocation', 'legacy') == 'solve' and getattr(args, 'structure_hints', 'auto') == 'auto'
+            memory = Memory(enabled=not getattr(args, 'no_memory', False))
+            song, family = song_key(raw_sid, args.subtune), player_family(raw_sid)
+            allocation_wanted = getattr(args, 'instrument_allocation', 'auto')
+            wants_hints = ((allocation_wanted == 'solve' or (allocation_wanted == 'auto' and not args.skip_audio))
+                           and getattr(args, 'structure_hints', 'auto') == 'auto'
                            and not args.trace and identify_extractor(raw_sid) is not None)
             import hashlib
             input_key = (hashlib.sha256(raw_sid).hexdigest(), args.subtune,
                          args.seconds, args.multiplier, args.max_seconds,
                          hashlib.sha256(args.tool.read_bytes()).hexdigest(),
                          hashlib.sha256(args.trace.read_bytes()).hexdigest() if args.trace else None)
-            if input_cache is not None and input_key in input_cache:
-                frames, loop, args.multiplier, duration, hints = input_cache[input_key]
-            elif args.trace:
-                hints = None
-                args.multiplier = args.multiplier or 1
-                frames = parse_trace(args.trace.read_text())
-                duration = min(args.seconds or args.max_seconds, len(frames)/(50*args.multiplier))
-                frames = frames[:round(duration*50*args.multiplier)]
-            else:
-                extras = {} if wants_hints else None
-                frames, loop = capture(args.tool.resolve(), args.sid.resolve(), args.subtune,
-                    temp, args.seconds, args.multiplier, args.max_seconds, extras)
-                args.multiplier = loop['source_multiplier']
-                duration = loop['duration_seconds']
-                hints = source_structure(raw_sid, args.subtune, extras, loop) if wants_hints else None
+            stored = None
+            with budget.stage('capture'):
+                if input_cache is not None and input_key in input_cache:
+                    frames, loop, args.multiplier, duration, hints = input_cache[input_key]
+                elif args.trace:
+                    hints = None
+                    args.multiplier = args.multiplier or 1
+                    frames = parse_trace(args.trace.read_text())
+                    duration = min(args.seconds or args.max_seconds, len(frames)/(50*args.multiplier))
+                    frames = frames[:round(duration*50*args.multiplier)]
+                else:
+                    key = capture_key(input_key + (wants_hints,))
+                    stored = memory.load_capture(key) if memory.enabled else None
+                    if stored is not None:
+                        frames, loop, args.multiplier, duration, hints = stored
+                    else:
+                        extras = {} if wants_hints else None
+                        reads_limit = max(60.0, 0.25*budget.total)     # structure hints are optional: bound their trace
+                        try:
+                            frames, loop = capture(args.tool.resolve(), args.sid.resolve(), args.subtune,
+                                temp, args.seconds, args.multiplier, args.max_seconds, extras, reads_limit)
+                        except (subprocess.TimeoutExpired, ValueError) as error:
+                            if not wants_hints:
+                                raise
+                            wants_hints, extras = False, None
+                            frames, loop = capture(args.tool.resolve(), args.sid.resolve(), args.subtune,
+                                temp, args.seconds, args.multiplier, args.max_seconds)
+                            loop.setdefault('warnings', []).append(
+                                'The memory trace for structure hints failed or timed out; converted without hints.')
+                        args.multiplier = loop['source_multiplier']
+                        duration = loop['duration_seconds']
+                        hints = source_structure(raw_sid, args.subtune, extras, loop) if wants_hints else None
+                        if memory.enabled:
+                            memory.save_capture(key, (frames, loop, args.multiplier, duration, hints))
             if input_cache is not None:
                 input_cache[input_key] = (frames, loop, args.multiplier, duration, hints)
+            if not time_budget:
+                budget.set_total(effort_seconds(effort, duration))
             coupling = analyze_coupling(frames, (50 if args.trace else CC_BASE_RATE)*args.multiplier)
             audio_duration = min(args.audio_seconds or duration, duration)
             renderer_info = None
-            def render(sid, output, subtune):
-                return cached_render([args.renderer.resolve(), sid, output, audio_duration,
-                                      subtune, 16000, model, 'all'], cwd=ROOT)
-            def assess(candidate, subtune):
-                import hashlib
-                cache = getattr(args, '_assessment_cache', None)
-                key = (hashlib.sha256(candidate.read_bytes()).hexdigest(),
-                       hashlib.sha256(raw_sid).hexdigest(), audio_duration,
-                       model, args.subtune, subtune, str(args.renderer.resolve()),
-                       hashlib.sha256(args.renderer.read_bytes()).hexdigest(),
-                       hashlib.sha256(args.tool.read_bytes()).hexdigest())
-                if cache is not None and key in cache and cache[key][1].is_file():
-                    prior, wav = cache[key]
-                    audio_result.write_bytes(wav.read_bytes())
-                    return dict(prior, cache_hit=True)
-                exported = temp/'candidate.sid'
-                result = run(args.tool, 'sid', candidate, '-s', subtune, '-o', exported)
-                if result.returncode:
-                    raise ValueError('Validation SID export failed: ' + result.stdout + result.stderr)
-                info = render(exported, audio_result, 1)
-                assessment = compare_wavs(audio_source, audio_result)
-                assessment.update(renderer=info, tested_seconds=audio_duration,
-                                  source_subtune=args.subtune, output_subtune=subtune)
-                if cache is not None:
-                    cache[key] = (dict(assessment), converted_wav)
-                return assessment
+            ctx = portfolio.Context(
+                work_dir=str(temp), frames=frames, multiplier=args.multiplier, metadata=metadata,
+                loop_start=loop['loop_start_frame'] if loop and loop['detected'] else None, hints=hints,
+                hint_scale=(loop['destination_calls_per_second']/loop['source_calls_per_second']
+                            if loop and hints is not None else 1.0),
+                tool=str(args.tool), renderer=str(args.renderer.resolve()), model=model, subtune=args.subtune,
+                audio_duration=audio_duration, source_wav=str(audio_source), skip_audio=args.skip_audio,
+                raw_sha=hashlib.sha256(raw_sid).hexdigest(),
+                renderer_sha=hashlib.sha256(args.renderer.read_bytes()).hexdigest() if not args.skip_audio else None,
+                tool_sha=hashlib.sha256(args.tool.read_bytes()).hexdigest(),
+                change_points=getattr(args, 'change_points', False), pattern_mining=getattr(args, 'pattern_mining', False),
+                joint_modeling=getattr(args, 'joint_modeling', False), template=None, tunings={})
+            ctx.cache = getattr(args, '_assessment_cache', None)
+            ctx.converted_wav = converted_wav
             # Full libsidplayfp emulation honors the SID's actual timer setup.
             if not args.skip_audio:
                 source_key = ('audio', hashlib.sha256(raw_sid).hexdigest(), args.subtune,
-                              audio_duration, model, hashlib.sha256(args.renderer.read_bytes()).hexdigest())
-                if input_cache is not None and source_key in input_cache:
-                    wav_bytes, renderer_info = input_cache[source_key]
-                    audio_source.write_bytes(wav_bytes)
-                else:
-                    renderer_info = render(args.sid.resolve(), audio_source, args.subtune)
-                    if input_cache is not None:
-                        input_cache[source_key] = (audio_source.read_bytes(), renderer_info)
+                              audio_duration, model, ctx.renderer_sha)
+                with budget.stage('source_render'):
+                    if input_cache is not None and source_key in input_cache:
+                        wav_bytes, renderer_info = input_cache[source_key]
+                        audio_source.write_bytes(wav_bytes)
+                    else:
+                        renderer_info = cached_render([args.renderer.resolve(), args.sid.resolve(), audio_source,
+                                                       audio_duration, args.subtune, 16000, model, 'all'], cwd=ROOT)
+                        if input_cache is not None:
+                            input_cache[source_key] = (audio_source.read_bytes(), renderer_info)
             if not args.force_trace and not args.trace:
                 exact = run(args.tool, 'sid2ct', args.sid.resolve(), '-o', ct)
                 if exact.returncode == 0:
@@ -432,117 +514,19 @@ def run_command(args):
                 elif 'not a CheeseCutter' not in exact.stdout:
                     raise ValueError(exact.stdout + exact.stderr)
             if report is None:
-                grids = sorted(set([3, 4, 5, 6, 8, 12, args.row_frames])) if args.auto_row_frames else [args.row_frames]
-                profiles = ['static','dynamic'] if args.sound_programs=='auto' and not args.skip_audio else [
-                    'dynamic' if args.sound_programs=='auto' else args.sound_programs]
-                template = None
-                native_variants = []
-                if 'dynamic' in profiles:
-                    fresh = temp/'fresh.ct'
-                    result = run(args.tool,'init',ROOT/'src/c64/player.bin','-o',fresh)
-                    if result.returncode:
-                        raise ValueError('Native template failed: '+result.stdout+result.stderr)
-                    template=fresh.read_bytes()
-                    anchored = dmc_tuning(raw_sid)
-                    recovered = anchored or indexed_tuning(raw_sid, frames)
-                    if args.tuning == 'source' and recovered is None:
-                        raise ValueError('No corroborated source frequency table found.')
-                    tunings = [(None,'default')]
-                    if recovered is not None and args.tuning != 'default':
-                        source = (recovered,'dmc4' if anchored else 'indexed-source')
-                        tunings = [source] if args.tuning == 'source' or anchored or args.skip_audio else tunings+[source]
-                    rates = sorted(set([1,args.multiplier])) if args.sound_rate=='auto' else [
-                        args.multiplier if args.sound_rate=='source' else 1]
-                    if args.skip_audio and args.sound_rate=='auto':
-                        rates = [args.multiplier]
-                    pitches = ['attack','compact','full'] if args.pitch_programs == 'auto' and not args.skip_audio else [
-                        'full' if args.pitch_programs == 'auto' else args.pitch_programs]
-                    modulations = ['legacy','compact'] if args.modulation_programs == 'auto' and not args.skip_audio else [
-                        'compact' if args.modulation_programs == 'auto' else args.modulation_programs]
-                    coupled = ['legacy','preserve'] if args.coupled_programs == 'auto' and coupling['edges'] and not args.skip_audio else [
-                        'preserve' if args.coupled_programs == 'auto' and coupling['edges'] else
-                        'legacy' if args.coupled_programs == 'auto' else args.coupled_programs]
-                    try:
-                        import numpy  # noqa: F401  (effect fitting needs it; plain conversion does not)
-                        have_numpy = True
-                    except ImportError:
-                        have_numpy = False
-                    requested = getattr(args,'effect_programs','auto')
-                    effects = ['off','on'] if requested == 'auto' and not args.skip_audio and have_numpy else [
-                        'off' if requested == 'auto' else requested]
-                    # The solver is one more way to allocate instruments, not a replacement: legacy stays
-                    # a candidate, so the audio selection can still pick it.
-                    requested_allocation = getattr(args,'instrument_allocation','legacy')
-                    allocations = ['solve','legacy'] if requested_allocation == 'solve' and not args.skip_audio else [requested_allocation]
-                    native_variants = [(rate,tuning,label,pitch,modulation,couple,effect,allocation) for rate in rates for tuning,label in tunings for pitch in pitches for modulation in modulations for couple in coupled for effect in effects for allocation in allocations]
-                variants = [(profile,rate,tuning,label,pitch,modulation,couple,effect,allocation) for profile in profiles
-                            for rate,tuning,label,pitch,modulation,couple,effect,allocation in (native_variants if profile=='dynamic' else [(1,None,'default','attack','legacy','legacy','off','legacy')])]
-                candidates, best_score = [], -1.0
-                # The solves of one conversion share about six solve limits (most finish early).
-                solves = sum(1 for v in variants if v[0] == 'dynamic' and v[-1] == 'solve')
-                solve_limit = max(3.0, min(getattr(args, 'solve_time_limit', 20.0), 6*getattr(args, 'solve_time_limit', 20.0)/max(1, solves)))
-                hint_scale = loop['destination_calls_per_second']/loop['source_calls_per_second'] if loop and hints is not None else 1.0
-                baseline_v1 = None
-                for grid, profile, rate, tuning, label, pitch, modulation, couple, effect, allocation in [(g,*v) for g in grids for v in variants]:
-                    try:
-                        candidate = temp/'candidate.ct'
-                        if profile=='dynamic':
-                            native,candidate_report = native_song(template,frames,args.multiplier,grid,metadata,
-                                                                  tuning,rate, loop_start=loop['loop_start_frame'] if loop and loop['detected'] else None,
-                                                                  pitch_programs=pitch, modulation_programs=modulation, coupled_programs=couple,
-                                                                  instrument_allocation=allocation,
-                                                                  change_points=getattr(args,'change_points',False),
-                                                                  pattern_mining=getattr(args,'pattern_mining',False),
-                                                                  joint_modeling=getattr(args,'joint_modeling',False),
-                                                                  effect_programs=effect,
-                                                                  solve_time_limit=solve_limit, structure_hints=hints,
-                                                                  hint_scale=hint_scale)
-                            candidate.write_bytes(native)
-                            candidate_report['tuning'] = label
-                            if getattr(args,'instrument_allocation','legacy') == 'solve':
-                                candidate_report['instrument_allocation'] = allocation
-                            if label=='dmc4':
-                                candidate_report['source_player']='DMC4-compatible anchored tuning'
-                        else:
-                            bridge, candidate_report = reconstruct(frames, args.multiplier, grid, metadata, loop_start=loop['loop_start_frame'] if loop and loop['detected'] else None)
-                            sng = temp/'reconstructed.sng'
-                            sng.write_bytes(bridge)
-                            result = run(args.tool, 'sng2ct', sng, '-o', candidate)
-                            if result.returncode:
-                                raise ValueError('CC mapping failed: ' + result.stdout + result.stderr)
-                            candidate_report['conversion_details'] = result.stdout
-                            candidate_report['sound_programs'] = 'static'
-                        candidate_report['subtune'] = args.subtune
-                        audio = assess(candidate, 1) if not args.skip_audio else None
-                        value = score_value(audio, getattr(args,'score','v2')) if audio else None
-                        score = value if value is not None else -0.5
-                        if baseline_v1 is None and audio and audio.get('score_v1') is not None:
-                            baseline_v1 = audio['score_v1']
-                        guarded = (baseline_v1 is None or (audio and audio.get('score_v1') is not None
-                                   and audio['score_v1'] >= baseline_v1-getattr(args,'v1_tolerance',.01)))
-                        candidates.append({'row_frames': grid, 'sound_programs': profile,
-                                           'output_multiplier': rate, 'tuning': label, 'pitch_programs': pitch, 'modulation_programs': modulation, 'coupled_programs': couple, 'effect_programs': effect, 'instrument_allocation': allocation, 'audio': audio})
-                        if guarded and score > best_score:
-                            best_score, report = score, candidate_report
-                            ct.write_bytes(candidate.read_bytes())
-                            if audio is not None:
-                                report['audio_validation'] = audio
-                                (temp/'best.wav').write_bytes(audio_result.read_bytes())
-                    except ValueError as error:
-                        if len(grids)*len(variants)==1:
-                            raise
-                        candidates.append({'row_frames': grid, 'sound_programs': profile,
-                                           'output_multiplier': rate, 'tuning': label, 'pitch_programs': pitch, 'modulation_programs': modulation, 'coupled_programs': couple, 'effect_programs': effect, 'instrument_allocation': allocation, 'error': str(error)})
-                if report is None:
-                    raise ValueError('Every row-grid candidate failed: ' + json.dumps(candidates))
-                if args.auto_row_frames:
-                    report['row_grid_search'] = candidates
-                    report['warnings'].append('Row grid selected by a heuristic WAV score over the tested interval; it may differ elsewhere.')
-                elif len(variants)>1:
-                    report['sound_program_search'] = candidates
+                chosen = convert_search(args, ctx, temp=temp, raw_sid=raw_sid, frames=frames, loop=loop, hints=hints,
+                                        metadata=metadata, coupling=coupling, budget=budget, memory=memory,
+                                        song=song, family=family, workers=workers, effort=effort)
+                report = chosen['report']
+                ct.write_bytes(Path(chosen['ct_path']).read_bytes())
+                if chosen.get('audio') is not None:
+                    report['audio_validation'] = chosen['audio']
+                    (temp/'best.wav').write_bytes(Path(chosen['wav_path']).read_bytes())
+                recovered = chosen['recovered']
+                chosen_info = chosen['info']
             elif not args.skip_audio:
-                report['audio_validation'] = assess(ct, args.subtune)
-                (temp/'best.wav').write_bytes(audio_result.read_bytes())
+                report['audio_validation'], wav = portfolio.assess_file(ctx, ct, args.subtune, temp)
+                (temp/'best.wav').write_bytes(wav.read_bytes())
             report['cross_channel_effects'] = coupling
             report['loop_detection'] = loop
             if loop:
@@ -555,7 +539,7 @@ def run_command(args):
                 report['resampled_calls'] = len(frames)
             if loop and loop['detected'] and report['mode'] != 'recognized-cheesecutter':
                 report['warnings'] = [w for w in report['warnings'] if 'original loop boundaries are unknown' not in w]
-                grid = report.get('row_frames', args.row_frames)
+                grid = report.get('row_frames', args.row_frames or 6)
                 report['loop_start_row'] = round(loop['loop_start_frame']/(args.multiplier*grid))
                 report['loop_timing'] = {
                     'implemented_start_seconds': report['loop_start_row']*grid/CC_BASE_RATE,
@@ -579,11 +563,13 @@ def run_command(args):
                 diagnostic_args = Namespace(source=args.sid, reconstruction=ct, candidate=[],
                     output=diagnostic_temp, seconds=audio_duration, window_seconds=args.window_seconds,
                     subtune=args.subtune, candidate_subtune=report['audio_validation']['output_subtune'],
-                    sid_model=model, multiplier=requested_multiplier, row_frames=args.row_frames,
+                    sid_model=model, multiplier=requested_multiplier, row_frames=report.get('row_frames', args.row_frames or 6),
                     auto_row_frames=False, selection_seconds=audio_duration,
                     score=getattr(args,"score","v2"), v1_tolerance=getattr(args,"v1_tolerance",.01),
                     renderer=args.renderer, tool=args.tool)
-                if compare.run_command(diagnostic_args,print_report=False):
+                with budget.stage('diagnostics'):
+                    failed = compare.run_command(diagnostic_args,print_report=False)
+                if failed:
                     raise ValueError('Voice/window validation failed.')
                 diagnostic_report = json.loads((diagnostic_temp/'report.json').read_text())
                 diagnostic_report = compare.published_paths(diagnostic_report,diagnostic_temp,diagnostics_path)
@@ -594,6 +580,11 @@ def run_command(args):
             report['score_selection'] = getattr(args,'score','v2')
             report['v1_tolerance'] = getattr(args,'v1_tolerance',.01)
             report['analysis_workers'] = analysis_workers()
+            report['effort'] = dict(profile=effort, workers=workers or analysis_workers(),
+                                    memory='off' if getattr(args, 'no_memory', False) else 'on',
+                                    player_family=family, **budget.report())
+            if chosen_info:
+                report['effort'].update(chosen_info)
             report['elapsed_seconds'] = round(time.monotonic() - started, 3)
             report['source'] = str(args.sid.resolve())
             # Compute and validate before publishing either artifact.
@@ -608,6 +599,7 @@ def run_command(args):
             if not args.skip_audio:
                 source_wav.write_bytes(audio_source.read_bytes())
                 converted_wav.write_bytes((temp/'best.wav').read_bytes())
+        memory.close()
         print(f'{args.output}: {report["mode"]} ({report["elapsed_seconds"]:.3f}s)')
         if loop and loop['detected']:
             print(f'Loop: {loop["start_seconds"]:.3f}s → {loop["end_seconds"]:.3f}s; full player-state recurrence')

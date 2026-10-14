@@ -98,7 +98,7 @@ workflow when libsidplayfp is unavailable.
 Useful options:
 
 - `--subtune 2`: choose the source subtune for generic reconstruction.
-- `--row-frames 3`: finer output row grid; default 6 PAL frames. Range 3..127.
+- `--row-frames 3`: pin the output row grid (PAL frames, range 3..127). Default: the search starts at 6 and tries 3, 4, 5, 8 and 12.
 - `--force-trace`: compare inference with a known CheeseCutter source.
 - `ct2util sidtrace --mem-reads f` adds per-call data reads and SID writes; `sid2ct/memtrace.py` finds streams, row timing and sequence starts in it.
 - `--trace source.trace`: infer from raw `ct2util sidtrace` output (25 hexadecimal
@@ -163,6 +163,54 @@ Useful options:
   table, when available. `default` forces CC tuning; `source` requires recovery.
   Existing anchored DMC4 tuning remains the default for that recognized format.
   With audio skipped, recovered tuning is used without WAV selection.
+
+## Default flow, effort and memory
+
+`convert` builds many candidates and keeps the best one by audio. A flag that names a
+value pins that setting; `auto` (the default) lets the search choose.
+
+Defaults: `--effect-programs auto` (off and on), `--instrument-allocation auto`
+(legacy and solve), `--structure-hints auto`, `--layout compact` (falls back to fixed
+chunks if the compact layout cannot be verified), `--score v2`. Without numpy only `off`
+and `legacy` exist; without ortools solve is skipped; without Optuna the search tries one
+changed setting at a time. Plain `python3` converts with these fallbacks.
+
+Stages (each one is timed in `effort.stage_seconds` of the report):
+
+1. **capture**: trace and loop detection (reused from memory when the same song was seen).
+2. **candidates**: the static bridge plus the base settings crossed with effects x allocation,
+   built and scored in parallel. The first dynamic candidate always finishes, so an output exists.
+3. **search**: an Optuna study (TPE, seeded with `--seed`) over row grid, sound rate, tuning,
+   pitch, modulation and coupled programs, effect tolerance and the solver weights
+   (envelope, loudness, AD/SR repair cost). Trials run in batches of 8. Each trial is first
+   scored by `regdist` through the CT player (no audio); one whose distance is 50% above that
+   of the best candidate by audio is pruned before any audio is rendered.
+4. **selection**: best v2 among all candidates whose v1 is within `--v1-tolerance` (0.01) of
+   the best v1 any candidate reached. The best v1 (not the first candidate) is the guard
+   reference, so a v2 gain cannot hide a larger v1 loss. Ties go to the earlier candidate.
+5. **diagnostics**: voice and window comparison of the chosen CT (12% of the budget is kept for it).
+
+Effort: one wall-clock budget covers all stages and is checked inside the inner loops (note
+fitting, solver pricing, audio alignment). `--effort default` is about 10 minutes for a full
+detected-loop song (300 s or longer); a shorter capture gets a proportional share, at least half. `--high-effort` (or `--effort high`) is about 60 minutes. `--time-budget SECONDS`
+overrides both and `--max-trials N` caps the search (0 skips it). When the budget ends, the best
+finished candidate is written.
+
+Parallelism: `--workers N` (default all cores) sets how many cores one conversion uses.
+Each CP-SAT solve uses a fixed 2 threads and stops on deterministic time, so up to
+`min(8, N // 2)` candidates run at once in separate processes. The output does not depend on N
+(stable order, fixed batch size, fixed seed, fixed solver threads), except where the time budget
+stops a run early.
+
+Memory (`~/.cache/sid2ct/memory.sqlite3`, or `$SID2CT_CACHE/memory.sqlite3`): per song it keeps
+the trace (reused on the next run) and the best parameters; per player family
+(`sid2ct.players`) the best parameters of past songs are tried first as Optuna trials (own
+best, then the top 3 by v2). Every trial is recorded. `--no-memory` reads and writes nothing, so a
+fixed seed gives the same result with or without a database.
+
+`bench` runs `--workers` conversions in parallel and gives each `cores // workers` workers;
+`--effort default|high` and `--no-memory` are passed on. `search` takes `--effort` and
+`--high-effort` for its `--search-seconds` default (600 s or 3600 s); its trials stay serial.
 
 ## WAV validation
 
@@ -568,10 +616,10 @@ records the final measured candidates and explicitly separates discarded trials.
 
 ### Optional staged helpers
 
-Default conversion retains the existing allocation, event extraction and fixed
-pattern chunks. Opt in with `--instrument-allocation trajectory`, `budget` or `solve`,
-`--pattern-mining`, `--change-points`, and `--joint-modeling`. Joint modeling
-requires `--coupled-programs preserve` and trajectory/budget allocation.
+Default conversion builds legacy and solve allocations (`--instrument-allocation auto`).
+Force one with `--instrument-allocation legacy`, `trajectory`, `budget` or `solve`.
+`--pattern-mining`, `--change-points` and `--joint-modeling` stay opt-in. Joint modeling
+requires `--coupled-programs preserve` and a non-legacy allocation.
 
 Trajectory allocation selects existing weighted medoids, separates hidden
 oscillators from sounding instruments and uses trajectory-aware fallback.
@@ -603,11 +651,12 @@ integer model (`sid2ct/solve.py`, CP-SAT):
   (no solution, error, or missing ortools; reported as `allocation.fallback`).
   Notes that share a source instrument number prefer one instrument (soft
   penalty, never a requirement) when GoatTracker, DMC or JCH data is read.
-- `--solve-time-limit` (default 20 s per solve; a conversion shares about six
-  of them across its candidates), `--structure-hints auto|off` (auto runs
+- `--solve-time-limit` (default 20 s per solve, 60 s with `--high-effort`; never more than
+  15% of the remaining budget), `--structure-hints auto|off` (auto runs
   `sidtrace --mem-reads` only for a recognised player; off skips it).
-  `convert` keeps legacy as a candidate next to solve, so the audio selection
-  can still choose it. The report has status, objective, bound, seconds,
+  `--instrument-allocation auto` keeps legacy as a candidate next to solve, so the audio
+  selection can still choose it; forcing `solve` builds only solve. The solver weights
+  (envelope, loudness, repair cost) are Optuna knobs in the default search. The report has status, objective, bound, seconds,
   tables and repaired variants under `helpers.allocation`.
 - Known limits: the cost is register distance, which can prefer silence or a
   wrong loud sound over a quiet right one, so the loudness term is a tuned
@@ -701,7 +750,7 @@ and `tools/sid_render`. Optional packages: `uv venv .venv && uv pip install -p .
   that the converter accepts are used. STIL entries that mention digi/samples are left out
   (`--llm` asks the local model to confirm). Seed 1, 70/30 dev/heldout split per composer.
 - `python3 -m sid2ct bench --split dev|heldout|all --label NAME` converts each song in parallel
-  (`--workers`, default half the cores; `--seconds 60` or `--full`; `--only GLOB`) into
+  (`--workers` = parallel songs, default half the cores, each with `cores // workers` workers; `--effort`; `--seconds 60` or `--full`; `--only GLOB`) into
   `~/.cache/sid2ct/bench/<label>/<song>/` (log in `convert.log`) and records mix/voice scores (and `score_v1`/`score_v2`, backfilled from the kept WAVs for older runs),
   wall time and git SHA in `~/.cache/sid2ct/bench.sqlite3`. It prints a table and the delta against the
   last run labelled `baseline` (`--compare LABEL`). Each song has a 15 minute limit.
@@ -714,7 +763,7 @@ V2 combines log-mel spectra at three window sizes, envelope/onset agreement and
 pitch-class agreement, using the same alignment as v1. NumPy speeds up analysis
 when installed; plain Python remains supported. Convert, compare and search
 accept `--score v1|v2` (default: v2). `--v1-tolerance` (default: 0.01) limits
-v1 loss against the first valid conversion or search baseline. Full search
+v1 loss against the best v1 among the convert candidates (the search baseline for `search`). Full search
 validation also checks voices, pairs and windows.
 
 Renderer outputs are reused under `~/.cache/sid2ct/renders/`. Keys include SID

@@ -6,7 +6,7 @@ import math
 import shutil
 from pathlib import Path
 import time
-from . import convert, compare
+from . import budget as budgets, convert, compare
 from .audio import score_value
 
 VARIANTS = (
@@ -89,12 +89,11 @@ def add_arguments(parser):
                      'Auto choices are supported by convert instead.')
     parser.set_defaults(sound_programs="dynamic", sound_rate="source", tuning="default",
                         pitch_programs="full", modulation_programs="compact", coupled_programs="preserve",
-                        effect_programs="off")
+                        effect_programs="off", instrument_allocation="legacy", row_frames=6)
     parser.add_argument('--candidate-cap', type=int, default=None, help='Maximum new versions besides before (default: 12 for helpers, 40 for optuna/random).')
-    parser.add_argument('--search-seconds', type=float, default=600, help='Time limit in seconds (default: 600); a running conversion or comparison finishes before stopping.')
+    parser.add_argument('--search-seconds', type=float, default=None, help='Time limit in seconds (default: 600, or 3600 with --high-effort); a running conversion or comparison finishes before stopping.')
     parser.add_argument('--optimizer', choices=('helpers', 'optuna', 'random'), default='helpers',
                         help='helpers: five fixed experiments; optuna: learn promising settings; random: comparison using the same settings.')
-    parser.add_argument('--seed', type=int, default=0, help='Random seed for parameter search (default: 0).')
     parser.add_argument('--regression-tolerance', type=float, default=0,
                         help='Allowed score loss in each voice, pair or section for parameter search (default: 0).')
     # Helpers retain their existing default; parameter search defaults to 40 trials.
@@ -103,6 +102,8 @@ def add_arguments(parser):
 def run_command(args):
     started = time.monotonic()
     try:
+        if args.search_seconds is None:
+            args.search_seconds = budgets.EFFORTS[args.effort]
         parameter_mode = args.optimizer != 'helpers'
         if args.candidate_cap is None:
             args.candidate_cap = 40 if parameter_mode else 12
