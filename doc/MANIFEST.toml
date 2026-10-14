@@ -26,6 +26,11 @@ category = "prose"
 note = "Front page. Points at doc/BUILD.md rather than repeating it; states no version."
 
 [[doc]]
+path = "tools/SID_RECONSTRUCTION.md"
+category = "prose"
+note = "sid2ct usage and limits; hand-maintained, checked against the sid2ct CLI by hand."
+
+[[doc]]
 path = "guide/README.md"
 category = "prose"
 note = """User guide, rendered through guide/index.md by .github/workflows/pages.yml.

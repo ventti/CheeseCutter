@@ -636,3 +636,24 @@ only shortlisted candidates receive full checks. Time is checked between
 operations, so a running conversion or comparison can exceed the budget.
 No early pruning is used: short-section quality does not reliably predict
 the rest of a song. Existing pitch, phase and native-table limits still apply.
+
+## Corpus, bench and semantic_if (tooling)
+
+Use these to measure converter changes. They are not part of conversion.
+
+Preconditions: HVSC checkout (`HVSC_ROOT`, default `../shallowsid/_hvsc-source`), built `ct2util`
+and `tools/sid_render`. Optional packages: `uv venv .venv && uv pip install -p .venv/bin/python -r tools/requirements-sid-search.txt`.
+
+- `python3 -m sid2ct corpus build` writes `tools/sid_corpus.toml`: the 7 evaluation songs plus up to 6
+  songs for each of Agemixer, PRI, Deetsay, Flex, Shogoon, Dane, Blues Muz, DRAX and Jammer.
+  Composers are found by the PSID author field, not by folder. Only single-SID, PAL-compatible PSIDs
+  that the converter accepts are used. STIL entries that mention digi/samples are left out
+  (`--llm` asks the local model to confirm). Seed 1, 70/30 dev/heldout split per composer.
+- `python3 -m sid2ct bench --split dev|heldout|all --label NAME` converts each song in parallel
+  (`--workers`, default half the cores; `--seconds 60` or `--full`; `--only GLOB`) into
+  `~/.cache/sid2ct/bench/<label>/<song>/` (log in `convert.log`) and records mix/voice scores,
+  wall time and git SHA in `~/.cache/sid2ct/bench.sqlite3`. It prints a table and the delta against the
+  last run labelled `baseline` (`--compare LABEL`). Each song has a 15 minute limit.
+- `tools/semantic_if.py` has `semantic_if(question, text)` (`yes`/`no`/`unknown`) and `semantic_choice`.
+  It calls the local ollama model `clef-flash:9b` (`/v1/systemone`), caches answers in
+  `~/.cache/sid2ct/llm.sqlite3`, and returns `unknown` if ollama is not running.

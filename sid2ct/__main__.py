@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 
-from . import compare, convert, search
+from . import bench, compare, convert, corpus, search
 from .audio import compare_wavs
 
 
@@ -15,6 +15,13 @@ def main(argv=None):
         ('convert', convert, 'Convert a SID file to an editable CheeseCutter song.'),
         ('search', search, 'Try different conversion methods, keep the best result and save each version.'),
         ('compare', compare, 'Compare the original song with converted versions, including each voice.'),
+    ):
+        command = commands.add_parser(name, help=help_text, description=help_text)
+        module.add_arguments(command)
+        command.set_defaults(handler=module.run_command)
+    for name, module, help_text in (
+        ('corpus', corpus, 'Build the fixed benchmark corpus from an HVSC checkout.'),
+        ('bench', bench, 'Convert the corpus songs and record scores to compare runs.'),
     ):
         command = commands.add_parser(name, help=help_text, description=help_text)
         module.add_arguments(command)

@@ -1,2 +1,7 @@
-# Optional dependency; normal conversion and helper search remain stdlib-only.
+# Optional dependencies; plain `convert` and the helper search remain stdlib-only.
+# Install into the repo venv: uv venv .venv && uv pip install -p .venv/bin/python -r tools/requirements-sid-search.txt
+numpy
+scipy
 optuna>=5.0,<6
+ortools
+scikit-learn
