@@ -9,7 +9,7 @@ import re
 import struct
 from dataclasses import dataclass
 
-from .hints import NoteHint, StructureHints, VoiceHints
+from .hints import NoteHint, SequenceInfo, StructureHints, VoiceHints, gate_rise_agreement
 from .sidid import identify, sid_payload
 
 
@@ -89,29 +89,176 @@ def _locate(mem, start, end):
     return None
 
 
-def extract(sid_bytes, subtune, frames, memtrace) -> StructureHints | None:
+def _tables(mem, start, end, layout):
+    """Resolve source table operands only at confirmed LDA ...,Y instructions."""
+    operands = {
+        'classic': {'wave': (0x59c, 0x5b9), 'filter_step': (0x3e7, 0x3ed)},
+        'a1': {'wave': (0x386, 0x390), 'pulse': (0x3c1, 0x3c7),
+               'filter': (0x3f0, 0x3f6)},
+        '95': {'wave': (0x658, 0x65f), 'pulse': (0x4d0, 0x4c6),
+               'filter': (0x496, 0x4a7)},
+    }[layout.kind]
+    tables = {}
+    for name, offsets in operands.items():
+        if any(mem[layout.base + offset - 1] != 0xb9 for offset in offsets):
+            continue
+        left, right = (int.from_bytes(mem[layout.base + offset:layout.base + offset + 2],
+                                      'little') for offset in offsets)
+        size = abs(right - left)
+        if 0 < size <= 256 and start <= min(left, right) and max(left, right) + size <= end:
+            tables[name] = {'address': left, 'right_address': right,
+                            'left': bytes(mem[left:left + size]),
+                            'right': bytes(mem[right:right + size])}
+    if layout.kind == 'classic':
+        singles = {}
+        for name, offset in (('pulse', 0x358), ('filter', 0x296)):
+            if mem[layout.base + offset - 1] == 0xb9:
+                address = int.from_bytes(mem[layout.base + offset:layout.base + offset + 2], 'little')
+                if start <= address < end:
+                    singles[name] = address
+        boundaries = sorted(set(singles.values()) | {a for t in tables.values()
+                            for a in (t['address'], t['right_address'])} | {end})
+        for name, address in singles.items():
+            limit = next(a for a in boundaries if a > address)
+            if limit - address <= 256:
+                tables[name] = {'address': address, 'raw': bytes(mem[address:limit])}
+    return tables
+
+
+def _sequence(mem, ptr, modern, marker, start, end):
+    """Skip command parameters when locating a pattern's end marker."""
+    offset = 0
+    terminator = 0xff if modern or marker == 0xfe else 0x7f
+    while offset < 256 and start <= ptr + offset < end:
+        value = mem[ptr + offset]
+        offset += 1
+        if value == terminator:
+            return SequenceInfo(ptr, offset)
+        if not modern and value in (marker, marker - 1):
+            continue
+        if modern and 0xef <= value <= 0xfd and value not in (0xf4, 0xf5):
+            offset += 3 if value == 0xfb else 2 if value == 0xfa else 1
+        elif not modern and 0xc0 <= value < (0xf0 if marker == 0x7e else 0x100):
+            offset += 1 if value & 0x10 else 2
+    raise _Invalid('Pattern does not terminate')
+
+
+def _wave_effects(hints, calls, kind):
+    """Execute the confirmed wave path; never select a row from SID output.
+
+    A missing expected read makes the wave state unknown until the next note.
+    The 95 body holds each row for the instrument's high-nibble wave speed.
+    """
+    table = hints.tables.get('wave')
+    if not table:
+        return
+    left, right = table['left'], table['right']
+    modern = kind != 'classic'
+    horizon = max(c.index for c in calls) + 1
+    reads = {c.index: c.reads for c in calls}
+    for vh in hints.voices:
+        source = {n.call: n for n in vh.notes}
+        instrument, note, pointer, gate, mask = 0, 0, None, False, True
+        result = []
+        speed = counter = 0
+        waveform = 0
+        first_read = False
+        for i in range(horizon):
+            event = source.get(i)
+            onset = False
+            if event:
+                if event.instrument is not None:
+                    instrument = event.instrument
+                if event.kind == 'note':
+                    note = event.note
+                    if not event.tie:
+                        raw = hints.instruments.get(instrument, {}).get('raw', ())
+                        pointer = raw[2 if modern else 9] if raw else None
+                        speed = raw[6] >> 4 if raw and kind == '95' else 0
+                        counter = speed
+                        first_read = modern
+                        mask = True
+                        onset = True
+                        if modern:
+                            gate = True  # source note writes gate+test for one call
+                elif event.command and event.command[0] in (0xf4, 0x7d, 0xfd):
+                    mask = not mask
+                    if pointer is None:
+                        # Unknown waveform cannot establish a gate attack.
+                        event = NoteHint(i, note, event.instrument, True,
+                                         event.command, 'effect')
+                    else:
+                        new_gate = mask and bool(waveform & 1)
+                        attack = new_gate and not gate
+                        event = NoteHint(i, note, event.instrument, not attack,
+                                         event.command, 'effect' if mask else 'gate_off')
+                    gate = bool(waveform & 1) and mask
+                result.append(event)
+            if pointer is None or modern and onset:
+                continue
+            # Modern note-init reads its first wave on the following call.
+            seen = set()
+            while 0 <= pointer < len(left) and pointer not in seen:
+                seen.add(pointer)
+                value = left[pointer]
+                if modern and not first_read and value == 0x90:
+                    pointer = right[pointer]
+                elif not modern and value >= 0x90:
+                    pointer = (pointer - (value - 0x90)) & 255
+                else:
+                    break
+            else:
+                pointer = None
+                continue
+            if not any(lo <= table['address'] + pointer <= hi
+                       for lo, hi in reads.get(i, ())):
+                pointer = None
+                continue
+            value = left[pointer]
+            waveform = value
+            first_read = False
+            new_gate = bool(value & 1) and mask
+            if new_gate != gate and not onset and not event:
+                result.append(NoteHint(i, note, instrument, not new_gate,
+                    ('wave', pointer, value, right[pointer]),
+                    'effect' if new_gate else 'gate_off'))
+            gate = new_gate
+            if kind == '95' and counter:
+                counter -= 1
+            else:
+                pointer = (pointer + 1) & 255
+                counter = speed
+        vh.notes = sorted(result, key=lambda n: n.call)
+
+
+def extract(sid_bytes, subtune, frames, memtrace, *, validate=True) -> StructureHints | None:
     """Recover rows, notes, order lists and raw instruments, or decline safely.
 
     Requires parsed ``memtrace.Call`` objects. Reads confirm each row, so init
     wrappers and startup delays need no emulation. Unknown or modified formats
-    return None instead of guessing. ``frames`` bounds the hint timeline; gate
-    rises are deliberately never used to select or discard source notes.
+    return None instead of guessing. The memory-read calls bound the timeline;
+    source notes are retained; table effects require source program reads.
+    ``validate=False`` skips the final SID gate-agreement acceptance check.
     """
     try:
         if not any('DMC' in name for name in identify(sid_bytes)):
             return None
         mem, start, end = _image(sid_bytes, subtune)
         layout = _locate(mem, start, end)
-        if layout is None or not frames or not memtrace:
+        if layout is None or not memtrace:
             return None
-        if len(memtrace) != len(frames) or any(c.index != i for i, c in enumerate(memtrace)):
+        if any(c.index != i for i, c in enumerate(memtrace)):
             return None
-        return _extract(mem, start, end, layout, subtune, frames, memtrace)
+        hints = _extract(mem, start, end, layout, subtune, memtrace)
+        if validate and hints is not None and (len(memtrace) != len(frames)
+                or gate_rise_agreement(hints, frames) < 0.98):
+            return None
+        return hints
     except (ValueError, IndexError, struct.error):
         return None
 
 
-def _extract(mem, start, end, layout, subtune, frames, calls):
+def _extract(mem, start, end, layout, subtune, calls):
     def byte(a):
         if not start <= a < end:
             raise _Invalid('Data outside loaded image')
@@ -124,7 +271,7 @@ def _extract(mem, start, end, layout, subtune, frames, calls):
     record = layout.orders + (subtune - 1) * (2 if layout.kind == '95' else 8)
     period = byte(record + 6) + 1
     hints = StructureHints('DMC', '5' if modern else '4' if layout.marker == 0x7e else None, tuple(VoiceHints() for _ in range(3)),
-                           tempo_calls=[period])
+                           tempo_calls=[period], tables=_tables(mem, start, end, layout))
     order_ptrs = [word(record + v * 2) for v in range(3)]
     states = []
     for voice, ptr in enumerate(order_ptrs):
@@ -158,11 +305,13 @@ def _extract(mem, start, end, layout, subtune, frames, calls):
         else:
             raise _Invalid('Order does not terminate')
         vh.orderlist = [(pat, trans) for _, pat, trans in entries]
+        for _, pat, _ in entries:
+            ptr = byte(layout.low + pat) | byte(layout.high + pat) << 8
+            vh.sequences[pat] = _sequence(mem, ptr, modern, layout.marker, start, end)
         states.append(dict(entries=entries, entry=0, offset=0, instrument=0, tie=False,
-                           last_note=0, seen=set(), loop_call=None, stopped=not entries))
-    gate_toggle = False
+                           last_note=0, duration=1, seen=set(), loop_call=None, stopped=not entries))
     for call in calls:
-        if not 0 <= call.index < len(frames):
+        if not 0 <= call.index < len(calls):
             raise _Invalid('Trace/frame mismatch')
         def read(a):
             return any(lo <= a <= hi for lo, hi in call.reads)
@@ -184,6 +333,7 @@ def _extract(mem, start, end, layout, subtune, frames, calls):
                     state['loop_call'] = call.index
                 state['seen'].add(state['entry'])
             note, command, instrument = None, None, None
+            toggle = False
             for _ in range(256):
                 address = ptr + offset
                 value = byte(address)
@@ -195,7 +345,9 @@ def _extract(mem, start, end, layout, subtune, frames, calls):
                         note = value
                         break
                     if value in (0xfe, 0xf4):
-                        gate_toggle |= value == 0xf4
+                        toggle = value == 0xf4
+                        if toggle:
+                            command = (value,)
                         break
                     if value == 0xf5:
                         state['tie'] = not state['tie']
@@ -214,21 +366,28 @@ def _extract(mem, start, end, layout, subtune, frames, calls):
                         if value == 0xfb:
                             note = params[1]
                         break
-                    elif value != 0xfd:
+                    elif value == 0xfd:
+                        state['duration'] = params[0] or 256
+                    else:
                         command = (value, *params)
                 else:
                     if layout.marker == 0x7e and value == 0x7c:
                         state['tie'] = not state['tie']
                         continue
                     if value in (layout.marker, layout.marker - 1):
-                        gate_toggle |= value == layout.marker - 1
+                        toggle = value == layout.marker - 1
+                        if toggle:
+                            command = (value,)
                         break
                     if value < 0x60:
                         note = value
                         break
                     if value < 0x80:
                         state['instrument'] = instrument = value & 31
-                    elif value < 0xc0 or (layout.marker == 0x7e and value >= 0xf0):
+                    elif value < 0xc0:
+                        state['duration'] = (value & 63) or 256
+                    elif layout.marker == 0x7e and value >= 0xf0:
+                        command = (value,)
                         continue
                     else:
                         count = 1 if value & 0x10 else 2
@@ -242,15 +401,21 @@ def _extract(mem, start, end, layout, subtune, frames, calls):
                         break
             else:
                 raise _Invalid('Pattern has no row')
+            vh.row_durations.append(state['duration'] * period)
             if note is not None:
                 state['last_note'] = (note + trans) & 255
                 sounding = call.index + (0 if modern else 1)
-                if sounding < len(frames):
+                if sounding < len(calls):
                     vh.notes.append(NoteHint(sounding, state['last_note'], instrument,
                                              state['tie'], command))
                 inst = state['instrument']
                 addr = layout.instruments + ((inst * layout.stride) & 255)
                 hints.instruments[inst] = {'raw': tuple(byte(addr + n) for n in range(layout.stride))}
+            else:
+                sounding = call.index + (0 if modern else 1)
+                if sounding < len(calls):
+                    vh.notes.append(NoteHint(sounding, state['last_note'], instrument,
+                                             True, command, 'effect' if command else 'rest'))
             marker = 0xff if modern or layout.marker == 0xfe else 0x7f
             if byte(ptr + offset) == marker:
                 offset = 0
@@ -272,7 +437,7 @@ def _extract(mem, start, end, layout, subtune, frames, calls):
             raise _Invalid('Row reads disagree with source tempo')
     if not modern:
         hints.warnings.append('row_calls are data-fetch calls; classic note attacks follow one call later.')
-    hints.warnings.append('StructureHints has no rest or effect-only event field; these rows retain boundaries only.')
-    if gate_toggle:
-        hints.warnings.append('Gate-toggle rows have no separate field in StructureHints; their row boundaries are retained.')
+    _wave_effects(hints, calls, layout.kind)
+    first_row = min((v.row_calls[0] for v in hints.voices if v.row_calls), default=0)
+    hints.speed_commands = [(first_row, period)]
     return hints
