@@ -875,7 +875,7 @@ def _native_song(template, frames, multiplier, row_frames, metadata, frequencies
     return b'CC2'+zlib.compress(data),report
 
 
-def native_song(template, frames, multiplier, row_frames, metadata, frequencies=None, output_multiplier=1, loop_start=None, pitch_programs="attack", modulation_programs="legacy", coupled_programs="legacy", instrument_allocation="legacy", change_points=False, pattern_mining=False, joint_modeling=False, layout="chunks", effect_programs="off", solve_time_limit=20.0, structure_hints=None, hint_scale=1.0, effect_tolerance=12.0, solve_params=None):
+def native_song(template, frames, multiplier, row_frames, metadata, frequencies=None, output_multiplier=1, loop_start=None, pitch_programs="attack", modulation_programs="legacy", coupled_programs="legacy", instrument_allocation="legacy", change_points=False, pattern_mining=False, joint_modeling=False, layout="chunks", effect_programs="off", solve_time_limit=20.0, structure_hints=None, hint_scale=1.0, effect_tolerance=12.0, solve_params=None, alternate=False):
     """Build a native CC2 song; returns (bytes, report).
 
     effect_programs "off" is the original mapper. "on" fits slide, vibrato,
@@ -884,6 +884,10 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
     filter only when it plays the source's filter registers closer than the
     per-instrument filter programs (register distance on cutoff, resolution,
     mode and routing through the exact CT player model).
+
+    With `alternate`, the report carries the filter variant that was not chosen as
+    report['_alternate'] = (bytes, report), for a caller that can judge both by audio
+    (the register distance that picks between them does not always agree with the ear).
     """
     options = dict(frequencies=frequencies, output_multiplier=output_multiplier, loop_start=loop_start,
                    pitch_programs=pitch_programs, modulation_programs=modulation_programs,
@@ -920,6 +924,10 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
         return filter_distance(source, played, output_multiplier)
     before, after = distance(instrument_song), distance(global_song)
     chosen, report = (global_song, global_report) if after < before else (instrument_song, instrument_report)
+    other = (instrument_song, instrument_report) if chosen is global_song else (global_song, global_report)
     report['effects']['filter_distance'] = dict(instrument=round(before, 6), global_plan=round(after, 6),
                                                 chosen='global' if chosen is global_song else 'instrument')
+    if alternate:
+        other[1]['effects']['filter_distance'] = report['effects']['filter_distance']
+        report['_alternate'] = other
     return chosen, report

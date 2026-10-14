@@ -81,6 +81,8 @@ class Solution:
     bound: float = 0.0
     hint_cost: float = 0.0
     commands: int = 0
+    deterministic: float = 0.0   # CP-SAT deterministic time used
+    wall: float = 0.0            # CP-SAT wall time used
 
 
 def table_usage(signatures):
@@ -187,9 +189,11 @@ def solve_model(problem, time_limit=20.0, *, workers=8, seed=0, gap=0.0, fix=Non
                 m.AddHint(x, int(k == oi))
     solver = cp_model.CpSolver()
     budget.check()
-    # Stop on deterministic time so the result does not depend on machine load; wall time is only a backstop.
+    # Stop on deterministic time only, so the result does not depend on machine load or on how long the model took
+    # to build. Wall time is a safety backstop tied to the conversion budget, never a normal stopping rule.
     solver.parameters.max_deterministic_time = max(0.5, time_limit)
-    solver.parameters.max_time_in_seconds = max(0.5, min(4 * time_limit, budget.remaining()))
+    left = budget.remaining()
+    solver.parameters.max_time_in_seconds = max(0.5, left if left != float('inf') else 20 * time_limit)
     solver.parameters.num_search_workers = workers
     if workers > 1:
         solver.parameters.interleave_search = True    # reproducible multi-worker search
@@ -209,7 +213,8 @@ def solve_model(problem, time_limit=20.0, *, workers=8, seed=0, gap=0.0, fix=Non
     used_commands = {p.options[vi][oi].command for vi, oi in pick.items()
                      if p.options[vi][oi].command is not None and p.options[vi][oi].command not in p.free_commands}
     return Solution(name, cost, chosen_set, pick, seconds, solver.BestObjectiveBound() / SCALE,
-                    solver.ObjectiveValue() / SCALE - cost, len(used_commands))
+                    solver.ObjectiveValue() / SCALE - cost, len(used_commands),
+                    solver.deterministic_time, solver.wall_time)
 
 
 # ---------------------------------------------------------------------------
@@ -684,8 +689,7 @@ def allocate(events, stops, plans, *, frames, usage, step, effects, make_image, 
             alt = solve_model(problem, 10.0, workers=workers, fix=keep)
             report['compare'][label] = round(alt.objective, 3) if alt else None
     budget.check()
-    remaining = max(1.0, time_limit - built)
-    solution = solve_model(problem, remaining, workers=workers)
+    solution = solve_model(problem, time_limit, workers=workers)
     if compare_warm and warm_selection:
         base = solve_model(problem, 10.0, workers=workers, fix=problem.warm['chosen'])
         report['warm_objective'] = round(base.objective, 3) if base else None
@@ -704,7 +708,8 @@ def allocate(events, stops, plans, *, frames, usage, step, effects, make_image, 
             assignment[sig] = (min(same, key=lambda s: (trajectory_distance(sig, s, coupled=sig in coupled_signatures), s)),
                                None, False)
     report.update(status=solution.status, objective=round(solution.objective, 3), bound=round(solution.bound, 3),
-                  solver_seconds=round(solution.seconds, 2), selected=len(selected),
+                  solver_seconds=round(solution.seconds, 2), solver_wall=round(solution.wall, 2),
+                  solver_deterministic=round(solution.deterministic, 2), selected=len(selected),
                   hint_cost=round(solution.hint_cost, 3), repair_commands=solution.commands,
                   seconds=round(time.monotonic() - started, 2))
     return selected, assignment, report

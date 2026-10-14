@@ -17,7 +17,7 @@ import time
 
 from .coupling import analyze as analyze_coupling
 from .audio import analysis_workers
-from .budget import Budget, effort_seconds, DIAGNOSTICS_SHARE
+from .budget import Budget, effort_seconds, diagnostics_reserve, DIAGNOSTICS_MARGIN
 from . import portfolio
 from .memory import Memory, capture_key, player_family, song_key
 from .native import dmc_tuning, indexed_tuning
@@ -307,11 +307,24 @@ def add_arguments(parser):
     parser.add_argument('--skip-diagnostics', action='store_true', help='Compare only the combined sound; skip individual voices and short sections.')
 
 
+def remember_best(memory, song, family, chosen, multiplier):
+    """Record the searched candidate in the memory database.
+
+    A polished result is stored as its pre-polish candidate with the pre-polish scores: the parameters rebuild
+    that CT, not the polished one, so a polished score next to them would promise more than they deliver.
+    """
+    from .tuner import params_from_options
+    searched = chosen.get('pre_polish') or chosen
+    if searched['options']['profile'] == 'dynamic' and searched.get('audio') and memory.enabled:
+        audio = searched['audio']
+        memory.record_best(song, family, searched['name'], params_from_options(searched['options'], multiplier),
+                           audio.get('score_v1'), audio.get('score_v2'))
+
+
 def convert_search(args, ctx, *, temp, raw_sid, frames, loop, hints, metadata, coupling, budget, memory,
                    song, family, workers, effort):
     """Build the candidate portfolio (sid2ct.flow) and return the chosen one: report, CT and WAV paths, audio."""
     from . import flow
-    from .tuner import params_from_options
     skip = args.skip_audio
     profiles = ['static', 'dynamic'] if args.sound_programs == 'auto' and not skip else [
         'dynamic' if args.sound_programs == 'auto' else args.sound_programs]
@@ -331,8 +344,9 @@ def convert_search(args, ctx, *, temp, raw_sid, frames, loop, hints, metadata, c
             ctx.tunings['source'] = (recovered, 'dmc4' if anchored else 'indexed-source')
     axes = flow.build_axes(args, multiplier=args.multiplier, coupling=coupling, recovered=recovered,
                            anchored=bool(anchored), profiles=profiles)
-    share = 0.03 if skip or args.skip_diagnostics else DIAGNOSTICS_SHARE
-    search_budget = budget.child(reserve=budget.total*share)
+    reserve = (0.03 * budget.total if skip or args.skip_diagnostics
+               else diagnostics_reserve(budget.total, ctx.audio_duration))
+    search_budget = budget.child(reserve=reserve)
     results, pick, guard, notes = flow.search(args, ctx, axes=axes, profiles=profiles, budget=budget,
                                               search_budget=search_budget, workers=workers or analysis_workers(),
                                               effort=effort, memory=memory, family=family, song=song)
@@ -351,10 +365,7 @@ def convert_search(args, ctx, *, temp, raw_sid, frames, loop, hints, metadata, c
         report['warnings'].append('The time budget ended before every candidate was built; the best finished candidate was kept.')
     info = dict(selected=chosen['name'], selection=guard, candidates=len(results),
                 worker_seconds=flow.aggregate_worker_seconds(results), **notes)
-    if chosen['options']['profile'] == 'dynamic' and chosen.get('audio') and memory.enabled:
-        audio = chosen['audio']
-        memory.record_best(song, family, chosen['name'], params_from_options(chosen['options'], args.multiplier),
-                           audio.get('score_v1'), audio.get('score_v2'))
+    remember_best(memory, song, family, chosen, args.multiplier)
     return dict(report=report, ct_path=chosen['ct_path'], audio=chosen.get('audio'), wav_path=chosen.get('wav_path'),
                 recovered=recovered, info=info)
 
@@ -379,6 +390,7 @@ def run_command(args):
     source_wav = args.output.with_suffix('.source.wav')
     converted_wav = args.output.with_suffix('.reconstructed.wav')
     diagnostics_path = args.output.with_suffix('.comparison')
+    memory = None       # opened inside the conversion; closed in `finally` whatever happens
     try:
         if not math.isfinite(getattr(args,'v1_tolerance',.01)) or not 0 <= getattr(args,'v1_tolerance',.01) <= 1:
             raise ValueError('V1 tolerance must be in [0,1].')
@@ -558,7 +570,12 @@ def run_command(args):
                     'An exact result applies only to this interval, subtune and renderer settings. '
                     'Alignment searches up to 250 ms on a 10 ms grid. '
                     'The source WAV honors actual SID timers; trace timing uses inferred CIA/VBI rate or the explicit --multiplier override.')
-            if not args.skip_audio and not args.skip_diagnostics:
+            diagnostics_done = not args.skip_audio and not args.skip_diagnostics
+            if diagnostics_done and budget.remaining() <= 2 * DIAGNOSTICS_MARGIN * budget.total:
+                diagnostics_done = False    # no time left: skip up front instead of starting and discarding them
+                report['warnings'].append('The time budget ended before the voice and window diagnostics; they were skipped.')
+                report['diagnostics_skipped'] = 'time budget'
+            if diagnostics_done:
                 from . import compare
                 diagnostic_temp = temp/'diagnostics'
                 diagnostic_args = Namespace(source=args.sid, reconstruction=ct, candidate=[],
@@ -567,17 +584,25 @@ def run_command(args):
                     sid_model=model, multiplier=requested_multiplier, row_frames=report.get('row_frames', args.row_frames or 6),
                     auto_row_frames=False, selection_seconds=audio_duration,
                     score=getattr(args,"score","v2"), v1_tolerance=getattr(args,"v1_tolerance",.01),
-                    renderer=args.renderer, tool=args.tool)
-                with budget.stage('diagnostics'):
-                    failed = compare.run_command(diagnostic_args,print_report=False)
+                    renderer=args.renderer, tool=args.tool,
+                    deadline=time.monotonic() + max(0.0, budget.remaining() - DIAGNOSTICS_MARGIN * budget.total))   # inside the budget
+                try:
+                    with budget.stage('diagnostics'):
+                        failed = compare.run_command(diagnostic_args,print_report=False)
+                except compare.DeadlineExceeded:
+                    failed = False
+                    diagnostics_done = False
+                    report['warnings'].append('The time budget ended during the voice and window diagnostics; they were skipped.')
+                    report['diagnostics_skipped'] = 'time budget'
                 if failed:
                     raise ValueError('Voice/window validation failed.')
-                diagnostic_report = json.loads((diagnostic_temp/'report.json').read_text())
-                diagnostic_report = compare.published_paths(diagnostic_report,diagnostic_temp,diagnostics_path)
-                diagnostic_report['candidates']['reconstruction']['input'] = str(args.output.resolve())
-                (diagnostic_temp/'report.json').write_text(json.dumps(diagnostic_report,indent=2)+'\n')
-                report['diagnostics'] = diagnostic_report
-                report['diagnostics_report'] = str((diagnostics_path/'report.json').resolve())
+                if diagnostics_done:
+                    diagnostic_report = json.loads((diagnostic_temp/'report.json').read_text())
+                    diagnostic_report = compare.published_paths(diagnostic_report,diagnostic_temp,diagnostics_path)
+                    diagnostic_report['candidates']['reconstruction']['input'] = str(args.output.resolve())
+                    (diagnostic_temp/'report.json').write_text(json.dumps(diagnostic_report,indent=2)+'\n')
+                    report['diagnostics'] = diagnostic_report
+                    report['diagnostics_report'] = str((diagnostics_path/'report.json').resolve())
             report['score_selection'] = getattr(args,'score','v2')
             report['v1_tolerance'] = getattr(args,'v1_tolerance',.01)
             report['analysis_workers'] = analysis_workers()
@@ -593,14 +618,14 @@ def run_command(args):
             if not args.skip_audio and not args.skip_diagnostics:
                 if diagnostics_path.exists():
                     import shutil
-                    shutil.rmtree(diagnostics_path)
-                diagnostic_temp.rename(diagnostics_path)
+                    shutil.rmtree(diagnostics_path)      # a stale report of an earlier run must not outlive this one
+                if diagnostics_done:
+                    diagnostic_temp.rename(diagnostics_path)
             args.output.write_bytes(ct.read_bytes())
             report_path.write_text(report_text)
             if not args.skip_audio:
                 source_wav.write_bytes(audio_source.read_bytes())
                 converted_wav.write_bytes((temp/'best.wav').read_bytes())
-        memory.close()
         print(f'{args.output}: {report["mode"]} ({report["elapsed_seconds"]:.3f}s)')
         if loop and loop['detected']:
             print(f'Loop: {loop["start_seconds"]:.3f}s → {loop["end_seconds"]:.3f}s; full player-state recurrence')
@@ -619,3 +644,6 @@ def run_command(args):
     except (ValueError, OSError, subprocess.TimeoutExpired) as error:
         print(f'error: {error}')
         return 1
+    finally:
+        if memory is not None:
+            memory.close()

@@ -180,6 +180,10 @@ Stages (each one is timed in `effort.stage_seconds` of the report):
 1. **capture**: trace and loop detection (reused from memory when the same song was seen).
 2. **candidates**: the static bridge plus the base settings crossed with effects x allocation,
    built and scored in parallel. The first dynamic candidate always finishes, so an output exists.
+   An effects-on candidate has two variants (per-instrument or global filter programme). The
+   mapper picks one by filter register distance, which can disagree with the ear, so this stage
+   renders both and keeps the one with the better v2 (v1 within 0.01); `effects.filter_selection`
+   says `audio` then. Later search trials use the mapper's own pick.
 3. **search**: an Optuna study (TPE, seeded with `--seed`) over row grid, sound rate, tuning,
    pitch, modulation and coupled programs, effect tolerance and the solver weights
    (envelope, loudness, AD/SR repair cost). Trials run in batches of 8. Each trial is first
@@ -191,7 +195,9 @@ Stages (each one is timed in `effort.stage_seconds` of the report):
    the best v1 any candidate reached. The best v1 (not the first candidate) is the guard
    reference, so a v2 gain cannot hide a larger v1 loss. Ties go to the earlier candidate.
 5. **polish**: local coordinate descent on the selected CT (see below).
-6. **diagnostics**: voice and window comparison of the chosen CT (12% of the budget is kept for it).
+6. **diagnostics**: voice and window comparison of the chosen CT. The search keeps back 0.24 s per second of audio compared (10 s at least, at most 12% of the budget)
+   plus a 2% margin, and the stage checks the budget between renders and windows: if the budget ends first, the diagnostics are skipped
+   (`diagnostics_skipped` and a warning in the report) instead of running past the budget.
 
 Effort: one wall-clock budget covers all stages and is checked inside the inner loops (note
 fitting, solver pricing, audio alignment). `--effort default` is about 10 minutes for a full
@@ -200,7 +206,8 @@ overrides both and `--max-trials N` caps the search (0 skips it). When the budge
 finished candidate is written.
 
 Parallelism: `--workers N` (default all cores) sets how many cores one conversion uses.
-Each CP-SAT solve uses a fixed 2 threads and stops on deterministic time, so up to
+Each CP-SAT solve uses a fixed 2 threads and stops on deterministic time only (the limit is not reduced by
+the model build time; wall time is just a backstop at the end of the budget), so up to
 `min(8, N // 2)` candidates run at once in separate processes. The output does not depend on N
 (stable order, fixed batch size, fixed seed, fixed solver threads), except where the time budget
 stops a run early.
@@ -226,8 +233,11 @@ without audio, one whose `regdist` is over 2% worse is dropped, the rest is rend
 batches of 8 (fixed, so the result does not depend on `--workers`) against the current best; the largest strict
 v2 gain whose v1 stays within `--v1-tolerance` of the best v1 is accepted, ties go to the earlier edit,
 and the other gains are tried again against the new state. Default effort makes up to 2 passes of 160 edits;
-`--high-effort` up to 6 passes of 2000. The search leaves 15% of its time for the polish and it also uses any
-time the search did not need. `effort.polish` in the report has the edits tried, skipped and accepted, the first
+`--high-effort` up to 6 passes of 2000. The search leaves 8% of its time (at least 20 s) for the polish and the polish also uses any
+time the search did not need; it stops as soon as a full pass accepts no edit. The polished result's report
+keeps the mapper fields (table sizes do not change) and adds a `polish` entry with the pre-polish v1/v2, the
+after values and the gain; `audio_validation` is the polished file. The memory database stores the
+pre-polish candidate with its own scores. `effort.polish` in the report has the edits tried, skipped and accepted, the first
 accepted edit names and v2/v1 before and after; a polished result is listed as `<name>+polish`.
 
 Memory (`~/.cache/sid2ct/memory.sqlite3`, or `$SID2CT_CACHE/memory.sqlite3`): per song it keeps

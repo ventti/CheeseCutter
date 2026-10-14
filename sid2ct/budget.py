@@ -15,7 +15,10 @@ import time
 EFFORTS = {'default': 600.0, 'high': 3600.0}
 REFERENCE_SECONDS = 300.0       # a song at least this long gets the whole effort budget
 MINIMUM_SHARE = 0.5             # a short capture still gets this share: solver and effect fitting costs do not shrink with it
-DIAGNOSTICS_SHARE = 0.12        # reserved for the voice and window diagnostics and writing outputs
+DIAGNOSTICS_SHARE = 0.12        # most of the budget reserved for the voice and window diagnostics and writing outputs
+DIAGNOSTICS_MARGIN = 0.02       # share of the budget left unused at the end: diagnostics are cut off this early
+DIAGNOSTICS_PER_SECOND = 0.24   # reserved diagnostics seconds per second of audio compared (measured: about 0.2)
+DIAGNOSTICS_FLOOR = 10.0        # seconds reserved at least
 
 
 class BudgetExpired(Exception):
@@ -68,6 +71,12 @@ class Budget:
     def report(self):
         return dict(total_seconds=round(self.total, 1), elapsed_seconds=round(self.elapsed(), 1),
                     stage_seconds={k: round(v, 2) for k, v in self.stages.items()})
+
+
+def diagnostics_reserve(total, audio_seconds):
+    """Seconds of the budget kept for the diagnostics: proportional to the audio they compare, never over the share."""
+    wanted = DIAGNOSTICS_FLOOR + DIAGNOSTICS_PER_SECOND * audio_seconds
+    return min(DIAGNOSTICS_SHARE * total, wanted) + DIAGNOSTICS_MARGIN * total
 
 
 def effort_seconds(effort, duration=None):

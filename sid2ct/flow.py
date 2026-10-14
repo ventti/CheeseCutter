@@ -11,6 +11,7 @@
 Everything runs under one `Budget`; the first dynamic candidate is shielded, so an output exists
 whatever the budget says.
 """
+import copy
 from pathlib import Path
 
 from . import polish as polishing, portfolio, surrogate as surrogates, tuner
@@ -19,7 +20,8 @@ DEFAULT_SOLVE_LIMIT = {'default': 20.0, 'high': 60.0}
 SEARCH_SHARE = 0.15       # one candidate's solver may use this share of the remaining time
 NEIGHBOURS = 6            # one-change neighbours of the best first-stage candidate that Optuna tries first
 TRIAL_CAP = 400
-POLISH_SHARE = 0.15       # of the search budget, kept for the local polish after the search
+POLISH_SHARE = 0.08       # of the search budget, kept for the local polish after the search
+POLISH_MIN_SECONDS = 20.0 # ... but at least this much; the tuner's unused time goes to the polish as well
 
 
 def _numpy():
@@ -36,6 +38,30 @@ def _ortools():
     except ImportError:
         return False
     return True
+
+
+def polish_reserve(total):
+    """Seconds of the search budget kept back from the tuner for the polish (the tuner's leftovers add to it)."""
+    return min(0.5 * total, max(POLISH_MIN_SECONDS, POLISH_SHARE * total))
+
+
+def polished_report(chosen, stats):
+    """The mapper report of the chosen candidate, made to describe the polished file.
+
+    Polish edits change table values only (ADSR, pulse, filter, command and wave rows), never table sizes,
+    so the layout fields stay true; the scores are replaced by the caller with the polished audio. The
+    `polish` entry records what changed and the pre-polish scores.
+    """
+    report = copy.deepcopy(chosen['report'])
+    before = chosen.get('audio') or {}
+    report['polish'] = dict(applied=True, candidate=chosen['name'], accepted_edits=stats['accepted'],
+                            edit_names=stats['accepted_edits'], passes=stats['passes'], stopped=stats['stopped'],
+                            pre_polish_score_v1=before.get('score_v1'), pre_polish_score_v2=before.get('score_v2'),
+                            v1_after=stats.get('v1_after'), v2_after=stats.get('v2_after'),
+                            v2_gain=stats.get('v2_gain'), seconds=stats['seconds'],
+                            note='Mapper fields (tables, effects, allocation) describe the CT before polish; '
+                                 'polish changes table values, not table sizes. audio_validation is the polished file.')
+    return report
 
 
 def build_axes(args, *, multiplier, coupling, recovered, anchored, profiles):
@@ -98,7 +124,8 @@ def search(args, ctx, *, axes, profiles, budget, search_budget, workers, effort,
     strict = len(options) == 1
     limit = solve_limit_for(args, effort, search_budget)
     tasks = [portfolio.make_task(portfolio.label(o), o, solve_limit=limit,
-                                 shield=(o['profile'] == 'static' or i == first_dynamic), strict=strict)
+                                 shield=(o['profile'] == 'static' or i == first_dynamic), strict=strict,
+                                 alternate=o['profile'] == 'dynamic' and o['effect'] == 'on')
              for i, o in enumerate(options)]
     runner = portfolio.Runner(ctx, workers, budget)
     notes = {}
@@ -123,7 +150,8 @@ def search(args, ctx, *, axes, profiles, budget, search_budget, workers, effort,
                     first.append(result)
         base_options = portfolio.base_options(axes, layout)
         polishing_on = (getattr(args, 'polish', True) and dynamic and not ctx.skip_audio and polishing.available())
-        tuner_budget = search_budget.child(reserve=POLISH_SHARE * search_budget.total) if polishing_on else search_budget
+        tuner_budget = (search_budget.child(reserve=polish_reserve(search_budget.total)) if polishing_on
+                        else search_budget)
         trial_cap = TRIAL_CAP if getattr(args, 'max_trials', None) is None else max(0, args.max_trials)
         if not ctx.skip_audio and dynamic and free_knobs(axes) and trial_cap and not search_budget.expired():
             scored = [r for r in first if r.get('audio') and r['options']['profile'] == 'dynamic']
@@ -177,6 +205,9 @@ def search(args, ctx, *, axes, profiles, budget, search_budget, workers, effort,
                 if found:
                     results.append(dict(chosen, name=chosen['name'] + '+polish', stage='polish', audio=found['audio'],
                                         ct_path=found['ct_path'], wav_path=found['wav_path'], regdist=None,
+                                        report=polished_report(chosen, stats),
+                                        pre_polish=dict(name=chosen['name'], audio=chosen['audio'],
+                                                        options=chosen['options']),
                                         wall_seconds=stats['seconds']))
                     pick = len(results) - 1
     finally:

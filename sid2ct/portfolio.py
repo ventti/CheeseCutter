@@ -97,7 +97,7 @@ def assess_file(ctx, candidate, out_subtune, directory):
     return assessment, wav
 
 
-def build(ctx, opts, directory, solve_limit):
+def build(ctx, opts, directory, solve_limit, alternate=False):
     """The candidate's CC2 bytes and mapper report."""
     from . import convert
     if opts['profile'] == 'dynamic':
@@ -110,7 +110,7 @@ def build(ctx, opts, directory, solve_limit):
             change_points=ctx.change_points, pattern_mining=ctx.pattern_mining, joint_modeling=ctx.joint_modeling,
             layout=opts['layout'], effect_programs=opts['effect'], solve_time_limit=solve_limit,
             structure_hints=ctx.hints, hint_scale=ctx.hint_scale, effect_tolerance=opts['effect_tolerance'],
-            solve_params=opts['solve_params'])
+            solve_params=opts['solve_params'], alternate=alternate)
         report['tuning'] = tuning_name
         report['instrument_allocation'] = opts['allocation']
         if tuning_name == 'dmc4':
@@ -169,7 +169,9 @@ def _evaluate(ctx, task, stages):
     opts = task['opts']
     clock = time.monotonic
     began = clock()
-    data, report = build(ctx, opts, directory, task['solve_limit'])
+    extra = dict(alternate=True) if task.get('alternate') and not ctx.skip_audio else {}
+    data, report = build(ctx, opts, directory, task['solve_limit'], **extra)
+    other = report.pop('_alternate', None)
     stages['build'] = clock() - began
     candidate = directory/'candidate.ct'
     candidate.write_bytes(data)
@@ -191,8 +193,44 @@ def _evaluate(ctx, task, stages):
         began = clock()
         out['audio'], wav = assess_file(ctx, candidate, 1, directory)
         out['wav_path'] = str(wav)
+        if other is not None:
+            _prefer_by_audio(ctx, out, other, directory, opts)
         stages['audio'] = clock() - began
     return out
+
+
+def _prefer_by_audio(ctx, out, other, directory, opts):
+    """Judge the two filter variants of an effects candidate by audio; `out` becomes the better one.
+
+    The register distance that picks the variant inside the mapper can disagree with the ear, so the first
+    stage scores both. The alternate must beat v2 and keep v1 within the usual tolerance.
+    """
+    data, report = other
+    folder = Path(directory)/'alternate'
+    folder.mkdir(exist_ok=True)
+    candidate = folder/'candidate.ct'
+    candidate.write_bytes(data)
+    report['subtune'] = ctx.subtune
+    try:
+        audio, wav = assess_file(ctx, candidate, 1, folder)
+    except budgets.BudgetExpired:
+        raise
+    except Exception as error:  # keep the mapper's own pick; the alternate is only a second opinion
+        out['report'].setdefault('effects', {})['filter_selection'] = f'register ({type(error).__name__})'
+        return
+    mine, theirs = out['audio'], audio
+    v1_mine, v1_theirs = mine.get('score_v1'), theirs.get('score_v1')
+    better = (score_value(theirs, 'v2') or 0.0) > (score_value(mine, 'v2') or 0.0)
+    guarded = v1_mine is None or v1_theirs is None or v1_theirs >= v1_mine - 0.01
+    out['report'].setdefault('effects', {})['filter_selection'] = 'audio'
+    if better and guarded:
+        chosen = report['effects']['filter_distance']['chosen']
+        report['effects']['filter_distance'] = dict(report['effects']['filter_distance'],
+                                                    chosen='instrument' if chosen == 'global' else 'global')
+        report['effects']['filter_selection'] = 'audio'
+        parts = register_parts(ctx, data, opts)
+        out.update(report=report, ct_path=str(candidate), audio=audio, wav_path=str(wav),
+                   regdist=None if parts is None else parts['total'], regdist_parts=parts)
 
 
 def run_task(task):
@@ -300,10 +338,11 @@ class Runner:
         pool.shutdown(wait=not kill, cancel_futures=True)
 
 
-def make_task(name, opts, *, solve_limit, shield=False, prune_above=None, strict=False, prune_rule=None, params=None):
+def make_task(name, opts, *, solve_limit, shield=False, prune_above=None, strict=False, prune_rule=None, params=None,
+              alternate=False):
     """One candidate to build. `prune_rule` (surrogate) or `prune_above` (register distance) may skip its audio."""
     return dict(name=name, opts=opts, solve_limit=solve_limit, shield=shield, prune_above=prune_above, strict=strict,
-                prune_rule=prune_rule, params=params)
+                prune_rule=prune_rule, params=params, alternate=alternate)
 
 
 # Option sets ---------------------------------------------------------------

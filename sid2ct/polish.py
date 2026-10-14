@@ -234,6 +234,7 @@ def evaluate(ctx, task, stages):
     if digest not in _BASE:
         _BASE.clear()
         _BASE[digest] = played_frames(ctx, base, rate)[1]
+    budgets.check()
     image = bytearray(base)
     for address, value in task['edit'].writes:
         image[address] = value
@@ -249,6 +250,7 @@ def evaluate(ctx, task, stages):
     directory.mkdir(parents=True, exist_ok=True)
     candidate = directory/'candidate.ct'
     candidate.write_bytes(_rebuild(head, image))
+    budgets.check()
     began = clock()
     out['audio'], wav = assess_file(ctx, candidate, 1, directory)
     out['ct_path'], out['wav_path'] = str(candidate), str(wav)

@@ -50,10 +50,12 @@ def source_multiplier(renderer_info, trace_info=None):
     return multiplier
 
 
-def window_comparisons(a,b,temp,seconds,window_seconds,alignment):
+def window_comparisons(a,b,temp,seconds,window_seconds,alignment,check=None):
     windows = []
     start = 0.0
     while start < seconds-.000001:
+        if check is not None:
+            check()
         stop = min(seconds,start+window_seconds)
         x,y = temp/'excerpt-source.wav',temp/'excerpt-candidate.wav'
         excerpt(a,x,start,stop);excerpt(b,y,start,stop)
@@ -135,8 +137,17 @@ def add_arguments(parser):
     parser.add_argument('--tool', type=Path, default=ROOT/'ct2util', help='Path to the ct2util program.')
 
 
+class DeadlineExceeded(Exception):
+    """The caller's deadline (`args.deadline`, a time.monotonic() value) passed before the comparison finished."""
+
+
 def run_command(args, *, print_report=True):
     started = time.monotonic()
+    deadline = getattr(args, 'deadline', None)
+
+    def check_deadline():
+        if deadline is not None and time.monotonic() > deadline:
+            raise DeadlineExceeded('diagnostics deadline passed')
     workers = getattr(args, "workers", None)
     if workers is not None:
         if workers < 1:
@@ -240,6 +251,7 @@ def run_command(args, *, print_report=True):
             clipped = {}
             # Render independent SID/voice jobs concurrently. Each helper has
             # its own player instance and writes a distinct WAV.
+            check_deadline()
             with ThreadPoolExecutor(max_workers=analysis_workers()) as executor:
                 jobs = []
                 for label,(sid,subtune) in sources.items():
@@ -251,6 +263,7 @@ def run_command(args, *, print_report=True):
                         jobs.append((f'{label}.{mode}', future))
                 for key,future in jobs:
                     infos[key] = future.result()
+            check_deadline()
             for label in sources:
                 for voice in (1,2,3):
                     clipped[f'{label}.voice{voice}'] = subtract_background(
@@ -279,18 +292,20 @@ def run_command(args, *, print_report=True):
                               'Conversion integrates per-call CIA timer latches for CIA-timed PSIDs, then resamples to a supported PAL multiplier. Intra-call timer control and SID writes remain approximate.',
                           ],candidates={})
             for label,path in candidates.items():
+                check_deadline()
                 source_mix, candidate_mix = temp/'source.mix.wav',temp/f'{label}.mix.wav'
                 mixed = compare_wavs(source_mix,candidate_mix)
                 alignment = mixed['alignment_ms']
                 entry = dict(input=str((args.output/path.name).resolve()) if automatic else str(path),mix=mixed,voices={})
-                entry['mix_windows'] = window_comparisons(source_mix,candidate_mix,temp,args.seconds,args.window_seconds,alignment)
+                entry['mix_windows'] = window_comparisons(source_mix,candidate_mix,temp,args.seconds,args.window_seconds,alignment,check_deadline)
                 mix_valid = [w for w in entry['mix_windows'] if w['audio']['similarity'] is not None]
                 entry['worst_mix_window'] = min(mix_valid,key=lambda w:score_value(w['audio'],getattr(args,'score','v2'))) if mix_valid else None
                 for mode,mask in modes[1:4]:
+                    check_deadline()
                     a,b = temp/f'source.{mode}.contribution.wav',temp/f'{label}.{mode}.contribution.wav'
                     independent = compare_wavs(a,b)
                     fixed = compare_wavs(a,b,fixed_alignment_ms=alignment)
-                    windows = window_comparisons(a,b,temp,args.seconds,args.window_seconds,alignment)
+                    windows = window_comparisons(a,b,temp,args.seconds,args.window_seconds,alignment,check_deadline)
                     valid = [w for w in windows if w['audio']['similarity'] is not None]
                     entry['voices'][mask] = dict(fixed_alignment=fixed,independent_alignment=independent,
                         raw_solo=compare_wavs(temp/f'source.{mode}.wav',temp/f'{label}.{mode}.wav',
@@ -313,8 +328,9 @@ def run_command(args, *, print_report=True):
                         entry['coupled_registers'] = dict(unavailable_reason=str(error))
                 entry['coupled_pairs'] = {}
                 for pair in pairs:
+                    check_deadline()
                     a,b = temp/f'source.pair{pair}.contribution.wav',temp/f'{label}.pair{pair}.contribution.wav'
-                    windows = window_comparisons(a,b,temp,args.seconds,args.window_seconds,alignment)
+                    windows = window_comparisons(a,b,temp,args.seconds,args.window_seconds,alignment,check_deadline)
                     edges = [edge for edge in coupling['edges']
                              if set(pair)=={str(edge['source_voice']),str(edge['destination_voice'])}]
                     for window in windows:
