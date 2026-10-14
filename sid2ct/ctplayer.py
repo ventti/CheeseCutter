@@ -97,6 +97,7 @@ class CTPlayer:
                       SEQLO, SEQHI, COMMAND, CHORD, CHORDINDEX):
             if not 0 < self.pointers[index] < 65536:
                 raise ValueError('Invalid native table pointer.')
+        self.sequences = [self._compact_sequence(seq) for seq in range(128)]
         self.multiplier = max(1, image[65538])
         self.speed = image[65541 + subtune]
         self.speedcnt = 2
@@ -162,7 +163,8 @@ class CTPlayer:
         instruments = set()
         for seq in sequences:
             for pos in range(0, 256, 4):
-                token = self._sequence(seq, pos)
+                addr = self._read(SEQLO, seq) | self._read(SEQHI, seq) << 8
+                token = self.image[addr + pos]
                 if token == 191:
                     break
                 if 192 <= token < 240:
@@ -200,9 +202,53 @@ class CTPlayer:
         return (self.image[(self.freqbase + note) & 65535] |
                 self.image[(self.freqbase + 96 + note) & 65535] << 8)
 
-    def _sequence(self, sequence, pos):
+    def _compact_sequence(self, sequence):
+        """Native rows are four bytes; export derives durations from empty rows."""
         addr = self._read(SEQLO, sequence) | self._read(SEQHI, sequence) << 8
-        return self.image[(addr + pos) & 65535]
+        rows = []
+        for pos in range(0, 256, 4):
+            row = self.image[addr + pos:addr + pos + 4]
+            if row[0] == 191:
+                break
+            rows.append(row)
+        result = []
+        oldins = olddelay = -1
+        i = 0
+        while i < len(rows):
+            ins, tie, note, command = rows[i]
+            hascmd = note >= 96 and command > 0
+            if note >= 96 and not hascmd:
+                note -= 96
+            if 192 <= ins < 240 and ins != oldins:
+                result.append(ins)
+                oldins = ins
+            delay = 0
+            while i + delay + 1 < len(rows):
+                following = rows[i + delay + 1]
+                if following[2] % 96 or following[3] or following[0] < 240:
+                    break
+                delay += 1
+            i += delay + 1
+            if olddelay != delay:
+                result.append((delay | 240) & 255)
+                olddelay = delay & 15
+                delay -= delay & 15
+            if tie == 95:
+                result.append(95)
+            result.append(note)
+            if hascmd:
+                result.append(command)
+            while delay > 15:
+                duration = min(delay, 15)
+                if olddelay != duration:
+                    result.append(duration | 240)
+                    olddelay = duration
+                result.append(0)
+                delay -= 16
+        return bytes(result + [191]).ljust(256, b'\0')
+
+    def _sequence(self, sequence, pos):
+        return self.sequences[sequence][pos]
 
     def _track(self, v):
         if not v.newseq:
@@ -568,6 +614,7 @@ def simulate_voice(instrument, notes_events, frames, tables):
     (call, note), (call, note, super), or (call, note, super, tie) tuples.
     A call marks the sequence-latch tick: normal notes open two base ticks
     later. Returns full 25-byte snapshots, including the shared filter.
+    A run without an event at call zero includes the real cold-start tick.
     The selected voice retains its legacy frequency-offset seed.
     """
     image = tables['image'] if isinstance(tables, dict) else tables
@@ -595,6 +642,9 @@ def simulate_voice(instrument, notes_events, frames, tables):
         events[event[0]] = event[1:]
     result = []
     for call in range(frames):
+        if call == 0 and 0 not in events:
+            result.append(bytes(player.sid))
+            continue
         extra = call % player.multiplier != 0
         if call in events:
             if extra:
