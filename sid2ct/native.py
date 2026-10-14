@@ -111,7 +111,9 @@ def sound_distance(left, right):
     return envelope*20 + shape*30 + duty + filtering + abs(len(wave)-len(other_wave))/4
 
 
-def native_song(template, frames, multiplier, row_frames, metadata, frequencies=None, output_multiplier=1, loop_start=None, pitch_programs="attack", modulation_programs="legacy", coupled_programs="legacy", instrument_allocation="legacy", change_points=False, pattern_mining=False, joint_modeling=False):
+def native_song(template, frames, multiplier, row_frames, metadata, frequencies=None, output_multiplier=1, loop_start=None, pitch_programs="attack", modulation_programs="legacy", coupled_programs="legacy", instrument_allocation="legacy", change_points=False, pattern_mining=False, joint_modeling=False, layout="chunks"):
+    if layout not in ("chunks", "compact"):
+        raise ValueError("Layout must be chunks or compact.")
     if instrument_allocation not in ("legacy", "trajectory", "budget"):
         raise ValueError("Instrument allocation must be legacy, trajectory or budget.")
     if joint_modeling and coupled_programs != "preserve":
@@ -147,7 +149,7 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
         put(12, [v & 255 for v in tuning]+[v>>8 for v in tuning])
     @lru_cache(maxsize=65536)
     def note(freq):
-        return min(range(3,95), key=lambda n: abs(tuning[n]-freq)) if freq else 36
+        return min(range(96), key=lambda n: abs(tuning[n]-freq)) if freq else 36
     required = dependency_masks(frames) if coupled_programs == "preserve" else [0]*len(frames)
     participating = 0
     for mask in required:
@@ -194,6 +196,8 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
         for f,b in samples:
             freq = f[b]|f[b+1]<<8
             n, c = note(freq), f[b+4]
+            if freq > max(tuning):
+                metrics['tuning_clamped_source_samples'] += 1
             trans = n-base if 0 <= n-base < 96 else 0x80+n
             if coupled and not freq:
                 trans = 0x80
@@ -328,6 +332,9 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
             if not pitches: pitches=[f[b]|f[b+1]<<8 for f in segment if f[b]|f[b+1]<<8]
             base=note((min(pitches) if pitch_programs == "full" or coupled else
                        Counter(pitches).most_common(1)[0][0])) if pitches else 36
+            # Sequence bytes reserve notes 0..2 and 95 for controls. Wave
+            # rows can still select every table entry, including note 95.
+            base = max(3, min(94, base))
             ad,sr=segment[0][b+5:b+7]
             # A waveform programme owns short gates, avoiding a row-level
             # keyoff overwriting a note that lands on the same coarse row.
@@ -428,11 +435,16 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
         instruments[signature]=idx
     if not definitions:
         raise ValueError('Sound programmes exceed native capacity.')
+    # Only waveform rows perform lookups; delay and end rows are controls.
+    relative_limits = {
+        index: max((n for n, c in signature[2] if c >= 16 and n < 128), default=0)
+        for signature, index in instruments.items()
+    }
     fallbacks = {}
     for v,start,base,signature,coupled in events:
         ins=instruments.get(signature)
         if ins is None:
-            context = (signature,coupled)
+            context = (signature,coupled,base)
             ins = fallbacks.get(context)
             if ins is None:
                 # Favor envelope/control likeness before trajectory length.
@@ -452,6 +464,12 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
                 if instrument_allocation != 'legacy':
                     choices = {key:value for key,value in choices.items()
                                if waveform_off(key) == waveform_off(signature)}
+                safe_choices = {key: value for key, value in choices.items()
+                                if base + relative_limits[value] <= 95}
+                if safe_choices:
+                    if len(safe_choices) < len(choices):
+                        metrics['tuning_safe_fallback_selections'] += 1
+                    choices = safe_choices
                 if not choices:
                     raise ValueError('No compatible packed instrument for oscillator waveform class.')
                 ins=instruments[min(choices,key=lambda key:(distance(key), instruments[key]))]
@@ -461,6 +479,10 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
             metrics['approximated_instrument_attacks']+=1
             if coupled:
                 metrics['approximated_coupled_events'] += 1
+        maximum_base = 95 - relative_limits[ins]
+        if base > maximum_base:
+            metrics['tuning_clamped_events'] += 1
+            base = maximum_base
         row=min(count-1,(start+quantum//2)//quantum)
         if rows[v][row][2]!=0x60: metrics['row_collisions']+=1
         if start!=row*quantum: metrics['quantized_events']+=1
@@ -509,10 +531,57 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
             helper_report['patterns'] = dict(applied=False, retained='fixed chunks', reason=str(error))
     if plans is None:
         plans = [([voice[a:b] for a,b in spans], restart) for voice in rows]
+    compact_plan = None
+    if layout == "compact":
+        from .layout import (Row, compress, expand, comparison, verify_player,
+                             without_repeated_instruments, row_statistics, chunk_layout, verify_export)
+        original = tuple(tuple(Row.from_native(row) for row in voice) for voice in rows)
+        boundary = spans[restart][0]
+        statistics = row_statistics(original)
+        try:
+            # Build the model's complete sound context before installing rows.
+            model_image = bytearray(data)
+            model_image[65538] = output_multiplier
+            model_image[65541:65573] = bytes([row_frames-1])*32
+            # First prove that the original has defined tuning accesses. Even
+            # untransposed reuse changes adjacent memory in packed exports.
+            fixed = chunk_layout(original, loop_start=boundary)
+            verify_player(model_image, original, fixed, loop_start=boundary)
+            compact_plan = compress(original, loop_start=boundary)
+            if expand(compact_plan) != original:
+                raise ValueError('Layout expansion changed rows.')
+            verified_calls = verify_player(model_image, original, compact_plan,
+                                           loop_start=boundary)
+            # A repeated instrument byte can reset effects or shadow ADSR.
+            # Accept its omission only after full player comparison.
+            reduced = without_repeated_instruments(original)
+            try:
+                smaller = compress(reduced, loop_start=boundary)
+                from .layout import layout_cost
+                if layout_cost(smaller) < layout_cost(compact_plan):
+                    verified_calls = verify_player(model_image, original, smaller,
+                                                   loop_start=boundary)
+                    compact_plan = smaller
+            except ValueError:
+                pass
+            export_calls = verify_export(model_image, original, compact_plan,
+                                         loop_start=boundary, calls=max(15000, verified_calls))
+            helper_report['layout'] = dict(applied=True, verified_calls=verified_calls,
+                verified_export_calls=export_calls,
+                **statistics, **comparison(original, compact_plan, loop_start=boundary))
+            plans = [([tuple(row.native() for row in compact_plan.sequences[seq-1])
+                       for trans, seq in order], voice_restart)
+                     for order, voice_restart in zip(compact_plan.orders, compact_plan.restarts)]
+        except Exception as error:
+            compact_plan = None
+            helper_report['layout'] = dict(applied=False, retained='fixed chunks', reason=str(error),
+                **statistics, **comparison(original, chunk_layout(original, loop_start=boundary),
+                                           loop_start=boundary))
+            plans = [([voice[a:b] for a,b in spans], restart) for voice in rows]
     orders=[]
-    for chunks, voice_restart in plans:
+    for vid, (chunks, voice_restart) in enumerate(plans):
         order=[]
-        for chunk in chunks:
+        for chunk_index, chunk in enumerate(chunks):
             raw=bytes(x for r in chunk for x in r)
             if len(chunk)<64: raw+=bytes([0xBF])
             raw=raw.ljust(256,b'\0')
@@ -522,7 +591,8 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
                 addr=data[seqlo+next_seq]|data[seqhi+next_seq]<<8
                 data[addr:addr+256]=raw
                 next_seq+=1
-            order.extend([0xA0,sequence_map[raw]])
+            trans = compact_plan.orders[vid][chunk_index][0] if compact_plan else 0
+            order.extend([0xA0+trans,sequence_map[raw]])
         order.extend([0xF0 | ((voice_restart*2)>>8), (voice_restart*2)&255])
         if len(order)>1024: raise ValueError('Native reconstruction exceeds order capacity.')
         orders.append(bytes(order).ljust(1024,b'\0'))
@@ -548,6 +618,25 @@ def native_song(template, frames, multiplier, row_frames, metadata, frequencies=
     data[names:names+48*32]=b' '*(48*32)
     for i in range(1,len(definitions)+1):
         data[names+i*32:names+(i+1)*32]=f'Inferred {i:02X}'.encode().ljust(32,b' ')
+    # Check the final installed order transpose, instrument and wave state,
+    # including loop-boundary carry, with the exact exported player model.
+    from .ctplayer import CTPlayer
+    player = CTPlayer(data)
+    frequency = player._frequency
+    metrics['tuning_range_violations'] = 0
+    def checked_frequency(index):
+        if not 0 <= (index & 255) <= 95:
+            metrics['tuning_range_violations'] += 1
+            raise ValueError(f'Native player tuning index {index & 255} outside 0..95')
+        return frequency(index)
+    player._frequency = checked_frequency
+    validation_calls = (count + 2*(count-spans[restart][0]) + 64)*max(3, row_frames)*output_multiplier + 8
+    for _ in range(validation_calls):
+        player.frames(1)
+    metrics['tuning_range_verified_calls'] = validation_calls
+    metrics.setdefault('tuning_safe_fallback_selections', 0)
+    metrics.setdefault('tuning_clamped_events', 0)
+    metrics.setdefault('tuning_clamped_source_samples', 0)
     report=dict(mode='trace-reconstruction',sound_programs='dynamic',source_calls=len(frames),
                 source_calls_per_second=50*multiplier,source_multiplier=multiplier,
                 output_multiplier=output_multiplier,pitch_programs=pitch_programs,modulation_programs=modulation_programs,coupled_programs=coupled_programs,coupled_voices=[v+1 for v in range(3) if participating&(1<<v)],row_frames=row_frames,captured_seconds=len(frames)/(50*multiplier),
