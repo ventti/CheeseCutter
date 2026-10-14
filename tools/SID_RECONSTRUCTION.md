@@ -589,3 +589,50 @@ is a provisional mix ranking and can regress voices or windows. Every completed
 alternative remains for review; combinations wait for regression criteria. `--seconds` means finite sample
 validation; omit it for detected loop duration. Tests establish helper and
 export invariants, not improved audio quality on arbitrary songs.
+
+### Optional Optuna parameter search
+
+Install the optional dependency in your Python environment:
+
+```sh
+python3 -m pip install -r tools/requirements-sid-search.txt
+python3 -m sid2ct search song.sid -o experiments-optuna --optimizer optuna
+python3 -m sid2ct search song.sid -o experiments-random --optimizer random
+```
+
+Both modes try up to 40 settings combinations besides `before.ct`, within the
+same default 600-second budget. Use `--candidate-cap`, `--search-seconds` and
+`--seed` to compare runs under equal budgets. Optuna uses TPE; random uses
+Optuna's random sampler. The first ten TPE trials use random suggestions.
+Normal conversion and the default `--optimizer helpers` require no Optuna.
+
+These modes vary row length, sound update rate, available tuning, pitch method,
+pulse method, instrument allocation and linked-voice allocation weighting.
+Dynamic sounds and preserved oscillator dependencies remain enabled. Source
+tuning is tried only when the baseline finds a supported frequency table.
+Change-point reporting and exact pattern reuse are excluded from audio tuning.
+Recovered native CheeseCutter songs skip parameter trials; `--force-trace`
+allows experiments with reconstruction instead.
+
+Captured registers and source audio are reused across trials. Repeated settings
+reuse completed results; identical CTs reuse mixed renders. Failed conversions
+are saved as failed trials. Each run saves trial history in `trials.sqlite3`,
+conversion artifacts, and final settings, durations and decisions in
+`search.json`. `--force` starts a new study and replaces named outputs while
+retaining older study history; it does not resume the previous study.
+
+The three best unique mixed-audio candidates receive voice, pair and section
+checks against the baseline over the entire captured duration, even when
+`--audio-seconds` shortens trial scoring. A candidate must improve the full
+mix and lose no score on any comparable voice, pair or section. Use
+`--regression-tolerance` to explicitly allow a score loss (default zero).
+Missing checks, `--skip-diagnostics`, or exhausted time retain `before.ct` as
+`selected.ct`. All other completed candidates remain available for review.
+Silence with an inconclusive baseline score cannot be ranked.
+
+Omit `--seconds` for detected song duration. Supplying it checks only that
+finite capture. Trial scoring is a heuristic and can miss later improvements;
+only shortlisted candidates receive full checks. Time is checked between
+operations, so a running conversion or comparison can exceed the budget.
+No early pruning is used: short-section quality does not reliably predict
+the rest of a song. Existing pitch, phase and native-table limits still apply.

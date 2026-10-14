@@ -9,21 +9,21 @@ from .audio import compare_wavs
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='python3 -m sid2ct',
-                                     description='Generic SID to CheeseCutter conversion and audio verification.')
+                                     description='Convert SID music to editable CheeseCutter songs and compare how they sound.')
     commands = parser.add_subparsers(dest='command', required=True)
     for name, module, help_text in (
-        ('convert', convert, 'Convert a SID to editable CT and compare mix, voices and time windows.'),
-        ('search', search, 'Compare bounded optional helper experiments with retained before artifacts.'),
-        ('compare', compare, 'Convert or use an existing CT and compare mix, voices and time windows.'),
+        ('convert', convert, 'Convert a SID file to an editable CheeseCutter song.'),
+        ('search', search, 'Try different conversion methods, keep the best result and save each version.'),
+        ('compare', compare, 'Compare the original song with converted versions, including each voice.'),
     ):
-        command = commands.add_parser(name, help=help_text, description=module.__doc__)
+        command = commands.add_parser(name, help=help_text, description=help_text)
         module.add_arguments(command)
         command.set_defaults(handler=module.run_command)
-    score = commands.add_parser('score', help='Compare two existing mono PCM16 WAVs.')
-    score.add_argument('source', type=Path)
-    score.add_argument('reconstruction', type=Path)
-    score.add_argument('--max-lag-ms', type=float, default=250)
-    score.add_argument('--alignment-ms', type=float, help='Use this fixed offset instead of searching.')
+    score = commands.add_parser('score', help='Compare two mono 16-bit WAV files.')
+    score.add_argument('source', type=Path, help='Original WAV file.')
+    score.add_argument('reconstruction', type=Path, help='Converted WAV file.')
+    score.add_argument('--max-lag-ms', type=float, default=250, help='Maximum timing shift to try in milliseconds (default: 250).')
+    score.add_argument('--alignment-ms', type=float, help='Shift the converted audio by this many milliseconds before comparing.')
     score.set_defaults(handler=score_wavs)
     args = parser.parse_args(argv)
     return args.handler(args)

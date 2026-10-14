@@ -111,23 +111,23 @@ def print_metrics(label, audio):
 
 
 def add_arguments(parser):
-    parser.add_argument("--workers", type=int, default=None, help="Parallel analysis workers (default: all available CPU cores).")
-    parser.add_argument('source', type=Path)
-    parser.add_argument('reconstruction', type=Path, nargs='?', help='Optional existing .ct or .sid; otherwise convert the source.')
+    parser.add_argument("--workers", type=int, default=None, help="CPU cores to use for audio analysis (default: all available).")
+    parser.add_argument('source', type=Path, help='Original SID file.')
+    parser.add_argument('reconstruction', type=Path, nargs='?', help='Converted .ct or .sid file to compare; omit to convert the original first.')
     parser.add_argument('--candidate', action='append', default=[], metavar='LABEL=FILE',
-                        help='SID or CC reconstruction; repeat to compare baselines and alternatives.')
-    parser.add_argument('-o', '--output', type=Path, required=True, help='New directory for report and WAVs.')
+                        help='Version to compare, e.g. before=old.ct; repeat to compare several versions.')
+    parser.add_argument('-o', '--output', type=Path, required=True, help='New folder for the comparison report and WAV files.')
     parser.add_argument('--seconds', type=float, help='Seconds to compare; default: first player-state loop or 600-second search limit.')
-    parser.add_argument('--window-seconds', type=float, default=5)
-    parser.add_argument('--subtune', type=int, default=1, help='Source subtune.')
-    parser.add_argument('--candidate-subtune', type=int, default=1)
-    parser.add_argument('--sid', '--sid-model', dest='sid_model', choices=('6581','8580'))
-    parser.add_argument('--multiplier',type=int,help='Override source calls per second = 50*N; otherwise infer initialized CIA/VBI timing.')
-    parser.add_argument('--row-frames',type=int,default=6)
-    parser.add_argument('--auto-row-frames',action='store_true')
-    parser.add_argument('--selection-seconds',type=float,help='Audio interval for automatic conversion selection.')
-    parser.add_argument('--renderer', type=Path, default=ROOT/'tools/sid_render')
-    parser.add_argument('--tool', type=Path, default=ROOT/'ct2util')
+    parser.add_argument('--window-seconds', type=float, default=5, help='Length of each comparison section in seconds (default: 5).')
+    parser.add_argument('--subtune', type=int, default=1, help='Song number in the original SID file (default: 1).')
+    parser.add_argument('--candidate-subtune', type=int, default=1, help='Song number in the converted files (default: 1).')
+    parser.add_argument('--sid', '--sid-model', dest='sid_model', choices=('6581','8580'), help='SID chip model for both recordings; default: read the original file.')
+    parser.add_argument('--multiplier',type=int,help='Set the original playback update rate to 50 times this number; default: detect it.')
+    parser.add_argument('--row-frames',type=int,default=6, help='Pattern row length in PAL frames when converting (default: 6).')
+    parser.add_argument('--auto-row-frames',action='store_true', help='Try several pattern row lengths when converting; keep the best audio match.')
+    parser.add_argument('--selection-seconds',type=float,help='Seconds of audio used to choose a conversion; default: the entire comparison.')
+    parser.add_argument('--renderer', type=Path, default=ROOT/'tools/sid_render', help='Path to the SID audio renderer.')
+    parser.add_argument('--tool', type=Path, default=ROOT/'ct2util', help='Path to the ct2util program.')
 
 
 def run_command(args, *, print_report=True):
@@ -363,4 +363,3 @@ def run_command(args, *, print_report=True):
     except (OSError,ValueError,subprocess.TimeoutExpired) as error:
         print('sid2ct compare: '+str(error))
         return 1
-

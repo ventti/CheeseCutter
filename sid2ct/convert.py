@@ -227,41 +227,41 @@ def run(tool, *args):
 
 
 def add_arguments(parser):
-    parser.add_argument("--workers", type=int, default=None, help="Parallel analysis workers (default: all available CPU cores).")
-    parser.add_argument('sid', type=Path)
-    parser.add_argument('-o', '--output', type=Path, required=True)
+    parser.add_argument("--workers", type=int, default=None, help="CPU cores to use for audio analysis (default: all available).")
+    parser.add_argument('sid', type=Path, help='Original SID file.')
+    parser.add_argument('-o', '--output', type=Path, required=True, help='Output CheeseCutter .ct file.')
     parser.add_argument('--seconds', type=float, help='Seconds to convert; default: first player-state loop or the search limit.')
     parser.add_argument('--max-seconds', type=float, default=600, help='Maximum seconds to look for a repeating playback state (default: 600).')
-    parser.add_argument('--multiplier', type=int, help='Override source timing as 50*N calls/sec (1..16); default infer CIA/VBI timing.')
-    parser.add_argument('--row-frames', type=int, default=6, help='PAL frames per output row (3..127).')
-    parser.add_argument('--subtune', type=int, default=1)
-    parser.add_argument('--force-trace', action='store_true', help='Use inference even for recognized CheeseCutter players.')
-    parser.add_argument('--trace', type=Path, help='Use an existing ct2util sidtrace file instead of emulation.')
-    parser.add_argument('--tool', type=Path, default=ROOT/'ct2util')
-    parser.add_argument('--force', action='store_true')
-    parser.add_argument('--skip-audio', action='store_true', help='Skip WAV validation (renderer not required).')
-    parser.add_argument('--renderer', type=Path, default=ROOT/'tools/sid_render')
-    parser.add_argument('--audio-seconds', type=float, help='Limit comparison duration; default compare the entire capture.')
-    parser.add_argument('--sid', '--sid-model', dest='sid_model', choices=('6581', '8580'), help='Force the same model for both WAVs; default from source header.')
+    parser.add_argument('--multiplier', type=int, help='Set the original playback update rate to 50 times this number (1..16); default: detect it.')
+    parser.add_argument('--row-frames', type=int, default=6, help='Length of each pattern row in PAL frames (3..127; default: 6).')
+    parser.add_argument('--subtune', type=int, default=1, help='Song number in the SID file (default: 1).')
+    parser.add_argument('--force-trace', action='store_true', help='Rebuild from observed sounds even if the original CheeseCutter song can be recovered.')
+    parser.add_argument('--trace', type=Path, help='Read recorded SID register values from a ct2util sidtrace file.')
+    parser.add_argument('--tool', type=Path, default=ROOT/'ct2util', help='Path to the ct2util program.')
+    parser.add_argument('--force', action='store_true', help='Replace existing conversion outputs.')
+    parser.add_argument('--skip-audio', action='store_true', help='Convert without rendering or comparing audio.')
+    parser.add_argument('--renderer', type=Path, default=ROOT/'tools/sid_render', help='Path to the SID audio renderer.')
+    parser.add_argument('--audio-seconds', type=float, help='Seconds of converted audio to compare; default: all converted audio.')
+    parser.add_argument('--sid', '--sid-model', dest='sid_model', choices=('6581', '8580'), help='SID chip model for both recordings; default: the model specified by the original file.')
     parser.add_argument('--sound-programs', choices=('auto','static','dynamic'), default='auto',
-                        help='Fit native wave/pulse/filter programs; auto compares with static sounds.')
+                        help='static: fixed sounds; dynamic: follow sound changes; auto: try both.')
     parser.add_argument('--sound-rate', choices=('auto','base','source'), default='auto',
-                        help='Native sound ticks: auto compares 50 Hz and source rate; sequence rows stay at 50 Hz.')
+                        help='base: update sounds at 50 Hz; source: use the original rate; auto: try both.')
     parser.add_argument('--tuning', choices=('auto','default','source'), default='auto',
-                        help='auto compares default and corroborated source tuning; source requires a recovered table.')
+                        help='default: CheeseCutter tuning; source: recovered original tuning; auto: try available tunings.')
     parser.add_argument('--coupled-programs', choices=('auto','legacy','preserve'), default='auto',
-                        help='Analyze sync/ring dependencies; compare legacy with preserved source-oscillator trajectories when present.')
+                        help='preserve: keep oscillator changes that affect another voice through sync/ring; legacy: older method; auto: try both when needed.')
     parser.add_argument('--modulation-programs', choices=('auto','legacy','compact'), default='auto',
-                        help='Compare legacy and compact pulse trajectories; compact preserves discontinuity resets and removes final holds.')
+                        help='compact: follow pulse-width jumps and remove redundant holds; legacy: older method; auto: try both.')
     parser.add_argument('--pitch-programs', choices=('auto','attack','compact','full'), default='auto',
-                        help='Compare original, compact attack and full pitch trajectories; without audio use full.')
-    parser.add_argument('--auto-row-frames', action='store_true', help='Choose the best WAV score among row grids 3,4,5,6,8,12.')
-    parser.add_argument('--instrument-allocation', choices=('legacy','trajectory','budget'), default='legacy')
-    parser.add_argument('--change-points', action='store_true', help='Report advisory change points without retriggering ADSR.')
-    parser.add_argument('--pattern-mining', action='store_true', help='Factor exact rows with lossless expansion and loop checks.')
-    parser.add_argument('--joint-modeling', action='store_true', help='Weight allocation by time-local physical dependencies; requires preserve and nonlegacy allocation.')
-    parser.add_argument('--window-seconds', type=float, default=5, help='Seconds per diagnostic comparison window.')
-    parser.add_argument('--skip-diagnostics', action='store_true', help='Skip voice/window diagnostics; retain mixed-WAV validation.')
+                        help='attack: keep early pitch changes; compact: remove redundant holds; full: keep later changes too; auto: compare all three (full without audio).')
+    parser.add_argument('--auto-row-frames', action='store_true', help='Try row lengths of 3, 4, 5, 6, 8 and 12 frames plus the requested length; keep the best audio match.')
+    parser.add_argument('--instrument-allocation', choices=('legacy','trajectory','budget'), default='legacy', help='legacy: most-used sounds first; trajectory: group similar sound changes; budget: also fit all sound tables within their limits.')
+    parser.add_argument('--change-points', action='store_true', help='Report where pitch, gate or control values change; playback stays unchanged.')
+    parser.add_argument('--pattern-mining', action='store_true', help='Reuse repeated pattern rows while keeping every row and the loop position.')
+    parser.add_argument('--joint-modeling', action='store_true', help='Give extra priority to instruments in voices that affect each other; requires --coupled-programs preserve and trajectory or budget allocation.')
+    parser.add_argument('--window-seconds', type=float, default=5, help='Length of each audio comparison section in seconds (default: 5).')
+    parser.add_argument('--skip-diagnostics', action='store_true', help='Compare only the combined sound; skip individual voices and short sections.')
 
 
 def run_command(args):
@@ -316,13 +316,22 @@ def run_command(args):
             temp = Path(temp).resolve()
             ct = temp/'reconstructed.ct'
             report = None
+            recovered = None
             audio_source = temp/'source.wav'
             audio_result = temp/'result.wav'
             from .loops import capture, CC_BASE_RATE
             if not math.isfinite(args.max_seconds) or not 0 < args.max_seconds <= 600:
                 raise ValueError('--max-seconds must be in (0,600].')
             loop = None
-            if args.trace:
+            input_cache = getattr(args, '_input_cache', None)
+            import hashlib
+            input_key = (hashlib.sha256(raw_sid).hexdigest(), args.subtune,
+                         args.seconds, args.multiplier, args.max_seconds,
+                         hashlib.sha256(args.tool.read_bytes()).hexdigest(),
+                         hashlib.sha256(args.trace.read_bytes()).hexdigest() if args.trace else None)
+            if input_cache is not None and input_key in input_cache:
+                frames, loop, args.multiplier, duration = input_cache[input_key]
+            elif args.trace:
                 args.multiplier = args.multiplier or 1
                 frames = parse_trace(args.trace.read_text())
                 duration = min(args.seconds or args.max_seconds, len(frames)/(50*args.multiplier))
@@ -332,6 +341,8 @@ def run_command(args):
                     temp, args.seconds, args.multiplier, args.max_seconds)
                 args.multiplier = loop['source_multiplier']
                 duration = loop['duration_seconds']
+            if input_cache is not None:
+                input_cache[input_key] = (frames, loop, args.multiplier, duration)
             coupling = analyze_coupling(frames, (50 if args.trace else CC_BASE_RATE)*args.multiplier)
             audio_duration = min(args.audio_seconds or duration, duration)
             renderer_info = None
@@ -366,7 +377,15 @@ def run_command(args):
                 return assessment
             # Full libsidplayfp emulation honors the SID's actual timer setup.
             if not args.skip_audio:
-                renderer_info = render(args.sid.resolve(), audio_source, args.subtune)
+                source_key = ('audio', hashlib.sha256(raw_sid).hexdigest(), args.subtune,
+                              audio_duration, model, hashlib.sha256(args.renderer.read_bytes()).hexdigest())
+                if input_cache is not None and source_key in input_cache:
+                    wav_bytes, renderer_info = input_cache[source_key]
+                    audio_source.write_bytes(wav_bytes)
+                else:
+                    renderer_info = render(args.sid.resolve(), audio_source, args.subtune)
+                    if input_cache is not None:
+                        input_cache[source_key] = (audio_source.read_bytes(), renderer_info)
             if not args.force_trace and not args.trace:
                 exact = run(args.tool, 'sid2ct', args.sid.resolve(), '-o', ct)
                 if exact.returncode == 0:
@@ -464,6 +483,7 @@ def run_command(args):
             if loop:
                 report['warnings'].extend(loop.get('warnings', []))
             report['captured_seconds'] = duration
+            report['source_tuning_available'] = recovered is not None
             if loop:
                 report['source_calls_per_second'] = loop['source_calls_per_second']
                 report['source_calls'] = loop['trace_calls']
@@ -538,4 +558,3 @@ def run_command(args):
     except (ValueError, OSError, subprocess.TimeoutExpired) as error:
         print(f'error: {error}')
         return 1
-
