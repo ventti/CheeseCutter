@@ -263,13 +263,13 @@ Every flag below is listed in the help of its command. `convert` and `search` ta
 
 ## Last bench means
 
-`python3 -m sid2ct bench`, 60 s captures, default effort, `--no-memory` on heldout, 2026-10-15.
+`python3 -m sid2ct bench --no-memory`, 60 s captures, default effort, 2026-10-15.
 Means over songs that also have a row in the first recorded run (label `baseline`). Ranking scores only.
 
 | Split | Songs | v1 baseline | v1 now | v2 baseline | v2 now | Mean wall |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| dev | 34 | 0.7523 | 0.8085 | 0.5816 | 0.6465 | 286 s |
-| heldout | 18 | 0.7754 | 0.8251 | 0.5968 | 0.6567 | 278 s |
+| dev | 34 | 0.7523 | 0.8008 | 0.5816 | 0.6372 | 285 s |
+| heldout | 18 | 0.7754 | 0.8246 | 0.5968 | 0.6553 | 280 s |
 
 Run `bench` again for new numbers; it prints the change against the last baseline.
 
