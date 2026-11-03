@@ -158,11 +158,6 @@ void registerShortcuts(UI ui) {
 			activateDialog(exportDialog);
 	});
 
-	sm.register("render_audio", Ctx.global, "File",
-				"Render audio: .wav / .flac (duration, normalize, bit depth, rate)", SDLK_F10, KMOD_CTRL | KMOD_SHIFT, {
-		activateDialog(renderDialog);
-	});
-
 	sm.registerMenuOnly("upgrade_player", Ctx.global, "File",
 				"Upgrade the song to the latest player (same as the Load dialog upgrade)", {
 		confirmUpgrade("Upgrade to latest player (Y/n)? ", null);
@@ -173,6 +168,11 @@ void registerShortcuts(UI ui) {
 	sm.registerMenuOnly("properties", Ctx.global, "Properties",
 				"Properties: playback backend, reSID SID model & filter preset, Ultimate IP/port, x64sc path, audio driver", {
 		activateDialog(propertiesDialog);
+	sm.register("render_audio", Ctx.global, "File",
+				"Render audio: .wav / .flac (duration, normalize, bit depth, rate)", SDLK_F10, KMOD_CTRL | KMOD_SHIFT, {
+		activateDialog(renderDialog);
+	});
+
 	}, "Properties");
 
 	// Undo/Redo
