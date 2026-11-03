@@ -163,16 +163,16 @@ void registerShortcuts(UI ui) {
 		confirmUpgrade("Upgrade to latest player (Y/n)? ", null);
 	}, "Upgrade player...", { return songNeedsUpgrade(); });
 
-	// Its own "Properties" category isolates it in a divider-separated group
-	// between the file commands above and the trailing Quit group.
-	sm.registerMenuOnly("properties", Ctx.global, "Properties",
-				"Properties: playback backend, reSID SID model & filter preset, Ultimate IP/port, x64sc path, audio driver", {
-		activateDialog(propertiesDialog);
 	sm.register("render_audio", Ctx.global, "File",
 				"Render audio: .wav / .flac (duration, normalize, bit depth, rate)", SDLK_F10, KMOD_CTRL | KMOD_SHIFT, {
 		activateDialog(renderDialog);
 	});
 
+	// Its own "Properties" category isolates it in a divider-separated group
+	// between the file commands above and the trailing Quit group.
+	sm.registerMenuOnly("properties", Ctx.global, "Properties",
+				"Properties: playback backend, reSID SID model & filter preset, Ultimate IP/port, x64sc path, audio driver", {
+		activateDialog(propertiesDialog);
 	}, "Properties");
 
 	// Undo/Redo
