@@ -72,6 +72,11 @@ See the [user guide](guide/README.md) for details on every feature.
 
 - **User guide** — [`guide/README.md`](guide/README.md) (also prepared for
   GitHub Pages deployment).
+- **Video previews with audio** — `Ctrl-Shift-F12` starts/stops recording.
+  Saves a timestamped `preview_*.mp4` in the current directory. Requires
+  FFmpeg on `PATH`; a missing installation shows an error dialog.
+  The window title shows `[REC]` while recording. Keep the window size fixed;
+  recording finishes automatically when the app exits. Uses local SID audio.
 - **In-app help** — press `F12`.
 - **Keyboard reference** — [`doc/KEYBOARD.md`](doc/KEYBOARD.md) (generated).
 

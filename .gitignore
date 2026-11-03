@@ -31,6 +31,8 @@ teppo/
 screenshot_*.png
 screenshot_*.bmp
 tunes/screenshot_*.bmp
+# Video previews recorded by the editor (Ctrl-Shift-F12)
+preview_*.mp4
 
 # SID reconstruction helper and Python bytecode
 tools/sid_render

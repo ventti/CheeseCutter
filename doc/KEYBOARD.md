@@ -18,6 +18,7 @@ _Generated from the shortcut registry (com.shortcuts)._
 | `Alt-Up` | Oscilloscope: zoom in on the recorded keyjam note (shorter window) |
 | `Alt-Down` | Oscilloscope: zoom out toward the whole recorded keyjam note |
 | `Ctrl-F12` | Save screenshot |
+| `Ctrl-Shift-F12` | Start/stop video preview with audio |
 | `Ctrl-Cmd-F` | Toggle fullscreen |
 | `Alt-H` | Toggle help texts |
 | `Shift-F12` | Toggle the oscilloscope overlay (combined synthesized audio waveform, live during playback and keyjam) |

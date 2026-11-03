@@ -20,6 +20,7 @@ OBJS= \
 	src/ct/build.o \
 	src/ct/chordname.o \
 	src/com/fb.o \
+	src/com/videocapture.o \
 	src/com/cpu.o \
 	src/com/kbd.o \
 	src/com/session.o \

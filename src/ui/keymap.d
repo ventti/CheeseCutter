@@ -106,6 +106,11 @@ void registerShortcuts(UI ui) {
 		// This action registered for consistency but won't be triggered here
 	});
 
+    sm.register("video_capture", Ctx.global, "Display",
+                "Start/stop video preview with audio", SDLK_F12, KMOD_CTRL | KMOD_SHIFT, {
+        toggleVideoCapture();
+    }, "Record video preview");
+
 	// File Operations
 	sm.register("new_song", Ctx.global, "File",
 				"Clear the song and start a new project", SDLK_n, KMOD_CTRL, {
@@ -970,6 +975,7 @@ void applyMenuLabels(UI ui) {
 		setMenuLabel("scope_zoom_in", "Oscilloscope zoom in");
 		setMenuLabel("scope_zoom_out", "Oscilloscope zoom out");
 		setMenuLabel("screenshot", "Screenshot");
+        setMenuLabel("video_capture", "Record video preview");
 		setMenuLabel("cycle_visualization", "Visualization");
 		setMenuLabel("dump_frame", "Dump SID frame");
 		setMenuLabel("help_dialog", "Keyboard help");

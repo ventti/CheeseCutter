@@ -17,6 +17,7 @@ import audio.player;
 import audio.resid.filter;
 import audio.audio, audio.callback, audio.timer;
 static import audio.remote;
+static import com.videocapture;
 static import audio.ultimate;
 static import audio.vice;
 static import com.config;
@@ -119,7 +120,14 @@ private void publishMousePixel(int x, int y) {
 	com.fb.mousePixelY = y;
 }
 
+private void finishVideoCapture() {
+    if(!com.videocapture.active()) return;
+    try { com.videocapture.stop(); }
+    catch(Exception e) { SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Video capture", e.msg.toStringz(), null); }
+}
+
 void mainloop(bool verbose) {
+    scope(exit) finishVideoCapture();
 	int mods, key, unicode;
 	bool quit = false;
 	SDL_Event evt;
@@ -154,9 +162,11 @@ void mainloop(bool verbose) {
 				mods = evt.key.keysym.mod;
 				key = evt.key.keysym.sym;
 
-				// Global screenshot shortcut (Ctrl+F12)
+				// Screenshot: Ctrl+F12. Video recording: Ctrl+Shift+F12.
 				if(key == SDLK_F12 && (mods & KMOD_CTRL)) {
-					video.saveScreenshot("");
+					if(evt.key.repeat) break;
+                    if(mods & KMOD_SHIFT) mainui.toggleVideoCapture();
+                    else video.saveScreenshot("");
 					break;
 				}
 

@@ -748,6 +748,25 @@ final class UI {
 		}, "yn", 0));
 	}
 
+	// Start or stop the video preview (Ctrl-Shift-F12). It records the rendered
+	// frames and the local SID audio, so a remote backend cannot be recorded.
+	void toggleVideoCapture() {
+		static import com.videocapture;
+		try {
+			if(com.videocapture.active()) {
+				auto filename = com.videocapture.stop();
+				statusline.display("Preview saved: " ~ filename);
+			} else {
+				if(audio.remote.isActive())
+					throw new Exception("Video previews require local SID audio. Switch to local playback first.");
+				com.videocapture.start(audio.audio.audiospec.freq);
+				statusline.display("Recording preview...");
+			}
+		} catch(Exception e) {
+			SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Video capture", e.msg.toStringz(), null);
+		}
+	}
+
 	void loadCallback(string s) {
 		loadCallback(s, false);
 	}

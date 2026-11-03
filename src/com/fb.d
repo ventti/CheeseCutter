@@ -5,10 +5,11 @@ Text-mode framebuffer — Video/Screen abstraction, character-cell rendering and
 */
 
 module com.fb;
+static import com.videocapture;
 import com.palette : BaseColor;
 import derelict.sdl2.sdl;
 import std.algorithm : max, min;
-import std.string : indexOf;
+import std.string : indexOf, toStringz;
 import com.util;
 // The RGB table + semantic roles now live in com.palette (data-driven, loaded
 // from JSON at startup). PALETTE keeps the same index model this renderer uses.
@@ -642,6 +643,7 @@ class VideoStandard : Video {
 	// calling updateFrame() at the right slot (no dep tracking in this repo).
 	void drawSplash() {
 		drawSplashBody();
+		capturePreviewFrame();
 		SDL_RenderPresent(renderer);
 	}
 
@@ -672,13 +674,25 @@ class VideoStandard : Video {
 		if(splashScroll) drawScroller(dst);
 	}
 
+	private void capturePreviewFrame() {
+        try { com.videocapture.frame(renderer); }
+        catch(Exception e) {
+            string message = e.msg;
+            try { com.videocapture.stop(); } catch(Exception stopError) { message ~= " " ~ stopError.msg; }
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Video capture", message.toStringz(), window);
+        }
+        SDL_SetWindowTitle(window, com.videocapture.active()
+            ? (com.util.APP_NAME ~ " [REC]").toStringz() : com.util.APP_NAME);
+    }
+
 	override void updateFrame() {
 		if(splashActive) { drawSplash(); return; }
 		// The oscilloscope trace moves every frame, so re-render while it is
 		// active even when the text grid itself is unchanged.
-		if (!isDirty && !scopeActive && !overlayActive) return;
+		if (!isDirty && !scopeActive && !overlayActive && !com.videocapture.active()) return;
 		isDirty = false;
 		renderGrid();
+		capturePreviewFrame();
 		SDL_RenderPresent(renderer);
 	}
 
@@ -829,6 +843,7 @@ class VideoStandard : Video {
 
 		// Present so the user still sees this frame (matches the old flow where
 		// updateFrame() would have presented).
+		capturePreviewFrame();
 		SDL_RenderPresent(renderer);
 
 		if(rc != 0) {

@@ -10,6 +10,7 @@ import audio.resid.filter;
 import audio.player;
 import audio.callback;
 static import audio.remote;
+static import com.videocapture;
 static import audio.visualizer;
 import std.stdio;
 import core.stdc.stdlib;
@@ -273,6 +274,7 @@ extern(C) {
 		if(!audio.player.isPlaying()) {
             //memcpy(stream, cast(ubyte*)mixbuf, len);
             memset(stream, 0, len);
+            com.videocapture.audioOutput(stream, len);
             return;
         }
 		while((bufferUsed + callbackInterval) <= bufferSize * MIXBUF_MUL) {
@@ -291,6 +293,7 @@ extern(C) {
 			memset(stream, 0, len);
 		else
 			memcpy(stream, cast(ubyte*)mixbuf, len);
+		com.videocapture.audioOutput(stream, len);
 		bufferUsed -= samplesRequested;
 		if(bufferUsed < 0) {
       //			writeln("Audio buffer underrun ", bufferUsed);
