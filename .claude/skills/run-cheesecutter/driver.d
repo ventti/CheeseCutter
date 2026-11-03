@@ -136,6 +136,8 @@ private void usage(File f) {
 "\n" ~
 "Editor commands:\n" ~
 "  load:<file.ct>   load a song\n" ~
+"  songver          print song version, player ID, filename, modified flag\n" ~
+"                   and needsUpgrade (older player than the bundled one)\n" ~
 "  palette:<file>   load a JSON color palette at runtime (repaints)\n" ~
 "  key:<spec>       inject a keypress; spec = [Ctrl-][Alt-/RAlt-][Mode-][Gui-][Shift-]NAME\n" ~
 "  keyprobe:<spec>  inject through the real UI and report shortcut consumed/action/invoked\n" ~
@@ -257,6 +259,12 @@ private bool processCommand(string arg) {
 			stderr.writefln("backend: %s", audio.player.usefp ? "resid-fp" : "resid");
 			break;
 		}
+		case "songver":
+			// Song/player revision oracle for the player-upgrade flow.
+			stderr.writefln("songver: ver=%d player=%s file=%s modified=%s needsUpgrade=%s",
+				song.ver, (cast(string)song.playerID).strip("\0 "), state.filename,
+				state.songModified, mainui.songNeedsUpgrade());
+			break;
 		case "load":
 			mainui.loadCallback(val);
 			stderr.writefln("loaded %s", val);

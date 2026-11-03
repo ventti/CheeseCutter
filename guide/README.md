@@ -186,6 +186,28 @@ In the load (<kbd>F9</kbd>), save (<kbd>F10</kbd>) and `.prg` export dialogs:
   directory; the `.mod` and `.sid` imports, the song export, and the instrument load/save
   browsers each remember their own.
 
+## Upgrading old songs to the latest player
+
+A song made with an older CheeseCutter has its own, older player in the `.ct`
+file. The editor can move the song data into the latest player:
+
+- **When you load the song**: the load dialog asks
+  `Upgrade to latest player (Y/n)?`. **Y** loads the song with the latest player.
+  **N** loads it with its own player.
+- **Later**: use **File > Upgrade player...**. It asks the same question. The item
+  is disabled when the song already uses the latest player.
+- **When you export**: **Export song** (<kbd>Shift</kbd>-<kbd>F10</kbd>) asks
+  `Export needs the latest player. Upgrade now (Y/n)?`. **Y** upgrades the song
+  and then opens the export dialog. **N** cancels the export.
+
+The export asks because **Optimized .prg** and **PSID** always use the latest
+player. Without the upgrade, the export of a very old song fails (for example
+`Missing tablepointer 3`), and the export of a newer old song can sound different.
+
+After the upgrade the song is marked as modified. Save it to keep the upgrade.
+The latest player can play some effects a little differently from the old player,
+so listen to the song before you save it.
+
 ## Importing ProTracker modules (.mod)
 
 **File → Import .mod...** (<kbd>Shift</kbd>-<kbd>F9</kbd>) brings in a ProTracker
@@ -374,6 +396,10 @@ C64 formats — Full player `.prg`, Optimized `.prg`, PSID — and **Render audi
 below (those that don't apply are greyed and skipped), and <kbd>Return</kbd>
 continues to the file-save dialog (the **same one used for saving a song** —
 type-ahead, song preview, overwrite confirmation); <kbd>Esc</kbd> cancels.
+
+If the song uses an older player, **Export song** first asks you to upgrade it.
+See [Upgrading old songs to the latest player](#upgrading-old-songs-to-the-latest-player).
+**Render audio** does not ask: it plays the song with its own player.
 
 Navigate rows with <kbd>↑</kbd>/<kbd>↓</kbd>; on the selected row,
 <kbd>&lt;</kbd> reduces and <kbd>&gt;</kbd> increases the value (toggles flip), and

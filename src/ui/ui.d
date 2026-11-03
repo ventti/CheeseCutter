@@ -715,6 +715,39 @@ final class UI {
 		loadCallback(s, true);
 	}
 
+	// True when the song was made with an older player than the bundled one.
+	// The optimized PRG and PSID exports always assemble the bundled player, so
+	// such a song must be upgraded before those exports can work correctly.
+	bool songNeedsUpgrade() {
+		return song.ver < SONG_REVISION;
+	}
+
+	// Move the current song into the bundled (latest) player. This is the same
+	// operation as "Upgrade to latest player" in the Load dialog, applied to the
+	// song in memory. The filename stays, and the song is marked as modified.
+	void upgradePlayer() {
+		stop();
+		try {
+			Song old = song.dup();
+			song.importData(old);
+		}
+		catch(Exception e) {
+			statusline.display("Error: " ~ e.msg);
+			return;
+		}
+		finishLoad(state.filename, true, "Upgraded to the latest player.", false);
+	}
+
+	// Ask for the upgrade, then run `next` when it is complete. A "no" answer
+	// cancels and leaves the song as it is.
+	void confirmUpgrade(string question, void delegate() next) {
+		activateDialog(new ConfirmationDialog(question, (int param) {
+			if(param != 0) return;
+			upgradePlayer();
+			if(next !is null) next();
+		}, "yn", 0));
+	}
+
 	void loadCallback(string s) {
 		loadCallback(s, false);
 	}

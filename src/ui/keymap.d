@@ -149,13 +149,24 @@ void registerShortcuts(UI ui) {
 
 	sm.register("export_song", Ctx.global, "File",
 				"Export song: Full player .prg / Optimized .prg / PSID (options dialog)", SDLK_F10, KMOD_SHIFT, {
-		activateDialog(exportDialog);
+		// The optimized exports assemble the bundled player: an older song
+		// must be upgraded first, or the export fails or sounds different.
+		if(songNeedsUpgrade())
+			confirmUpgrade("Export needs the latest player. Upgrade now (Y/n)? ",
+						   { activateDialog(exportDialog); });
+		else
+			activateDialog(exportDialog);
 	});
 
 	sm.register("render_audio", Ctx.global, "File",
 				"Render audio: .wav / .flac (duration, normalize, bit depth, rate)", SDLK_F10, KMOD_CTRL | KMOD_SHIFT, {
 		activateDialog(renderDialog);
 	});
+
+	sm.registerMenuOnly("upgrade_player", Ctx.global, "File",
+				"Upgrade the song to the latest player (same as the Load dialog upgrade)", {
+		confirmUpgrade("Upgrade to latest player (Y/n)? ", null);
+	}, "Upgrade player...", { return songNeedsUpgrade(); });
 
 	// Its own "Properties" category isolates it in a divider-separated group
 	// between the file commands above and the trailing Quit group.
