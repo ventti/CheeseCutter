@@ -267,6 +267,10 @@ category = "agent"
 path = ".claude/agents/soundedit-verifier.md"
 category = "agent"
 
+[[doc]]
+path = ".claude/agents/senior-debug-engineer.md"
+category = "agent"
+
 # ---- vendor: not ours to maintain ----
 
 [[doc]]
