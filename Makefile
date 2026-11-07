@@ -8,7 +8,8 @@ LIBS=-L-ldl -L-lstdc++ -L-lcurl -L-lSDL2
 COMFLAGS=-O2
 VERSION=$(shell cat Version)
 DFLAGS=-d-version=DerelictSDL2_Static $(COMFLAGS) -I./src -J. -J./src/c64 -J./src/font
-CFLAGS=$(COMFLAGS)
+# The bundled assembler defines bool as int, which C23 does not permit.
+CFLAGS=$(COMFLAGS) -std=gnu17
 CXXFLAGS=$(COMFLAGS) -I./src 
 COMPILE.d = $(DC) $(DFLAGS) -c
 DC=ldc2
@@ -51,7 +52,7 @@ ccutter: $(C64OBJS) $(OBJS) $(CXX_OBJS) $(C_OBJS)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 .c.o : $(C_SRCS)
-	$(CC) -c $< -o $@
+	$(CC) $(CFLAGS) -c $< -o $@
 
 ct: $(C64OBJS) $(CTOBJS)
 
@@ -115,6 +116,5 @@ src/ui/ui.o: src/ui/help.o
 
 %.o: %.d
 	$(COMPILE.d) -of=$@ $<
-
 
 
